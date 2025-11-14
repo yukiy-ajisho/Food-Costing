@@ -10,6 +10,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
+import { initialLaborRoles } from "@/lib/mockData";
 
 // Recipe Lineの型定義
 interface RecipeLine {
@@ -45,11 +46,7 @@ const availableItems = [
 ];
 
 // モックデータ（Labor Roles - Settingsで設定される）
-const laborRoles = [
-  { id: "1", name: "Prep Cook", hourly_wage: 20 },
-  { id: "2", name: "Line Cook", hourly_wage: 25 },
-  { id: "3", name: "Chef", hourly_wage: 30 },
-];
+const laborRoles = initialLaborRoles;
 
 // 単位のオプション
 const unitOptions = [

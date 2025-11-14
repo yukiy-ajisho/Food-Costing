@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Edit, Save, Plus, Trash2 } from "lucide-react";
+import { useState, Fragment } from "react";
+import { Edit, Save, Plus, Trash2, AlertCircle } from "lucide-react";
+import { initialUnitConversions } from "@/lib/mockData";
 
 // Raw Itemの型定義
 interface RawItem {
@@ -11,6 +12,7 @@ interface RawItem {
   purchase_quantity: number;
   purchase_cost: number;
   notes: string;
+  grams_per_unit?: number; // item_unit_profiles用（非質量単位の場合）
   isMarkedForDeletion?: boolean;
 }
 
@@ -42,18 +44,16 @@ const initialItems: RawItem[] = [
   },
 ];
 
-// 単位のオプション
-const unitOptions = [
-  "g",
-  "kg",
-  "lb",
-  "oz",
-  "gallon",
-  "liter",
-  "cup",
-  "tablespoon",
-  "each",
-];
+// Settingsの単位リストから単位オプションを取得
+const unitOptions = initialUnitConversions.map((conv) => conv.from_unit);
+
+// 非質量単位かどうかを判定（Settingsのis_mass_unitフラグを使用）
+const isNonMassUnit = (unit: string): boolean => {
+  const conversion = initialUnitConversions.find(
+    (conv) => conv.from_unit === unit
+  );
+  return conversion ? !conversion.is_mass_unit : false;
+};
 
 export default function ItemsPage() {
   const [items, setItems] = useState<RawItem[]>(initialItems);
@@ -187,145 +187,176 @@ export default function ItemsPage() {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {items.map((item, index) => (
-                <tr
-                  key={item.id}
-                  className={`${
-                    item.isMarkedForDeletion ? "bg-red-50" : ""
-                  } hover:bg-gray-50`}
-                >
-                  {/* Name */}
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {isEditMode ? (
-                      <input
-                        type="text"
-                        value={item.name}
-                        onChange={(e) =>
-                          handleItemChange(item.id, "name", e.target.value)
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Item name"
-                      />
-                    ) : (
-                      <div className="text-sm text-gray-900">{item.name}</div>
-                    )}
-                  </td>
-
-                  {/* Unit */}
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {isEditMode ? (
-                      <select
-                        value={item.purchase_unit}
-                        onChange={(e) =>
-                          handleItemChange(
-                            item.id,
-                            "purchase_unit",
-                            e.target.value
-                          )
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {unitOptions.map((unit) => (
-                          <option key={unit} value={unit}>
-                            {unit}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <div className="text-sm text-gray-900">
-                        {item.purchase_unit}
-                      </div>
-                    )}
-                  </td>
-
-                  {/* Quantity */}
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {isEditMode ? (
-                      <input
-                        type="number"
-                        value={item.purchase_quantity}
-                        onChange={(e) =>
-                          handleItemChange(
-                            item.id,
-                            "purchase_quantity",
-                            parseFloat(e.target.value) || 0
-                          )
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="0"
-                        min="0"
-                        step="0.01"
-                      />
-                    ) : (
-                      <div className="text-sm text-gray-900">
-                        {item.purchase_quantity}
-                      </div>
-                    )}
-                  </td>
-
-                  {/* Cost */}
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {isEditMode ? (
-                      <div className="flex items-center gap-1">
-                        <span className="text-gray-500">$</span>
+                <Fragment key={item.id}>
+                  <tr
+                    className={`${
+                      item.isMarkedForDeletion ? "bg-red-50" : ""
+                    } hover:bg-gray-50`}
+                  >
+                    {/* Name */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {isEditMode ? (
                         <input
-                          type="number"
-                          value={item.purchase_cost}
+                          type="text"
+                          value={item.name}
+                          onChange={(e) =>
+                            handleItemChange(item.id, "name", e.target.value)
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Item name"
+                        />
+                      ) : (
+                        <div className="text-sm text-gray-900">{item.name}</div>
+                      )}
+                    </td>
+
+                    {/* Unit */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {isEditMode ? (
+                        <select
+                          value={item.purchase_unit}
                           onChange={(e) =>
                             handleItemChange(
                               item.id,
-                              "purchase_cost",
+                              "purchase_unit",
+                              e.target.value
+                            )
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                          {unitOptions.map((unit) => (
+                            <option key={unit} value={unit}>
+                              {unit}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="text-sm text-gray-900">
+                          {item.purchase_unit}
+                        </div>
+                      )}
+                    </td>
+
+                    {/* Quantity */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {isEditMode ? (
+                        <input
+                          type="number"
+                          value={item.purchase_quantity}
+                          onChange={(e) =>
+                            handleItemChange(
+                              item.id,
+                              "purchase_quantity",
                               parseFloat(e.target.value) || 0
                             )
                           }
                           className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="0.00"
+                          placeholder="0"
                           min="0"
                           step="0.01"
                         />
-                      </div>
-                    ) : (
-                      <div className="text-sm text-gray-900">
-                        ${item.purchase_cost.toFixed(2)}
-                      </div>
-                    )}
-                  </td>
-
-                  {/* Notes */}
-                  <td className="px-6 py-4">
-                    {isEditMode ? (
-                      <input
-                        type="text"
-                        value={item.notes}
-                        onChange={(e) =>
-                          handleItemChange(item.id, "notes", e.target.value)
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Optional notes"
-                      />
-                    ) : (
-                      <div className="text-sm text-gray-500">
-                        {item.notes || "-"}
-                      </div>
-                    )}
-                  </td>
-
-                  {/* ゴミ箱（Editモード時のみ） */}
-                  {isEditMode && (
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <button
-                        onClick={() => handleDeleteClick(item.id)}
-                        className={`p-2 rounded-md transition-colors ${
-                          item.isMarkedForDeletion
-                            ? "bg-red-500 text-white hover:bg-red-600"
-                            : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                        }`}
-                        title="Mark for deletion"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
+                      ) : (
+                        <div className="text-sm text-gray-900">
+                          {item.purchase_quantity}
+                        </div>
+                      )}
                     </td>
+
+                    {/* Cost */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {isEditMode ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-gray-500">$</span>
+                          <input
+                            type="number"
+                            value={item.purchase_cost}
+                            onChange={(e) =>
+                              handleItemChange(
+                                item.id,
+                                "purchase_cost",
+                                parseFloat(e.target.value) || 0
+                              )
+                            }
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="0.00"
+                            min="0"
+                            step="0.01"
+                          />
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-900">
+                          ${item.purchase_cost.toFixed(2)}
+                        </div>
+                      )}
+                    </td>
+
+                    {/* Notes */}
+                    <td className="px-6 py-4">
+                      {isEditMode ? (
+                        <input
+                          type="text"
+                          value={item.notes}
+                          onChange={(e) =>
+                            handleItemChange(item.id, "notes", e.target.value)
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Optional notes"
+                        />
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          {item.notes || "-"}
+                        </div>
+                      )}
+                    </td>
+
+                    {/* ゴミ箱（Editモード時のみ） */}
+                    {isEditMode && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <button
+                          onClick={() => handleDeleteClick(item.id)}
+                          className={`p-2 rounded-md transition-colors ${
+                            item.isMarkedForDeletion
+                              ? "bg-red-500 text-white hover:bg-red-600"
+                              : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                          }`}
+                          title="Mark for deletion"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+
+                  {/* 非質量単位の場合、変換入力行を表示（Editモード時のみ） */}
+                  {isEditMode && isNonMassUnit(item.purchase_unit) && (
+                    <tr className="bg-yellow-50">
+                      <td colSpan={isEditMode ? 6 : 5} className="px-6 py-3">
+                        <div className="flex items-center gap-3">
+                          <AlertCircle className="w-5 h-5 text-yellow-600" />
+                          <span className="text-sm text-gray-700">
+                            {item.purchase_unit} →
+                          </span>
+                          <input
+                            type="number"
+                            value={item.grams_per_unit || ""}
+                            onChange={(e) =>
+                              handleItemChange(
+                                item.id,
+                                "grams_per_unit",
+                                parseFloat(e.target.value) || 0
+                              )
+                            }
+                            className="w-32 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="grams"
+                            min="0"
+                            step="0.01"
+                          />
+                          <span className="text-sm text-gray-700">g</span>
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                </tr>
+                </Fragment>
               ))}
 
               {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
