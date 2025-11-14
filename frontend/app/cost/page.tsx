@@ -8,6 +8,8 @@ import {
   Trash2,
   ChevronDown,
   ChevronRight,
+  Search,
+  X,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { initialLaborRoles } from "@/lib/mockData";
@@ -95,11 +97,50 @@ const initialItems: PreppedItem[] = [
     notes: "",
     isExpanded: false,
   },
+  {
+    id: "2",
+    name: "Teriyaki Chicken",
+    item_kind: "prepped",
+    is_menu_item: true,
+    yield_amount: 150,
+    yield_unit: "g",
+    recipe_lines: [
+      {
+        id: "rl4",
+        line_type: "ingredient",
+        child_item_id: "3",
+        quantity: 150,
+        unit: "g",
+      },
+      {
+        id: "rl5",
+        line_type: "ingredient",
+        child_item_id: "1", // Teriyaki Sauce
+        quantity: 80,
+        unit: "g",
+      },
+      {
+        id: "rl6",
+        line_type: "labor",
+        labor_role: "2",
+        minutes: 5,
+      },
+    ],
+    notes: "",
+    isExpanded: false,
+  },
 ];
 
 export default function CostPage() {
   const [items, setItems] = useState<PreppedItem[]>(initialItems);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [appliedSearchTerm, setAppliedSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [yieldMin, setYieldMin] = useState<number | "">("");
+  const [yieldMax, setYieldMax] = useState<number | "">("");
+  const [costMin, setCostMin] = useState<number | "">("");
+  const [costMax, setCostMax] = useState<number | "">("");
 
   // Editモード切り替え
   const handleEditClick = () => {
@@ -284,6 +325,60 @@ export default function CostPage() {
     );
   };
 
+  // 検索実行
+  const handleSearch = () => {
+    setAppliedSearchTerm(searchTerm);
+  };
+
+  // 検索・フィルター処理
+  const filteredItems = items.filter((item) => {
+    // 検索（Name）
+    if (appliedSearchTerm.trim() !== "") {
+      if (
+        !item.name
+          .toLowerCase()
+          .includes(appliedSearchTerm.toLowerCase().trim())
+      ) {
+        return false;
+      }
+    }
+
+    // フィルター（Type）
+    if (typeFilter !== "all") {
+      if (typeFilter === "prepped" && item.is_menu_item) {
+        return false;
+      }
+      if (typeFilter === "menu" && !item.is_menu_item) {
+        return false;
+      }
+    }
+
+    // フィルター（Yield範囲）
+    if (yieldMin !== "" && item.yield_amount < yieldMin) {
+      return false;
+    }
+    if (yieldMax !== "" && item.yield_amount > yieldMax) {
+      return false;
+    }
+
+    // フィルター（Cost/g範囲）- モック値なので0.005を固定値として使用
+    const mockCostPerGram = 0.005;
+    if (costMin !== "" && mockCostPerGram < costMin) {
+      return false;
+    }
+    if (costMax !== "" && mockCostPerGram > costMax) {
+      return false;
+    }
+
+    return true;
+  });
+
+  // 検索クリア
+  const handleClearSearch = () => {
+    setSearchTerm("");
+    setAppliedSearchTerm("");
+  };
+
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
@@ -306,6 +401,147 @@ export default function CostPage() {
               Edit
             </button>
           )}
+        </div>
+
+        {/* 検索・フィルターセクション */}
+        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <div className="flex flex-col md:flex-row gap-4 items-start md:items-end">
+            {/* 検索 */}
+            <div className="flex-1 w-full md:w-auto">
+              <label className="block text-xs text-gray-600 mb-1">Name:</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleSearch();
+                    }
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Search by name..."
+                />
+                <button
+                  onClick={handleSearch}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                  title="Search"
+                >
+                  <Search className="w-5 h-5" />
+                </button>
+                {(searchTerm || appliedSearchTerm) && (
+                  <button
+                    onClick={handleClearSearch}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+                    title="Clear search"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* フィルター */}
+            <div className="flex-1 w-full md:w-auto">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Typeフィルター */}
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">
+                    Type:
+                  </label>
+                  <select
+                    value={typeFilter}
+                    onChange={(e) => setTypeFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="all">All</option>
+                    <option value="prepped">Prepped</option>
+                    <option value="menu">Menu Item</option>
+                  </select>
+                </div>
+
+                {/* Yield範囲フィルター */}
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">
+                    Yield (g):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={yieldMin}
+                      onChange={(e) =>
+                        setYieldMin(
+                          e.target.value === ""
+                            ? ""
+                            : parseFloat(e.target.value)
+                        )
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Min"
+                      min="0"
+                      step="0.01"
+                    />
+                    <span className="text-gray-500">to</span>
+                    <input
+                      type="number"
+                      value={yieldMax}
+                      onChange={(e) =>
+                        setYieldMax(
+                          e.target.value === ""
+                            ? ""
+                            : parseFloat(e.target.value)
+                        )
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Max"
+                      min="0"
+                      step="0.01"
+                    />
+                  </div>
+                </div>
+
+                {/* Cost/g範囲フィルター */}
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">
+                    Cost/g ($):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={costMin}
+                      onChange={(e) =>
+                        setCostMin(
+                          e.target.value === ""
+                            ? ""
+                            : parseFloat(e.target.value)
+                        )
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Min"
+                      min="0"
+                      step="0.0001"
+                    />
+                    <span className="text-gray-500">to</span>
+                    <input
+                      type="number"
+                      value={costMax}
+                      onChange={(e) =>
+                        setCostMax(
+                          e.target.value === ""
+                            ? ""
+                            : parseFloat(e.target.value)
+                        )
+                      }
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Max"
+                      min="0"
+                      step="0.0001"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* アイテムリスト */}
@@ -336,7 +572,7 @@ export default function CostPage() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {items.map((item) => (
+              {filteredItems.map((item) => (
                 <Fragment key={item.id}>
                   <tr
                     className={`${
