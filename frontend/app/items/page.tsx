@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, Fragment } from "react";
-import { Edit, Save, Plus, Trash2, AlertCircle } from "lucide-react";
-import { initialUnitConversions } from "@/lib/mockData";
+import { Edit, Save, Plus, Trash2, AlertCircle, X } from "lucide-react";
+import { initialUnitConversions, initialNonMassUnits } from "@/lib/mockData";
 
 // Raw Itemの型定義
 interface RawItem {
@@ -12,8 +12,9 @@ interface RawItem {
   purchase_quantity: number;
   purchase_cost: number;
   notes: string;
-  grams_per_unit?: number; // item_unit_profiles用（非質量単位の場合）
+  grams_per_unit?: number; // item_unit_profiles用（非質量単位の場合、比重）
   isMarkedForDeletion?: boolean;
+  needsSpecificGravity?: boolean; // 比重未入力警告フラグ
 }
 
 // モックデータ
@@ -44,30 +45,51 @@ const initialItems: RawItem[] = [
   },
 ];
 
-// Settingsの単位リストから単位オプションを取得
-const unitOptions = initialUnitConversions.map((conv) => conv.from_unit);
+// Settingsの単位リストから単位オプションを取得（unit_conversionsとnon_mass_unitsの両方）
+const unitOptions = [
+  ...initialUnitConversions.map((conv) => conv.from_unit),
+  ...initialNonMassUnits.map((unit) => unit.name),
+];
 
-// 非質量単位かどうかを判定（Settingsのis_mass_unitフラグを使用）
+// 非質量単位かどうかを判定（non_mass_unitsに含まれているかチェック）
 const isNonMassUnit = (unit: string): boolean => {
-  const conversion = initialUnitConversions.find(
-    (conv) => conv.from_unit === unit
-  );
-  return conversion ? !conversion.is_mass_unit : false;
+  return initialNonMassUnits.some((nonMassUnit) => nonMassUnit.name === unit);
 };
 
 export default function ItemsPage() {
   const [items, setItems] = useState<RawItem[]>(initialItems);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [originalItems, setOriginalItems] = useState<RawItem[]>(initialItems);
 
   // Editモード切り替え
   const handleEditClick = () => {
+    // 現在の状態を保存
+    setOriginalItems([...items]);
     setIsEditMode(true);
+  };
+
+  // Cancel処理
+  const handleCancelClick = () => {
+    // 元の状態に戻す
+    setItems([...originalItems]);
+    setIsEditMode(false);
   };
 
   // Save処理
   const handleSaveClick = () => {
+    // 非質量単位を選んでいるのに比重未入力のアイテムに警告フラグを設定
+    const itemsWithWarning = items.map((item) => {
+      if (
+        isNonMassUnit(item.purchase_unit) &&
+        (!item.grams_per_unit || item.grams_per_unit === 0)
+      ) {
+        return { ...item, needsSpecificGravity: true };
+      }
+      return { ...item, needsSpecificGravity: false };
+    });
+
     // 削除予定のアイテムと空の新規レコードを削除
-    const filteredItems = items.filter((item) => {
+    const filteredItems = itemsWithWarning.filter((item) => {
       // 削除予定マークがある場合は削除
       if (item.isMarkedForDeletion) {
         return false;
@@ -137,16 +159,25 @@ export default function ItemsPage() {
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
-        {/* ヘッダーとEdit/Saveボタン */}
-        <div className="flex justify-end items-center mb-6">
+        {/* ヘッダーとEdit/Save/Cancelボタン */}
+        <div className="flex justify-end items-center mb-6 gap-2">
           {isEditMode ? (
-            <button
-              onClick={handleSaveClick}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Save className="w-5 h-5" />
-              Save
-            </button>
+            <>
+              <button
+                onClick={handleCancelClick}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+              >
+                <X className="w-5 h-5" />
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveClick}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Save className="w-5 h-5" />
+                Save
+              </button>
+            </>
           ) : (
             <button
               onClick={handleEditClick}
@@ -212,29 +243,79 @@ export default function ItemsPage() {
 
                     {/* Unit */}
                     <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditMode ? (
-                        <select
-                          value={item.purchase_unit}
-                          onChange={(e) =>
-                            handleItemChange(
-                              item.id,
-                              "purchase_unit",
-                              e.target.value
-                            )
-                          }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        >
-                          {unitOptions.map((unit) => (
-                            <option key={unit} value={unit}>
-                              {unit}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <div className="text-sm text-gray-900">
-                          {item.purchase_unit}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {isEditMode ? (
+                          <>
+                            <select
+                              value={item.purchase_unit}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  item.id,
+                                  "purchase_unit",
+                                  e.target.value
+                                )
+                              }
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              {unitOptions.map((unit) => (
+                                <option key={unit} value={unit}>
+                                  {unit}
+                                </option>
+                              ))}
+                            </select>
+                            {/* 非質量単位選択時に比重入力欄を表示 */}
+                            {isNonMassUnit(item.purchase_unit) && (
+                              <div className="flex items-center gap-2">
+                                {/* eachの場合は「Specific Weight:」ラベルを表示しない */}
+                                {item.purchase_unit !== "each" && (
+                                  <span className="text-sm text-gray-600 whitespace-nowrap">
+                                    Specific Weight:
+                                  </span>
+                                )}
+                                <input
+                                  type="number"
+                                  value={item.grams_per_unit || ""}
+                                  onChange={(e) =>
+                                    handleItemChange(
+                                      item.id,
+                                      "grams_per_unit",
+                                      parseFloat(e.target.value) || 0
+                                    )
+                                  }
+                                  className="w-20 px-2 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="0"
+                                  min="0"
+                                  step="0.01"
+                                />
+                                {/* eachの場合のみ「g」を表示 */}
+                                {item.purchase_unit === "each" && (
+                                  <span className="text-sm text-gray-600">
+                                    g
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-900">
+                              {item.purchase_unit}
+                            </span>
+                            {/* 比重未入力警告（赤点） */}
+                            {item.needsSpecificGravity && (
+                              <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                            )}
+                            {/* 比重が登録されている場合は表示 */}
+                            {!item.needsSpecificGravity &&
+                              item.grams_per_unit &&
+                              item.grams_per_unit > 0 && (
+                                <span className="text-sm text-gray-500">
+                                  ({item.grams_per_unit})
+                                </span>
+                              )}
+                          </div>
+                        )}
+                      </div>
                     </td>
 
                     {/* Quantity */}
@@ -326,36 +407,6 @@ export default function ItemsPage() {
                       </td>
                     )}
                   </tr>
-
-                  {/* 非質量単位の場合、変換入力行を表示（Editモード時のみ） */}
-                  {isEditMode && isNonMassUnit(item.purchase_unit) && (
-                    <tr className="bg-yellow-50">
-                      <td colSpan={isEditMode ? 6 : 5} className="px-6 py-3">
-                        <div className="flex items-center gap-3">
-                          <AlertCircle className="w-5 h-5 text-yellow-600" />
-                          <span className="text-sm text-gray-700">
-                            {item.purchase_unit} →
-                          </span>
-                          <input
-                            type="number"
-                            value={item.grams_per_unit || ""}
-                            onChange={(e) =>
-                              handleItemChange(
-                                item.id,
-                                "grams_per_unit",
-                                parseFloat(e.target.value) || 0
-                              )
-                            }
-                            className="w-32 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="grams"
-                            min="0"
-                            step="0.01"
-                          />
-                          <span className="text-sm text-gray-700">g</span>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
                 </Fragment>
               ))}
 

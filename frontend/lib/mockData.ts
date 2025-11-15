@@ -4,7 +4,6 @@ export interface UnitConversion {
   id: string;
   from_unit: string;
   multiplier_to_grams: number;
-  is_mass_unit: boolean;
   isMarkedForDeletion?: boolean;
 }
 
@@ -14,55 +13,52 @@ export const initialUnitConversions: UnitConversion[] = [
     id: "1",
     from_unit: "g",
     multiplier_to_grams: 1,
-    is_mass_unit: true,
   },
   {
     id: "2",
     from_unit: "kg",
     multiplier_to_grams: 1000,
-    is_mass_unit: true,
   },
   {
     id: "3",
     from_unit: "lb",
     multiplier_to_grams: 453.592,
-    is_mass_unit: true,
   },
   {
     id: "4",
     from_unit: "oz",
     multiplier_to_grams: 28.3495,
-    is_mass_unit: true,
+  },
+];
+
+// Non-Mass Unitの型定義
+export interface NonMassUnit {
+  id: string;
+  name: string;
+  isMarkedForDeletion?: boolean;
+}
+
+// Non-Mass Unitsのモックデータ
+export const initialNonMassUnits: NonMassUnit[] = [
+  {
+    id: "1",
+    name: "gallon",
+  },
+  {
+    id: "2",
+    name: "each",
+  },
+  {
+    id: "3",
+    name: "liter",
+  },
+  {
+    id: "4",
+    name: "cup",
   },
   {
     id: "5",
-    from_unit: "gallon",
-    multiplier_to_grams: 0,
-    is_mass_unit: false,
-  },
-  {
-    id: "6",
-    from_unit: "each",
-    multiplier_to_grams: 0,
-    is_mass_unit: false,
-  },
-  {
-    id: "7",
-    from_unit: "liter",
-    multiplier_to_grams: 0,
-    is_mass_unit: false,
-  },
-  {
-    id: "8",
-    from_unit: "cup",
-    multiplier_to_grams: 0,
-    is_mass_unit: false,
-  },
-  {
-    id: "9",
-    from_unit: "tablespoon",
-    multiplier_to_grams: 0,
-    is_mass_unit: false,
+    name: "tablespoon",
   },
 ];
 

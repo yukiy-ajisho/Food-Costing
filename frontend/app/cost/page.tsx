@@ -134,6 +134,8 @@ const initialItems: PreppedItem[] = [
 export default function CostPage() {
   const [items, setItems] = useState<PreppedItem[]>(initialItems);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [originalItems, setOriginalItems] =
+    useState<PreppedItem[]>(initialItems);
   const [searchTerm, setSearchTerm] = useState("");
   const [appliedSearchTerm, setAppliedSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -144,7 +146,16 @@ export default function CostPage() {
 
   // Editモード切り替え
   const handleEditClick = () => {
+    // 現在の状態を保存
+    setOriginalItems(JSON.parse(JSON.stringify(items)));
     setIsEditMode(true);
+  };
+
+  // Cancel処理
+  const handleCancelClick = () => {
+    // 元の状態に戻す
+    setItems(JSON.parse(JSON.stringify(originalItems)));
+    setIsEditMode(false);
   };
 
   // Save処理
@@ -382,16 +393,25 @@ export default function CostPage() {
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
-        {/* ヘッダーとEdit/Saveボタン */}
-        <div className="flex justify-end items-center mb-6">
+        {/* ヘッダーとEdit/Save/Cancelボタン */}
+        <div className="flex justify-end items-center mb-6 gap-2">
           {isEditMode ? (
-            <button
-              onClick={handleSaveClick}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Save className="w-5 h-5" />
-              Save
-            </button>
+            <>
+              <button
+                onClick={handleCancelClick}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+              >
+                <X className="w-5 h-5" />
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveClick}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Save className="w-5 h-5" />
+                Save
+              </button>
+            </>
           ) : (
             <button
               onClick={handleEditClick}

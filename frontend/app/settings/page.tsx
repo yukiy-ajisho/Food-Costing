@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Edit, Save, Plus, Trash2 } from "lucide-react";
+import { Edit, Save, Plus, Trash2, X } from "lucide-react";
 import {
   UnitConversion,
   initialUnitConversions,
   LaborRole,
   initialLaborRoles,
+  NonMassUnit,
+  initialNonMassUnits,
 } from "@/lib/mockData";
 
-type TabType = "units" | "labor";
+type TabType = "units" | "labor" | "nonMass";
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<TabType>("units");
@@ -17,11 +19,33 @@ export default function SettingsPage() {
     initialUnitConversions
   );
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>(initialLaborRoles);
+  const [nonMassUnits, setNonMassUnits] =
+    useState<NonMassUnit[]>(initialNonMassUnits);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [originalUnitConversions, setOriginalUnitConversions] = useState<
+    UnitConversion[]
+  >(initialUnitConversions);
+  const [originalLaborRoles, setOriginalLaborRoles] =
+    useState<LaborRole[]>(initialLaborRoles);
+  const [originalNonMassUnits, setOriginalNonMassUnits] =
+    useState<NonMassUnit[]>(initialNonMassUnits);
 
   // Editモード切り替え
   const handleEditClick = () => {
+    // 現在の状態を保存
+    setOriginalUnitConversions(JSON.parse(JSON.stringify(unitConversions)));
+    setOriginalLaborRoles(JSON.parse(JSON.stringify(laborRoles)));
+    setOriginalNonMassUnits(JSON.parse(JSON.stringify(nonMassUnits)));
     setIsEditMode(true);
+  };
+
+  // Cancel処理
+  const handleCancelClick = () => {
+    // 元の状態に戻す
+    setUnitConversions(JSON.parse(JSON.stringify(originalUnitConversions)));
+    setLaborRoles(JSON.parse(JSON.stringify(originalLaborRoles)));
+    setNonMassUnits(JSON.parse(JSON.stringify(originalNonMassUnits)));
+    setIsEditMode(false);
   };
 
   // Save処理
@@ -41,7 +65,7 @@ export default function SettingsPage() {
         ({ isMarkedForDeletion, ...conv }) => conv
       );
       setUnitConversions(cleanedConversions);
-    } else {
+    } else if (activeTab === "labor") {
       // Labor Rolesの保存
       const filteredRoles = laborRoles.filter((role) => {
         if (role.isMarkedForDeletion) {
@@ -56,6 +80,21 @@ export default function SettingsPage() {
         ({ isMarkedForDeletion, ...role }) => role
       );
       setLaborRoles(cleanedRoles);
+    } else if (activeTab === "nonMass") {
+      // Non-Mass Unitsの保存
+      const filteredUnits = nonMassUnits.filter((unit) => {
+        if (unit.isMarkedForDeletion) {
+          return false;
+        }
+        if (unit.name.trim() === "") {
+          return false;
+        }
+        return true;
+      });
+      const cleanedUnits = filteredUnits.map(
+        ({ isMarkedForDeletion, ...unit }) => unit
+      );
+      setNonMassUnits(cleanedUnits);
     }
     setIsEditMode(false);
   };
@@ -64,11 +103,24 @@ export default function SettingsPage() {
   const handleConversionChange = (
     id: string,
     field: keyof UnitConversion,
-    value: string | number | boolean
+    value: string | number
   ) => {
     setUnitConversions(
       unitConversions.map((conv) =>
         conv.id === id ? { ...conv, [field]: value } : conv
+      )
+    );
+  };
+
+  // Non-Mass Unit更新
+  const handleNonMassUnitChange = (
+    id: string,
+    field: keyof NonMassUnit,
+    value: string
+  ) => {
+    setNonMassUnits(
+      nonMassUnits.map((unit) =>
+        unit.id === id ? { ...unit, [field]: value } : unit
       )
     );
   };
@@ -114,7 +166,6 @@ export default function SettingsPage() {
       id: `new-${Date.now()}`,
       from_unit: "",
       multiplier_to_grams: 0,
-      is_mass_unit: true,
     };
     setUnitConversions([...unitConversions, newConversion]);
   };
@@ -129,19 +180,48 @@ export default function SettingsPage() {
     setLaborRoles([...laborRoles, newRole]);
   };
 
+  // Non-Mass Unit削除クリック
+  const handleNonMassUnitDeleteClick = (id: string) => {
+    setNonMassUnits(
+      nonMassUnits.map((unit) =>
+        unit.id === id
+          ? { ...unit, isMarkedForDeletion: !unit.isMarkedForDeletion }
+          : unit
+      )
+    );
+  };
+
+  // Non-Mass Unit追加
+  const handleAddNonMassUnit = () => {
+    const newUnit: NonMassUnit = {
+      id: `new-${Date.now()}`,
+      name: "",
+    };
+    setNonMassUnits([...nonMassUnits, newUnit]);
+  };
+
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
-        {/* ヘッダーとEdit/Saveボタン */}
-        <div className="flex justify-end items-center mb-6">
+        {/* ヘッダーとEdit/Save/Cancelボタン */}
+        <div className="flex justify-end items-center mb-6 gap-2">
           {isEditMode ? (
-            <button
-              onClick={handleSaveClick}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Save className="w-5 h-5" />
-              Save
-            </button>
+            <>
+              <button
+                onClick={handleCancelClick}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+              >
+                <X className="w-5 h-5" />
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveClick}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Save className="w-5 h-5" />
+                Save
+              </button>
+            </>
           ) : (
             <button
               onClick={handleEditClick}
@@ -176,6 +256,16 @@ export default function SettingsPage() {
             >
               Labor Roles
             </button>
+            <button
+              onClick={() => setActiveTab("nonMass")}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                activeTab === "nonMass"
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              Non-Mass Units
+            </button>
           </nav>
         </div>
 
@@ -191,9 +281,6 @@ export default function SettingsPage() {
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Multiplier (to grams)
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Is Mass Unit
                     </th>
                     {isEditMode && (
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
@@ -258,28 +345,6 @@ export default function SettingsPage() {
                         )}
                       </td>
 
-                      {/* Is Mass Unit */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditMode ? (
-                          <input
-                            type="checkbox"
-                            checked={conv.is_mass_unit}
-                            onChange={(e) =>
-                              handleConversionChange(
-                                conv.id,
-                                "is_mass_unit",
-                                e.target.checked
-                              )
-                            }
-                            className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {conv.is_mass_unit ? "✓" : "✗"}
-                          </div>
-                        )}
-                      </td>
-
                       {/* ゴミ箱（Editモード時のみ） */}
                       {isEditMode && (
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -304,7 +369,7 @@ export default function SettingsPage() {
                   {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
                   {isEditMode && (
                     <tr>
-                      <td colSpan={isEditMode ? 4 : 3} className="px-6 py-4">
+                      <td colSpan={isEditMode ? 3 : 2} className="px-6 py-4">
                         <button
                           onClick={handleAddUnitConversion}
                           className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
@@ -429,6 +494,95 @@ export default function SettingsPage() {
                         >
                           <Plus className="w-5 h-5" />
                           <span>Add new labor role</span>
+                        </button>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Non-Mass Unitsセクション */}
+        {activeTab === "nonMass" && (
+          <div className="mb-8">
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Name
+                    </th>
+                    {isEditMode && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                        {/* ゴミ箱列のヘッダー */}
+                      </th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {nonMassUnits.map((unit) => (
+                    <tr
+                      key={unit.id}
+                      className={`${
+                        unit.isMarkedForDeletion ? "bg-red-50" : ""
+                      } hover:bg-gray-50`}
+                    >
+                      {/* Name */}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={unit.name}
+                            onChange={(e) =>
+                              handleNonMassUnitChange(
+                                unit.id,
+                                "name",
+                                e.target.value
+                              )
+                            }
+                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Unit name (e.g., gallon, each)"
+                          />
+                        ) : (
+                          <div className="text-sm text-gray-900">
+                            {unit.name}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* ゴミ箱（Editモード時のみ） */}
+                      {isEditMode && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <button
+                            onClick={() =>
+                              handleNonMassUnitDeleteClick(unit.id)
+                            }
+                            className={`p-2 rounded-md transition-colors ${
+                              unit.isMarkedForDeletion
+                                ? "bg-red-500 text-white hover:bg-red-600"
+                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                            }`}
+                            title="Mark for deletion"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+
+                  {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
+                  {isEditMode && (
+                    <tr>
+                      <td colSpan={isEditMode ? 2 : 1} className="px-6 py-4">
+                        <button
+                          onClick={handleAddNonMassUnit}
+                          className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                        >
+                          <Plus className="w-5 h-5" />
+                          <span>Add new non-mass unit</span>
                         </button>
                       </td>
                     </tr>
