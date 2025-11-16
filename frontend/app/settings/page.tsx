@@ -1,150 +1,116 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Edit, Save, Plus, Trash2, X } from "lucide-react";
-import {
-  UnitConversion,
-  initialUnitConversions,
-  LaborRole,
-  initialLaborRoles,
-  NonMassUnit,
-  initialNonMassUnits,
-} from "@/lib/mockData";
+import { laborRolesAPI, type LaborRole } from "@/lib/api";
 
-type TabType = "units" | "labor" | "nonMass";
+type TabType = "labor";
+
+// UI用の型（isMarkedForDeletionを追加）
+interface LaborRoleUI extends LaborRole {
+  isMarkedForDeletion?: boolean;
+}
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<TabType>("units");
-  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>(
-    initialUnitConversions
+  const [activeTab, setActiveTab] = useState<TabType>("labor");
+  const [laborRoles, setLaborRoles] = useState<LaborRoleUI[]>([]);
+  const [originalLaborRoles, setOriginalLaborRoles] = useState<LaborRoleUI[]>(
+    []
   );
-  const [laborRoles, setLaborRoles] = useState<LaborRole[]>(initialLaborRoles);
-  const [nonMassUnits, setNonMassUnits] =
-    useState<NonMassUnit[]>(initialNonMassUnits);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [originalUnitConversions, setOriginalUnitConversions] = useState<
-    UnitConversion[]
-  >(initialUnitConversions);
-  const [originalLaborRoles, setOriginalLaborRoles] =
-    useState<LaborRole[]>(initialLaborRoles);
-  const [originalNonMassUnits, setOriginalNonMassUnits] =
-    useState<NonMassUnit[]>(initialNonMassUnits);
+  const [loading, setLoading] = useState(true);
+
+  // データ取得
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const roles = await laborRolesAPI.getAll();
+        setLaborRoles(roles);
+        setOriginalLaborRoles(JSON.parse(JSON.stringify(roles)));
+      } catch (error) {
+        console.error("Failed to fetch data:", error);
+        alert("データの取得に失敗しました");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
 
   // Editモード切り替え
   const handleEditClick = () => {
     // 現在の状態を保存
-    setOriginalUnitConversions(JSON.parse(JSON.stringify(unitConversions)));
     setOriginalLaborRoles(JSON.parse(JSON.stringify(laborRoles)));
-    setOriginalNonMassUnits(JSON.parse(JSON.stringify(nonMassUnits)));
     setIsEditMode(true);
   };
 
   // Cancel処理
   const handleCancelClick = () => {
     // 元の状態に戻す
-    setUnitConversions(JSON.parse(JSON.stringify(originalUnitConversions)));
     setLaborRoles(JSON.parse(JSON.stringify(originalLaborRoles)));
-    setNonMassUnits(JSON.parse(JSON.stringify(originalNonMassUnits)));
     setIsEditMode(false);
   };
 
   // Save処理
-  const handleSaveClick = () => {
-    if (activeTab === "units") {
-      // Unit Conversionsの保存
-      const filteredConversions = unitConversions.filter((conv) => {
-        if (conv.isMarkedForDeletion) {
-          return false;
-        }
-        if (conv.from_unit.trim() === "" && conv.multiplier_to_grams === 0) {
-          return false;
-        }
-        return true;
-      });
-      const cleanedConversions = filteredConversions.map(
-        ({ isMarkedForDeletion, ...conv }) => conv
-      );
-      setUnitConversions(cleanedConversions);
-    } else if (activeTab === "labor") {
-      // Labor Rolesの保存
+  const handleSaveClick = async () => {
+    try {
+      setLoading(true);
+
+      // 削除予定のアイテムと空の新規レコードをフィルター
       const filteredRoles = laborRoles.filter((role) => {
-        if (role.isMarkedForDeletion) {
-          return false;
-        }
-        if (role.name.trim() === "" && role.hourly_wage === 0) {
-          return false;
-        }
+        if (role.isMarkedForDeletion) return false;
+        if (role.name.trim() === "" && role.hourly_wage === 0) return false;
         return true;
       });
-      const cleanedRoles = filteredRoles.map(
-        ({ isMarkedForDeletion, ...role }) => role
-      );
-      setLaborRoles(cleanedRoles);
-    } else if (activeTab === "nonMass") {
-      // Non-Mass Unitsの保存
-      const filteredUnits = nonMassUnits.filter((unit) => {
-        if (unit.isMarkedForDeletion) {
-          return false;
+
+      // API呼び出し
+      for (const role of filteredRoles) {
+        if (role.id.startsWith("new-")) {
+          // 新規作成
+          await laborRolesAPI.create({
+            name: role.name,
+            hourly_wage: role.hourly_wage,
+          });
+        } else {
+          // 更新
+          await laborRolesAPI.update(role.id, {
+            name: role.name,
+            hourly_wage: role.hourly_wage,
+          });
         }
-        if (unit.name.trim() === "") {
-          return false;
+      }
+
+      // 削除処理
+      for (const role of laborRoles) {
+        if (role.isMarkedForDeletion && !role.id.startsWith("new-")) {
+          await laborRolesAPI.delete(role.id);
         }
-        return true;
-      });
-      const cleanedUnits = filteredUnits.map(
-        ({ isMarkedForDeletion, ...unit }) => unit
-      );
-      setNonMassUnits(cleanedUnits);
+      }
+
+      // データを再取得
+      const roles = await laborRolesAPI.getAll();
+      setLaborRoles(roles);
+      setOriginalLaborRoles(JSON.parse(JSON.stringify(roles)));
+      setIsEditMode(false);
+    } catch (error: any) {
+      console.error("Failed to save:", error);
+      alert(`保存に失敗しました: ${error.message}`);
+    } finally {
+      setLoading(false);
     }
-    setIsEditMode(false);
-  };
-
-  // Unit Conversion更新
-  const handleConversionChange = (
-    id: string,
-    field: keyof UnitConversion,
-    value: string | number
-  ) => {
-    setUnitConversions(
-      unitConversions.map((conv) =>
-        conv.id === id ? { ...conv, [field]: value } : conv
-      )
-    );
-  };
-
-  // Non-Mass Unit更新
-  const handleNonMassUnitChange = (
-    id: string,
-    field: keyof NonMassUnit,
-    value: string
-  ) => {
-    setNonMassUnits(
-      nonMassUnits.map((unit) =>
-        unit.id === id ? { ...unit, [field]: value } : unit
-      )
-    );
   };
 
   // Labor Role更新
   const handleLaborRoleChange = (
     id: string,
-    field: keyof LaborRole,
+    field: keyof LaborRoleUI,
     value: string | number
   ) => {
     setLaborRoles(
       laborRoles.map((role) =>
         role.id === id ? { ...role, [field]: value } : role
-      )
-    );
-  };
-
-  // Unit Conversion削除クリック
-  const handleUnitConversionDeleteClick = (id: string) => {
-    setUnitConversions(
-      unitConversions.map((conv) =>
-        conv.id === id
-          ? { ...conv, isMarkedForDeletion: !conv.isMarkedForDeletion }
-          : conv
       )
     );
   };
@@ -160,19 +126,9 @@ export default function SettingsPage() {
     );
   };
 
-  // Unit Conversion追加
-  const handleAddUnitConversion = () => {
-    const newConversion: UnitConversion = {
-      id: `new-${Date.now()}`,
-      from_unit: "",
-      multiplier_to_grams: 0,
-    };
-    setUnitConversions([...unitConversions, newConversion]);
-  };
-
   // Labor Role追加
   const handleAddLaborRole = () => {
-    const newRole: LaborRole = {
+    const newRole: LaborRoleUI = {
       id: `new-${Date.now()}`,
       name: "",
       hourly_wage: 0,
@@ -180,25 +136,13 @@ export default function SettingsPage() {
     setLaborRoles([...laborRoles, newRole]);
   };
 
-  // Non-Mass Unit削除クリック
-  const handleNonMassUnitDeleteClick = (id: string) => {
-    setNonMassUnits(
-      nonMassUnits.map((unit) =>
-        unit.id === id
-          ? { ...unit, isMarkedForDeletion: !unit.isMarkedForDeletion }
-          : unit
-      )
+  if (loading) {
+    return (
+      <div className="p-8">
+        <div className="max-w-7xl mx-auto text-center">読み込み中...</div>
+      </div>
     );
-  };
-
-  // Non-Mass Unit追加
-  const handleAddNonMassUnit = () => {
-    const newUnit: NonMassUnit = {
-      id: `new-${Date.now()}`,
-      name: "",
-    };
-    setNonMassUnits([...nonMassUnits, newUnit]);
-  };
+  }
 
   return (
     <div className="p-8">
@@ -233,365 +177,127 @@ export default function SettingsPage() {
           )}
         </div>
 
-        {/* タブ */}
-        <div className="mb-6 border-b border-gray-200">
-          <nav className="flex space-x-8">
-            <button
-              onClick={() => setActiveTab("units")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "units"
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Unit Conversions
-            </button>
-            <button
-              onClick={() => setActiveTab("labor")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "labor"
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Labor Roles
-            </button>
-            <button
-              onClick={() => setActiveTab("nonMass")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "nonMass"
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Non-Mass Units
-            </button>
-          </nav>
-        </div>
-
-        {/* Unit Conversionsセクション */}
-        {activeTab === "units" && (
-          <div className="mb-8">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      From Unit
+        {/* Labor Rolesセクション */}
+        <div className="mb-8">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Name
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Hourly Wage ($)
+                  </th>
+                  {isEditMode && (
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                      {/* ゴミ箱列のヘッダー */}
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Multiplier (to grams)
-                    </th>
-                    {isEditMode && (
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
-                        {/* ゴミ箱列のヘッダー */}
-                      </th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {unitConversions.map((conv) => (
-                    <tr
-                      key={conv.id}
-                      className={`${
-                        conv.isMarkedForDeletion ? "bg-red-50" : ""
-                      } hover:bg-gray-50`}
-                    >
-                      {/* From Unit */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditMode ? (
-                          <input
-                            type="text"
-                            value={conv.from_unit}
-                            onChange={(e) =>
-                              handleConversionChange(
-                                conv.id,
-                                "from_unit",
-                                e.target.value
-                              )
-                            }
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Unit name (e.g., kg, lb)"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {conv.from_unit}
-                          </div>
-                        )}
-                      </td>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {laborRoles.map((role) => (
+                  <tr
+                    key={role.id}
+                    className={`${
+                      role.isMarkedForDeletion ? "bg-red-50" : ""
+                    } hover:bg-gray-50`}
+                  >
+                    {/* Name */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {isEditMode ? (
+                        <input
+                          type="text"
+                          value={role.name}
+                          onChange={(e) =>
+                            handleLaborRoleChange(
+                              role.id,
+                              "name",
+                              e.target.value
+                            )
+                          }
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="Role name (e.g., Prep Cook)"
+                        />
+                      ) : (
+                        <div className="text-sm text-gray-900">{role.name}</div>
+                      )}
+                    </td>
 
-                      {/* Multiplier */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditMode ? (
+                    {/* Hourly Wage */}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {isEditMode ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-gray-500">$</span>
                           <input
                             type="number"
-                            value={conv.multiplier_to_grams}
-                            onChange={(e) =>
-                              handleConversionChange(
-                                conv.id,
-                                "multiplier_to_grams",
-                                parseFloat(e.target.value) || 0
-                              )
+                            value={
+                              role.hourly_wage === 0
+                                ? ""
+                                : role.hourly_wage || ""
                             }
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="0"
-                            min="0"
-                            step="0.0001"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {conv.multiplier_to_grams}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* ゴミ箱（Editモード時のみ） */}
-                      {isEditMode && (
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <button
-                            onClick={() =>
-                              handleUnitConversionDeleteClick(conv.id)
-                            }
-                            className={`p-2 rounded-md transition-colors ${
-                              conv.isMarkedForDeletion
-                                ? "bg-red-500 text-white hover:bg-red-600"
-                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                            }`}
-                            title="Mark for deletion"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-
-                  {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
-                  {isEditMode && (
-                    <tr>
-                      <td colSpan={isEditMode ? 3 : 2} className="px-6 py-4">
-                        <button
-                          onClick={handleAddUnitConversion}
-                          className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                        >
-                          <Plus className="w-5 h-5" />
-                          <span>Add new unit conversion</span>
-                        </button>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Labor Rolesセクション */}
-        {activeTab === "labor" && (
-          <div className="mb-8">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Hourly Wage ($)
-                    </th>
-                    {isEditMode && (
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
-                        {/* ゴミ箱列のヘッダー */}
-                      </th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {laborRoles.map((role) => (
-                    <tr
-                      key={role.id}
-                      className={`${
-                        role.isMarkedForDeletion ? "bg-red-50" : ""
-                      } hover:bg-gray-50`}
-                    >
-                      {/* Name */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditMode ? (
-                          <input
-                            type="text"
-                            value={role.name}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              // 空文字列の場合は0、それ以外は数値に変換
+                              const numValue =
+                                value === "" ? 0 : parseFloat(value) || 0;
                               handleLaborRoleChange(
                                 role.id,
-                                "name",
-                                e.target.value
-                              )
-                            }
+                                "hourly_wage",
+                                numValue
+                              );
+                            }}
                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Role name (e.g., Prep Cook)"
+                            placeholder="0.00"
+                            min="0"
+                            step="0.01"
                           />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {role.name}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Hourly Wage */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditMode ? (
-                          <div className="flex items-center gap-1">
-                            <span className="text-gray-500">$</span>
-                            <input
-                              type="number"
-                              value={role.hourly_wage}
-                              onChange={(e) =>
-                                handleLaborRoleChange(
-                                  role.id,
-                                  "hourly_wage",
-                                  parseFloat(e.target.value) || 0
-                                )
-                              }
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="0.00"
-                              min="0"
-                              step="0.01"
-                            />
-                          </div>
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            ${role.hourly_wage.toFixed(2)}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* ゴミ箱（Editモード時のみ） */}
-                      {isEditMode && (
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <button
-                            onClick={() => handleLaborRoleDeleteClick(role.id)}
-                            className={`p-2 rounded-md transition-colors ${
-                              role.isMarkedForDeletion
-                                ? "bg-red-500 text-white hover:bg-red-600"
-                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                            }`}
-                            title="Mark for deletion"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </td>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-900">
+                          ${role.hourly_wage.toFixed(2)}
+                        </div>
                       )}
-                    </tr>
-                  ))}
+                    </td>
 
-                  {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
-                  {isEditMode && (
-                    <tr>
-                      <td colSpan={isEditMode ? 3 : 2} className="px-6 py-4">
+                    {/* ゴミ箱（Editモード時のみ） */}
+                    {isEditMode && (
+                      <td className="px-6 py-4 whitespace-nowrap">
                         <button
-                          onClick={handleAddLaborRole}
-                          className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                          onClick={() => handleLaborRoleDeleteClick(role.id)}
+                          className={`p-2 rounded-md transition-colors ${
+                            role.isMarkedForDeletion
+                              ? "bg-red-500 text-white hover:bg-red-600"
+                              : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                          }`}
+                          title="Mark for deletion"
                         >
-                          <Plus className="w-5 h-5" />
-                          <span>Add new labor role</span>
+                          <Trash2 className="w-5 h-5" />
                         </button>
                       </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* Non-Mass Unitsセクション */}
-        {activeTab === "nonMass" && (
-          <div className="mb-8">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
-                    </th>
-                    {isEditMode && (
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
-                        {/* ゴミ箱列のヘッダー */}
-                      </th>
                     )}
                   </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {nonMassUnits.map((unit) => (
-                    <tr
-                      key={unit.id}
-                      className={`${
-                        unit.isMarkedForDeletion ? "bg-red-50" : ""
-                      } hover:bg-gray-50`}
-                    >
-                      {/* Name */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditMode ? (
-                          <input
-                            type="text"
-                            value={unit.name}
-                            onChange={(e) =>
-                              handleNonMassUnitChange(
-                                unit.id,
-                                "name",
-                                e.target.value
-                              )
-                            }
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Unit name (e.g., gallon, each)"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {unit.name}
-                          </div>
-                        )}
-                      </td>
+                ))}
 
-                      {/* ゴミ箱（Editモード時のみ） */}
-                      {isEditMode && (
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <button
-                            onClick={() =>
-                              handleNonMassUnitDeleteClick(unit.id)
-                            }
-                            className={`p-2 rounded-md transition-colors ${
-                              unit.isMarkedForDeletion
-                                ? "bg-red-500 text-white hover:bg-red-600"
-                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                            }`}
-                            title="Mark for deletion"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-
-                  {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
-                  {isEditMode && (
-                    <tr>
-                      <td colSpan={isEditMode ? 2 : 1} className="px-6 py-4">
-                        <button
-                          onClick={handleAddNonMassUnit}
-                          className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                        >
-                          <Plus className="w-5 h-5" />
-                          <span>Add new non-mass unit</span>
-                        </button>
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
+                {isEditMode && (
+                  <tr>
+                    <td colSpan={isEditMode ? 3 : 2} className="px-6 py-4">
+                      <button
+                        onClick={handleAddLaborRole}
+                        className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                      >
+                        <Plus className="w-5 h-5" />
+                        <span>Add new labor role</span>
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

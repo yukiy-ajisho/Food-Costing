@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment } from "react";
+import { useState, Fragment, useEffect } from "react";
 import {
   Edit,
   Save,
@@ -12,9 +12,26 @@ import {
   X,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
-import { initialLaborRoles } from "@/lib/mockData";
+import {
+  itemsAPI,
+  recipeLinesAPI,
+  laborRolesAPI,
+  costAPI,
+  rawItemsAPI,
+  type Item,
+  type RecipeLine as APIRecipeLine,
+  type LaborRole,
+  type RawItem,
+} from "@/lib/api";
+import {
+  MASS_UNIT_CONVERSIONS,
+  NON_MASS_UNITS,
+  VOLUME_UNIT_TO_LITERS,
+  isNonMassUnit,
+  isMassUnit,
+} from "@/lib/constants";
 
-// Recipe Lineの型定義
+// Recipe Lineの型定義（UI用）
 interface RecipeLine {
   id: string;
   line_type: "ingredient" | "labor";
@@ -24,9 +41,10 @@ interface RecipeLine {
   labor_role?: string; // labor only
   minutes?: number; // labor only
   isMarkedForDeletion?: boolean;
+  isNew?: boolean; // 新規作成フラグ
 }
 
-// Prepped/Menu Itemの型定義
+// Prepped/Menu Itemの型定義（UI用）
 interface PreppedItem {
   id: string;
   name: string;
@@ -38,104 +56,23 @@ interface PreppedItem {
   notes: string;
   isExpanded?: boolean;
   isMarkedForDeletion?: boolean;
+  isNew?: boolean; // 新規作成フラグ
+  cost_per_gram?: number; // コスト計算結果
 }
 
-// モックデータ（Itemsページで設定されたアイテム）
-const availableItems = [
-  { id: "1", name: "Soy Sauce" },
-  { id: "2", name: "Sugar" },
-  { id: "3", name: "Chicken Thigh" },
-];
-
-// モックデータ（Labor Roles - Settingsで設定される）
-const laborRoles = initialLaborRoles;
-
 // 単位のオプション
-const unitOptions = [
-  "g",
-  "kg",
-  "lb",
-  "oz",
-  "gallon",
-  "liter",
-  "cup",
-  "tablespoon",
-  "each",
-];
+const unitOptions = [...Object.keys(MASS_UNIT_CONVERSIONS), ...NON_MASS_UNITS];
 
-// 初期データ
-const initialItems: PreppedItem[] = [
-  {
-    id: "1",
-    name: "Teriyaki Sauce",
-    item_kind: "prepped",
-    is_menu_item: false,
-    yield_amount: 8000,
-    yield_unit: "g",
-    recipe_lines: [
-      {
-        id: "rl1",
-        line_type: "ingredient",
-        child_item_id: "1",
-        quantity: 5,
-        unit: "kg",
-      },
-      {
-        id: "rl2",
-        line_type: "ingredient",
-        child_item_id: "2",
-        quantity: 1,
-        unit: "kg",
-      },
-      {
-        id: "rl3",
-        line_type: "labor",
-        labor_role: "1",
-        minutes: 20,
-      },
-    ],
-    notes: "",
-    isExpanded: false,
-  },
-  {
-    id: "2",
-    name: "Teriyaki Chicken",
-    item_kind: "prepped",
-    is_menu_item: true,
-    yield_amount: 150,
-    yield_unit: "g",
-    recipe_lines: [
-      {
-        id: "rl4",
-        line_type: "ingredient",
-        child_item_id: "3",
-        quantity: 150,
-        unit: "g",
-      },
-      {
-        id: "rl5",
-        line_type: "ingredient",
-        child_item_id: "1", // Teriyaki Sauce
-        quantity: 80,
-        unit: "g",
-      },
-      {
-        id: "rl6",
-        line_type: "labor",
-        labor_role: "2",
-        minutes: 5,
-      },
-    ],
-    notes: "",
-    isExpanded: false,
-  },
-];
+// Yieldの単位オプション（gとeachのみ）
+const yieldUnitOptions = ["g", "each"];
 
 export default function CostPage() {
-  const [items, setItems] = useState<PreppedItem[]>(initialItems);
+  const [items, setItems] = useState<PreppedItem[]>([]);
+  const [availableItems, setAvailableItems] = useState<Item[]>([]);
+  const [rawItems, setRawItems] = useState<RawItem[]>([]);
+  const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [originalItems, setOriginalItems] =
-    useState<PreppedItem[]>(initialItems);
+  const [originalItems, setOriginalItems] = useState<PreppedItem[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [appliedSearchTerm, setAppliedSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -143,6 +80,76 @@ export default function CostPage() {
   const [yieldMax, setYieldMax] = useState<number | "">("");
   const [costMin, setCostMin] = useState<number | "">("");
   const [costMax, setCostMax] = useState<number | "">("");
+  const [loading, setLoading] = useState(true);
+
+  // データ取得
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        // Prepped/Menu Itemsを取得
+        const preppedItems = await itemsAPI.getAll({ item_kind: "prepped" });
+        // 全アイテムを取得（ingredient選択用）
+        const allItems = await itemsAPI.getAll();
+        setAvailableItems(allItems);
+        // Raw Itemsを取得（バリデーション用）
+        const rawItemsData = await rawItemsAPI.getAll();
+        setRawItems(rawItemsData);
+        // Labor Rolesを取得
+        const roles = await laborRolesAPI.getAll();
+        setLaborRoles(roles);
+
+        // 各アイテムのレシピを取得
+        const itemsWithRecipes: PreppedItem[] = await Promise.all(
+          preppedItems.map(async (item) => {
+            const recipeLines = await recipeLinesAPI.getByItemId(item.id);
+            // コストを計算
+            let costPerGram: number | undefined;
+            try {
+              const costData = await costAPI.getCost(item.id);
+              costPerGram = costData.cost_per_gram;
+            } catch (error) {
+              console.error(
+                `Failed to calculate cost for item ${item.id}:`,
+                error
+              );
+            }
+
+            return {
+              id: item.id,
+              name: item.name,
+              item_kind: "prepped",
+              is_menu_item: item.is_menu_item,
+              yield_amount: item.yield_amount || 0,
+              yield_unit: item.yield_unit || "g",
+              recipe_lines: recipeLines.map((line) => ({
+                id: line.id,
+                line_type: line.line_type,
+                child_item_id: line.child_item_id || undefined,
+                quantity: line.quantity || undefined,
+                unit: line.unit || undefined,
+                labor_role: line.labor_role || undefined,
+                minutes: line.minutes || undefined,
+              })),
+              notes: item.notes || "",
+              isExpanded: false,
+              cost_per_gram: costPerGram,
+            };
+          })
+        );
+
+        setItems(itemsWithRecipes);
+        setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
+      } catch (error) {
+        console.error("Failed to fetch data:", error);
+        alert("データの取得に失敗しました");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
 
   // Editモード切り替え
   const handleEditClick = () => {
@@ -158,48 +165,291 @@ export default function CostPage() {
     setIsEditMode(false);
   };
 
+  // 単位と数量をグラムに変換（フロントエンド用）
+  const convertToGrams = (
+    unit: string,
+    quantity: number,
+    itemId: string
+  ): number => {
+    if (!itemId || !quantity) return 0;
+
+    // 質量単位の場合
+    if (isMassUnit(unit)) {
+      const multiplier = MASS_UNIT_CONVERSIONS[unit];
+      return quantity * multiplier;
+    }
+
+    // Itemを取得
+    const item = availableItems.find((i) => i.id === itemId);
+    if (!item || !item.raw_item_id) {
+      return 0; // エラーではなく0を返す（バリデーションで処理）
+    }
+
+    // Raw Itemを取得
+    const rawItem = rawItems.find((r) => r.id === item.raw_item_id);
+    if (!rawItem) {
+      return 0; // エラーではなく0を返す（バリデーションで処理）
+    }
+
+    if (unit === "each") {
+      // eachの場合
+      if (!rawItem.each_grams) {
+        return 0; // エラーではなく0を返す（バリデーションで処理）
+      }
+      return quantity * rawItem.each_grams;
+    }
+
+    // その他の非質量単位（gallon, liter, floz）
+    if (!isNonMassUnit(unit)) {
+      return 0; // エラーではなく0を返す（バリデーションで処理）
+    }
+
+    if (!rawItem.specific_weight) {
+      return 0; // エラーではなく0を返す（バリデーションで処理）
+    }
+
+    // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
+    const litersPerUnit = VOLUME_UNIT_TO_LITERS[unit];
+    if (!litersPerUnit) {
+      return 0; // エラーではなく0を返す（バリデーションで処理）
+    }
+    const gramsPerSourceUnit = rawItem.specific_weight * 1000 * litersPerUnit;
+    return quantity * gramsPerSourceUnit;
+  };
+
+  // Yieldをグラムに変換
+  const convertYieldToGrams = (
+    yieldAmount: number,
+    yieldUnit: string
+  ): number => {
+    if (yieldUnit === "each") {
+      // Yieldが"each"の場合、グラムに変換できない
+      // バリデーションでは、材料の総合計と比較できないため、エラーを返す
+      return -1; // エラーを示す値
+    }
+
+    // Yieldが"g"の場合
+    const multiplier = MASS_UNIT_CONVERSIONS[yieldUnit];
+    if (!multiplier) {
+      return -1; // エラーを示す値
+    }
+    return yieldAmount * multiplier;
+  };
+
+  // 材料の総合計をグラムで計算
+  const calculateTotalIngredientsGrams = (
+    recipeLines: RecipeLine[]
+  ): number => {
+    let totalGrams = 0;
+
+    for (const line of recipeLines) {
+      if (line.line_type !== "ingredient") continue;
+      if (!line.child_item_id || !line.quantity || !line.unit) continue;
+
+      const grams = convertToGrams(
+        line.unit,
+        line.quantity,
+        line.child_item_id
+      );
+      totalGrams += grams;
+    }
+
+    return totalGrams;
+  };
+
   // Save処理
-  const handleSaveClick = () => {
-    // 削除予定のアイテムと空の新規レコードを削除
-    const filteredItems = items
-      .filter((item) => {
+  const handleSaveClick = async () => {
+    try {
+      setLoading(true);
+
+      // 削除予定のアイテムと空の新規レコードをフィルター
+      const filteredItems = items.filter((item) => {
         if (item.isMarkedForDeletion) return false;
-        // 空の新規レコード（nameが空、yield_amountが0）も削除
         if (item.name.trim() === "" && item.yield_amount === 0) {
           return false;
         }
         return true;
-      })
-      .map((item) => {
-        // レシピラインから削除予定と空のレコードを削除
-        const filteredRecipeLines = item.recipe_lines.filter((line) => {
-          if (line.isMarkedForDeletion) return false;
-          if (line.line_type === "ingredient") {
-            if (
-              !line.child_item_id &&
-              (!line.quantity || line.quantity === 0)
-            ) {
-              return false;
-            }
-          } else if (line.line_type === "labor") {
-            if (!line.labor_role && (!line.minutes || line.minutes === 0)) {
-              return false;
-            }
-          }
-          return true;
-        });
-
-        return {
-          ...item,
-          recipe_lines: filteredRecipeLines.map(
-            ({ isMarkedForDeletion, ...line }) => line
-          ),
-          isMarkedForDeletion: undefined,
-        };
       });
 
-    setItems(filteredItems);
-    setIsEditMode(false);
+      // バリデーション: Yieldが材料の総合計を超えないかチェック
+      for (const item of filteredItems) {
+        // Yieldが"each"の場合はバリデーションをスキップ（グラムに変換できないため）
+        if (item.yield_unit === "each") {
+          continue;
+        }
+
+        const totalIngredientsGrams = calculateTotalIngredientsGrams(
+          item.recipe_lines
+        );
+        const yieldGrams = convertYieldToGrams(
+          item.yield_amount,
+          item.yield_unit
+        );
+
+        if (yieldGrams < 0) {
+          alert(
+            `"${item.name}"のYield単位が無効です。バリデーションをスキップします。`
+          );
+          continue;
+        }
+
+        if (yieldGrams > totalIngredientsGrams) {
+          alert(
+            `"${item.name}"のYield（${item.yield_amount} ${
+              item.yield_unit
+            } = ${yieldGrams.toFixed(
+              2
+            )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
+              2
+            )}g）を超えています。Yieldは材料の総合計以下である必要があります。`
+          );
+          setLoading(false);
+          return;
+        }
+      }
+
+      // API呼び出し
+      for (const item of filteredItems) {
+        if (item.isNew) {
+          // 新規作成
+          const newItem = await itemsAPI.create({
+            name: item.name,
+            item_kind: "prepped",
+            is_menu_item: item.is_menu_item,
+            yield_amount: item.yield_amount,
+            yield_unit: item.yield_unit,
+            notes: item.notes || null,
+          });
+
+          // レシピラインを作成
+          for (const line of item.recipe_lines) {
+            if (line.isMarkedForDeletion) continue;
+            if (line.line_type === "ingredient") {
+              if (!line.child_item_id || !line.quantity || !line.unit) continue;
+              await recipeLinesAPI.create({
+                parent_item_id: newItem.id,
+                line_type: "ingredient",
+                child_item_id: line.child_item_id,
+                quantity: line.quantity,
+                unit: line.unit,
+              });
+            } else if (line.line_type === "labor") {
+              if (!line.minutes) continue;
+              await recipeLinesAPI.create({
+                parent_item_id: newItem.id,
+                line_type: "labor",
+                labor_role: line.labor_role || null,
+                minutes: line.minutes,
+              });
+            }
+          }
+        } else {
+          // 更新
+          await itemsAPI.update(item.id, {
+            name: item.name,
+            is_menu_item: item.is_menu_item,
+            yield_amount: item.yield_amount,
+            yield_unit: item.yield_unit,
+            notes: item.notes || null,
+          });
+
+          // レシピラインを更新
+          for (const line of item.recipe_lines) {
+            if (line.isMarkedForDeletion && !line.isNew) {
+              await recipeLinesAPI.delete(line.id);
+            } else if (line.isNew) {
+              if (line.line_type === "ingredient") {
+                if (!line.child_item_id || !line.quantity || !line.unit)
+                  continue;
+                await recipeLinesAPI.create({
+                  parent_item_id: item.id,
+                  line_type: "ingredient",
+                  child_item_id: line.child_item_id,
+                  quantity: line.quantity,
+                  unit: line.unit,
+                });
+              } else if (line.line_type === "labor") {
+                if (!line.minutes) continue;
+                await recipeLinesAPI.create({
+                  parent_item_id: item.id,
+                  line_type: "labor",
+                  labor_role: line.labor_role || null,
+                  minutes: line.minutes,
+                });
+              }
+            } else {
+              if (line.line_type === "ingredient") {
+                await recipeLinesAPI.update(line.id, {
+                  child_item_id: line.child_item_id || null,
+                  quantity: line.quantity || null,
+                  unit: line.unit || null,
+                });
+              } else if (line.line_type === "labor") {
+                await recipeLinesAPI.update(line.id, {
+                  labor_role: line.labor_role || null,
+                  minutes: line.minutes || null,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // 削除処理
+      for (const item of items) {
+        if (item.isMarkedForDeletion && !item.isNew) {
+          await itemsAPI.delete(item.id);
+        }
+      }
+
+      // データを再取得
+      const preppedItems = await itemsAPI.getAll({ item_kind: "prepped" });
+      const itemsWithRecipes: PreppedItem[] = await Promise.all(
+        preppedItems.map(async (item) => {
+          const recipeLines = await recipeLinesAPI.getByItemId(item.id);
+          let costPerGram: number | undefined;
+          try {
+            const costData = await costAPI.getCost(item.id);
+            costPerGram = costData.cost_per_gram;
+          } catch (error) {
+            console.error(
+              `Failed to calculate cost for item ${item.id}:`,
+              error
+            );
+          }
+
+          return {
+            id: item.id,
+            name: item.name,
+            item_kind: "prepped",
+            is_menu_item: item.is_menu_item,
+            yield_amount: item.yield_amount || 0,
+            yield_unit: item.yield_unit || "g",
+            recipe_lines: recipeLines.map((line) => ({
+              id: line.id,
+              line_type: line.line_type,
+              child_item_id: line.child_item_id || undefined,
+              quantity: line.quantity || undefined,
+              unit: line.unit || undefined,
+              labor_role: line.labor_role || undefined,
+              minutes: line.minutes || undefined,
+            })),
+            notes: item.notes || "",
+            isExpanded: false,
+            cost_per_gram: costPerGram,
+          };
+        })
+      );
+
+      setItems(itemsWithRecipes);
+      setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
+      setIsEditMode(false);
+    } catch (error: any) {
+      console.error("Failed to save:", error);
+      alert(`保存に失敗しました: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // アイテムの展開/折りたたみ
@@ -233,6 +483,55 @@ export default function CostPage() {
     );
   };
 
+  // 選択されたItemに基づいて利用可能な単位を取得
+  const getAvailableUnitsForItem = (itemId: string): string[] => {
+    if (!itemId) {
+      return []; // Itemが選択されていない場合は空配列
+    }
+
+    const selectedItem = availableItems.find((i) => i.id === itemId);
+    if (!selectedItem) {
+      return []; // Itemが見つからない場合は空配列
+    }
+
+    // Prepped Itemの場合
+    if (selectedItem.item_kind === "prepped") {
+      // Yieldが"each"の場合
+      if (selectedItem.yield_unit === "each") {
+        return ["each"]; // "each"のみ選択可能
+      }
+      // Yieldが"g"の場合
+      return Object.keys(MASS_UNIT_CONVERSIONS); // 質量単位のみ選択可能
+    }
+
+    // Raw Itemの場合
+    if (selectedItem.item_kind === "raw") {
+      const purchaseUnit = selectedItem.purchase_unit;
+
+      // 非質量単位（gallon, liter, floz）で登録されている場合
+      if (
+        purchaseUnit &&
+        isNonMassUnit(purchaseUnit) &&
+        purchaseUnit !== "each"
+      ) {
+        // すべての単位が選択可能
+        return [...Object.keys(MASS_UNIT_CONVERSIONS), ...NON_MASS_UNITS];
+      }
+
+      // eachで登録されている場合
+      if (purchaseUnit === "each") {
+        // 質量単位 + "each"が選択可能
+        return [...Object.keys(MASS_UNIT_CONVERSIONS), "each"];
+      }
+
+      // 質量単位で登録されている場合
+      // 質量単位のみ選択可能
+      return Object.keys(MASS_UNIT_CONVERSIONS);
+    }
+
+    return [];
+  };
+
   // レシピライン更新
   const handleRecipeLineChange = (
     itemId: string,
@@ -245,9 +544,24 @@ export default function CostPage() {
         item.id === itemId
           ? {
               ...item,
-              recipe_lines: item.recipe_lines.map((line) =>
-                line.id === lineId ? { ...line, [field]: value } : line
-              ),
+              recipe_lines: item.recipe_lines.map((line) => {
+                if (line.id === lineId) {
+                  const updatedLine = { ...line, [field]: value };
+
+                  // child_item_idが変更された場合、unitをリセット
+                  if (field === "child_item_id") {
+                    const availableUnits = getAvailableUnitsForItem(
+                      value as string
+                    );
+                    // 利用可能な単位の最初のものをデフォルトとして設定
+                    updatedLine.unit =
+                      availableUnits.length > 0 ? availableUnits[0] : "g";
+                  }
+
+                  return updatedLine;
+                }
+                return line;
+              }),
             }
           : item
       )
@@ -287,6 +601,7 @@ export default function CostPage() {
       recipe_lines: [],
       notes: "",
       isExpanded: true,
+      isNew: true,
     };
     setItems([...items, newItem]);
   };
@@ -306,6 +621,7 @@ export default function CostPage() {
                   child_item_id: "",
                   quantity: 0,
                   unit: "g",
+                  isNew: true,
                 },
               ],
             }
@@ -328,6 +644,7 @@ export default function CostPage() {
                   line_type: "labor",
                   labor_role: "",
                   minutes: 0,
+                  isNew: true,
                 },
               ],
             }
@@ -340,6 +657,18 @@ export default function CostPage() {
   const handleSearch = () => {
     setAppliedSearchTerm(searchTerm);
   };
+
+  // availableItemsをSearchableSelect用の形式に変換
+  const availableItemsForSelect = availableItems.map((item) => ({
+    id: item.id,
+    name: item.name,
+  }));
+
+  // laborRolesをSearchableSelect用の形式に変換
+  const laborRolesForSelect = laborRoles.map((role) => ({
+    id: role.name,
+    name: role.name,
+  }));
 
   // 検索・フィルター処理
   const filteredItems = items.filter((item) => {
@@ -372,13 +701,14 @@ export default function CostPage() {
       return false;
     }
 
-    // フィルター（Cost/g範囲）- モック値なので0.005を固定値として使用
-    const mockCostPerGram = 0.005;
-    if (costMin !== "" && mockCostPerGram < costMin) {
-      return false;
-    }
-    if (costMax !== "" && mockCostPerGram > costMax) {
-      return false;
+    // フィルター（Cost/g範囲）
+    if (item.cost_per_gram !== undefined) {
+      if (costMin !== "" && item.cost_per_gram < costMin) {
+        return false;
+      }
+      if (costMax !== "" && item.cost_per_gram > costMax) {
+        return false;
+      }
     }
 
     return true;
@@ -389,6 +719,14 @@ export default function CostPage() {
     setSearchTerm("");
     setAppliedSearchTerm("");
   };
+
+  if (loading) {
+    return (
+      <div className="p-8">
+        <div className="max-w-7xl mx-auto text-center">読み込み中...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-8">
@@ -664,14 +1002,20 @@ export default function CostPage() {
                         <div className="flex items-center gap-2">
                           <input
                             type="number"
-                            value={item.yield_amount}
-                            onChange={(e) =>
+                            value={
+                              item.yield_amount === 0 ? "" : item.yield_amount
+                            }
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              // 空文字列の場合は0、それ以外は数値に変換
+                              const numValue =
+                                value === "" ? 0 : parseFloat(value) || 0;
                               handleItemChange(
                                 item.id,
                                 "yield_amount",
-                                parseFloat(e.target.value) || 0
-                              )
-                            }
+                                numValue
+                              );
+                            }}
                             className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                             placeholder="0"
                             min="0"
@@ -688,7 +1032,7 @@ export default function CostPage() {
                             }
                             className="w-20 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                           >
-                            {unitOptions.map((unit) => (
+                            {yieldUnitOptions.map((unit) => (
                               <option key={unit} value={unit}>
                                 {unit}
                               </option>
@@ -705,7 +1049,9 @@ export default function CostPage() {
                     {/* Cost/g */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">
-                        $0.005/g {/* Mock value */}
+                        {item.cost_per_gram !== undefined
+                          ? `$${item.cost_per_gram.toFixed(6)}/g`
+                          : "-"}
                       </div>
                     </td>
 
@@ -779,7 +1125,7 @@ export default function CostPage() {
                                       <td className="px-4 py-2">
                                         {isEditMode ? (
                                           <SearchableSelect
-                                            options={availableItems}
+                                            options={availableItemsForSelect}
                                             value={line.child_item_id || ""}
                                             onChange={(value) =>
                                               handleRecipeLineChange(
@@ -803,15 +1149,25 @@ export default function CostPage() {
                                         {isEditMode ? (
                                           <input
                                             type="number"
-                                            value={line.quantity || 0}
-                                            onChange={(e) =>
+                                            value={
+                                              line.quantity === 0
+                                                ? ""
+                                                : line.quantity || ""
+                                            }
+                                            onChange={(e) => {
+                                              const value = e.target.value;
+                                              // 空文字列の場合は0、それ以外は数値に変換
+                                              const numValue =
+                                                value === ""
+                                                  ? 0
+                                                  : parseFloat(value) || 0;
                                               handleRecipeLineChange(
                                                 item.id,
                                                 line.id,
                                                 "quantity",
-                                                parseFloat(e.target.value) || 0
-                                              )
-                                            }
+                                                numValue
+                                              );
+                                            }}
                                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                             placeholder="0"
                                             min="0"
@@ -836,12 +1192,32 @@ export default function CostPage() {
                                               )
                                             }
                                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            disabled={!line.child_item_id}
                                           >
-                                            {unitOptions.map((unit) => (
-                                              <option key={unit} value={unit}>
-                                                {unit}
-                                              </option>
-                                            ))}
+                                            {(() => {
+                                              const availableUnits =
+                                                getAvailableUnitsForItem(
+                                                  line.child_item_id || ""
+                                                );
+                                              // Itemが選択されていない場合は空のオプションを表示
+                                              if (availableUnits.length === 0) {
+                                                return (
+                                                  <option value="">
+                                                    Select item first
+                                                  </option>
+                                                );
+                                              }
+                                              return availableUnits.map(
+                                                (unit) => (
+                                                  <option
+                                                    key={unit}
+                                                    value={unit}
+                                                  >
+                                                    {unit}
+                                                  </option>
+                                                )
+                                              );
+                                            })()}
                                           </select>
                                         ) : (
                                           <div className="text-sm text-gray-900">
@@ -947,7 +1323,7 @@ export default function CostPage() {
                                             {laborRoles.map((role) => (
                                               <option
                                                 key={role.id}
-                                                value={role.id}
+                                                value={role.name}
                                               >
                                                 {role.name}
                                               </option>
@@ -956,7 +1332,7 @@ export default function CostPage() {
                                         ) : (
                                           <div className="text-sm text-gray-900">
                                             {laborRoles.find(
-                                              (r) => r.id === line.labor_role
+                                              (r) => r.name === line.labor_role
                                             )?.name || "-"}
                                           </div>
                                         )}
@@ -965,15 +1341,25 @@ export default function CostPage() {
                                         {isEditMode ? (
                                           <input
                                             type="number"
-                                            value={line.minutes || 0}
-                                            onChange={(e) =>
+                                            value={
+                                              line.minutes === 0
+                                                ? ""
+                                                : line.minutes || ""
+                                            }
+                                            onChange={(e) => {
+                                              const value = e.target.value;
+                                              // 空文字列の場合は0、それ以外は数値に変換
+                                              const numValue =
+                                                value === ""
+                                                  ? 0
+                                                  : parseFloat(value) || 0;
                                               handleRecipeLineChange(
                                                 item.id,
                                                 line.id,
                                                 "minutes",
-                                                parseFloat(e.target.value) || 0
-                                              )
-                                            }
+                                                numValue
+                                              );
+                                            }}
                                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                             placeholder="0"
                                             min="0"

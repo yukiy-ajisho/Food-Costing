@@ -1,9 +1,15 @@
+// 環境変数を最初に読み込む（インポートより前）
+require("dotenv").config();
+
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
-
-// 環境変数を読み込む
-dotenv.config();
+import itemsRouter from "./routes/items";
+import recipeLinesRouter from "./routes/recipe-lines";
+import costRouter from "./routes/cost";
+import rawItemsRouter from "./routes/raw-items";
+import vendorsRouter from "./routes/vendors";
+import laborRolesRouter from "./routes/labor-roles";
+import nonMassUnitsRouter from "./routes/non-mass-units";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -16,6 +22,14 @@ app.use(express.json());
 app.get("/", (req, res) => {
   res.json({ message: "Food Costing API is running" });
 });
+
+app.use("/items", itemsRouter);
+app.use("/recipe-lines", recipeLinesRouter);
+app.use("/", costRouter);
+app.use("/raw-items", rawItemsRouter);
+app.use("/vendors", vendorsRouter);
+app.use("/labor-roles", laborRolesRouter);
+app.use("/non-mass-units", nonMassUnitsRouter);
 
 // サーバー起動
 app.listen(PORT, () => {

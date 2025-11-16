@@ -1,0 +1,459 @@
+========================================
+FOOD COSTING SYSTEM - テストデータ
+========================================
+
+【Items ページ - Raw Items】
+----------------------------------------
+
+=== 質量単位 ===
+
+1. Salt
+   Unit: kg
+   Quantity: 20
+   Cost: $200.00
+   Notes: 海塩
+
+2. Black Pepper
+   Unit: g
+   Quantity: 500
+   Cost: $15.50
+   Notes: 粗挽き
+
+3. Sugar
+   Unit: kg
+   Quantity: 10
+   Cost: $8.00
+   Notes: グラニュー糖
+
+4. Flour
+   Unit: kg
+   Quantity: 25
+   Cost: $12.50
+   Notes: 強力粉
+
+5. Butter
+   Unit: lb
+   Quantity: 5
+   Cost: $18.00
+   Notes: 無塩バター
+
+6. Olive Oil
+   Unit: oz
+   Quantity: 32
+   Cost: $24.00
+   Notes: エクストラバージン
+
+=== 非質量単位（Specific Weight必要） ===
+
+7. Vegetable Oil
+   Unit: gallon
+   Quantity: 1
+   Cost: $25.00
+   Specific Weight: 0.92
+   Notes: サラダ油
+
+8. Soy Sauce
+   Unit: liter
+   Quantity: 2
+   Cost: $12.00
+   Specific Weight: 1.18
+   Notes: 濃口醤油
+
+9. Vinegar
+   Unit: cup
+   Quantity: 4
+   Cost: $6.00
+   Specific Weight: 1.01
+   Notes: 米酢
+
+10. Sesame Oil
+    Unit: tablespoon
+    Quantity: 20
+    Cost: $8.50
+    Specific Weight: 0.92
+    Notes: ごま油
+
+11. Heavy Cream
+    Unit: liter
+    Quantity: 1
+    Cost: $5.50
+    Specific Weight: 0.98
+    Notes: 生クリーム
+
+12. Chicken Stock
+    Unit: gallon
+    Quantity: 1
+    Cost: $15.00
+    Specific Weight: 1.00
+    Notes: チキンスープ
+
+=== Each単位 ===
+
+13. Large Eggs
+    Unit: each
+    Quantity: 12
+    Cost: $4.50
+    Specific Weight: 55
+    Notes: 大玉卵
+
+14. Medium Eggs
+    Unit: each
+    Quantity: 12
+    Cost: $3.50
+    Specific Weight: 45
+    Notes: 中玉卵
+
+15. Lemons
+    Unit: each
+    Quantity: 10
+    Cost: $6.00
+    Specific Weight: 120
+    Notes: レモン
+
+16. Onions
+    Unit: each
+    Quantity: 5
+    Cost: $3.00
+    Specific Weight: 200
+    Notes: 玉ねぎ
+
+17. Garlic Cloves
+    Unit: each
+    Quantity: 20
+    Cost: $2.50
+    Specific Weight: 5
+    Notes: にんにく
+
+18. Tomatoes
+    Unit: each
+    Quantity: 8
+    Cost: $5.00
+    Specific Weight: 150
+    Notes: トマト
+
+19. Potatoes
+    Unit: each
+    Quantity: 6
+    Cost: $4.00
+    Specific Weight: 250
+    Notes: じゃがいも
+
+20. Carrots
+    Unit: each
+    Quantity: 5
+    Cost: $2.50
+    Specific Weight: 100
+    Notes: にんじん
+
+========================================
+【Cost ページ - Prepped Items】
+========================================
+
+=== シンプルなPrepped Items ===
+
+1. Teriyaki Sauce
+   Type: Prepped
+   Yield: 500 g
+   Recipe:
+     - Soy Sauce: 200 g
+     - Sugar: 50 g
+     - Mirin: 100 g
+     - Water: 150 g
+   Labor:
+     - Prep Cook: 10 minutes
+   Notes: テリヤキソース
+
+2. Miso Soup Base
+   Type: Prepped
+   Yield: 1000 g
+   Recipe:
+     - Miso Paste: 300 g
+     - Dashi Stock: 700 g
+   Labor:
+     - Prep Cook: 5 minutes
+   Notes: 味噌汁の素
+
+3. Garlic Butter
+   Type: Prepped
+   Yield: 200 g
+   Recipe:
+     - Butter: 150 g
+     - Garlic Cloves: 5 each (25 g)
+     - Parsley: 25 g
+   Labor:
+     - Prep Cook: 8 minutes
+   Notes: ガーリックバター
+
+=== 複雑なPrepped Items（ネスト） ===
+
+4. Pasta Sauce
+   Type: Prepped
+   Yield: 2000 g
+   Recipe:
+     - Tomatoes: 4 each (600 g)
+     - Onions: 2 each (400 g)
+     - Garlic Cloves: 6 each (30 g)
+     - Olive Oil: 50 g
+     - Teriyaki Sauce: 100 g
+     - Salt: 10 g
+     - Black Pepper: 5 g
+   Labor:
+     - Chef: 30 minutes
+     - Prep Cook: 15 minutes
+   Notes: パスタソース（Teriyaki Sauceを使用）
+
+5. Chicken Curry
+   Type: Prepped
+   Yield: 3000 g
+   Recipe:
+     - Chicken Breast: 1000 g
+     - Onions: 3 each (600 g)
+     - Potatoes: 2 each (500 g)
+     - Carrots: 2 each (200 g)
+     - Curry Powder: 50 g
+     - Coconut Milk: 500 g
+     - Chicken Stock: 150 g
+     - Salt: 15 g
+   Labor:
+     - Chef: 45 minutes
+     - Prep Cook: 20 minutes
+   Notes: チキンカレー
+
+6. Caesar Salad Dressing
+   Type: Prepped
+   Yield: 500 g
+   Recipe:
+     - Mayonnaise: 200 g
+     - Parmesan Cheese: 100 g
+     - Lemon Juice: 50 g (from 1 lemon)
+     - Garlic Cloves: 3 each (15 g)
+     - Anchovy Paste: 20 g
+     - Olive Oil: 100 g
+     - Black Pepper: 5 g
+   Labor:
+     - Prep Cook: 12 minutes
+   Notes: シーザーサラダドレッシング
+
+=== Menu Items（is_menu_item = true） ===
+
+7. Teriyaki Chicken Bowl
+   Type: Menu Item
+   Yield: 400 g
+   Recipe:
+     - Chicken Breast: 200 g
+     - Teriyaki Sauce: 100 g
+     - Rice: 100 g
+   Labor:
+     - Line Cook: 15 minutes
+   Notes: テリヤキチキンボウル
+
+8. Pasta with Tomato Sauce
+   Type: Menu Item
+   Yield: 500 g
+   Recipe:
+     - Pasta: 200 g
+     - Pasta Sauce: 250 g
+     - Parmesan Cheese: 50 g
+   Labor:
+     - Line Cook: 20 minutes
+   Notes: トマトソースパスタ（Pasta Sauceを使用）
+
+9. Caesar Salad
+   Type: Menu Item
+   Yield: 300 g
+   Recipe:
+     - Romaine Lettuce: 150 g
+     - Caesar Salad Dressing: 100 g
+     - Croutons: 30 g
+     - Parmesan Cheese: 20 g
+   Labor:
+     - Line Cook: 10 minutes
+   Notes: シーザーサラダ（Caesar Salad Dressingを使用）
+
+=== 非常に複雑なネスト ===
+
+10. Complete Meal Set
+    Type: Menu Item
+    Yield: 800 g
+    Recipe:
+      - Teriyaki Chicken Bowl: 400 g
+      - Miso Soup: 200 g
+      - Pickled Vegetables: 100 g
+      - Rice: 100 g
+    Labor:
+      - Chef: 5 minutes
+      - Line Cook: 10 minutes
+    Notes: 完全なセットメニュー（Teriyaki Chicken BowlとMiso Soupを使用）
+
+11. Miso Soup
+    Type: Prepped
+    Yield: 200 g
+    Recipe:
+      - Miso Soup Base: 150 g
+      - Tofu: 30 g
+      - Wakame: 10 g
+      - Green Onions: 10 g
+    Labor:
+      - Line Cook: 5 minutes
+    Notes: 味噌汁（Miso Soup Baseを使用）
+
+12. Pickled Vegetables
+    Type: Prepped
+    Yield: 500 g
+    Recipe:
+      - Carrots: 3 each (300 g)
+      - Cucumbers: 2 each (200 g)
+      - Vinegar: 100 g
+      - Sugar: 20 g
+      - Salt: 10 g
+    Labor:
+      - Prep Cook: 15 minutes
+    Notes: 漬物
+
+=== 大量の材料を使用する複雑なレシピ ===
+
+13. Beef Stew
+    Type: Prepped
+    Yield: 5000 g
+    Recipe:
+      - Beef Chuck: 2000 g
+      - Onions: 5 each (1000 g)
+      - Potatoes: 4 each (1000 g)
+      - Carrots: 4 each (400 g)
+      - Celery: 300 g
+      - Beef Stock: 500 g
+      - Red Wine: 200 g
+      - Tomato Paste: 100 g
+      - Flour: 50 g
+      - Salt: 20 g
+      - Black Pepper: 10 g
+      - Bay Leaves: 5 g
+    Labor:
+      - Chef: 120 minutes
+      - Prep Cook: 30 minutes
+    Notes: ビーフシチュー
+
+14. Sushi Rice
+    Type: Prepped
+    Yield: 2000 g
+    Recipe:
+      - Rice: 1000 g
+      - Rice Vinegar: 200 g
+      - Sugar: 100 g
+      - Salt: 20 g
+    Labor:
+      - Sushi Chef: 30 minutes
+    Notes: 寿司飯
+
+15. Tempura Batter
+    Type: Prepped
+    Yield: 1000 g
+    Recipe:
+      - Flour: 500 g
+      - Cornstarch: 200 g
+      - Eggs: 2 each (110 g)
+      - Ice Water: 190 g
+    Labor:
+      - Prep Cook: 10 minutes
+    Notes: 天ぷら衣
+
+========================================
+【Settings ページ - Labor Roles】
+========================================
+
+1. Chef
+   Hourly Wage: $35.00
+
+2. Sous Chef
+   Hourly Wage: $28.00
+
+3. Line Cook
+   Hourly Wage: $22.00
+
+4. Prep Cook
+   Hourly Wage: $18.00
+
+5. Sushi Chef
+   Hourly Wage: $40.00
+
+6. Pastry Chef
+   Hourly Wage: $32.00
+
+7. Dishwasher
+   Hourly Wage: $15.00
+
+8. Server
+   Hourly Wage: $12.00
+
+========================================
+【テストシナリオ - 複雑なケース】
+========================================
+
+=== シナリオ1: 多段階ネスト ===
+Raw Items → Prepped Items → Menu Items の3段階
+
+例：
+- Raw: Salt, Sugar, Soy Sauce → Prepped: Teriyaki Sauce
+- Raw: Chicken, Rice, Teriyaki Sauce → Menu: Teriyaki Chicken Bowl
+- Menu: Teriyaki Chicken Bowl → Menu: Complete Meal Set
+
+=== シナリオ2: 複数のPrepped Itemsを組み合わせ ===
+複数のPrepped Itemsを組み合わせてMenu Itemを作成
+
+例：
+- Pasta Sauce (Prepped) + Pasta (Raw) → Pasta with Tomato Sauce (Menu)
+- Caesar Salad Dressing (Prepped) + Lettuce (Raw) → Caesar Salad (Menu)
+
+=== シナリオ3: 大量の材料と複数のLabor Roles ===
+多くの材料と複数の役職が関わる複雑なレシピ
+
+例：
+- Beef Stew: 13種類の材料、2種類の役職（Chef, Prep Cook）
+
+=== シナリオ4: 非質量単位の複雑な計算 ===
+複数の非質量単位（gallon, liter, cup, tablespoon, each）を使用
+
+例：
+- Vegetable Oil (gallon, Specific Weight: 0.92)
+- Soy Sauce (liter, Specific Weight: 1.18)
+- Vinegar (cup, Specific Weight: 1.01)
+- Sesame Oil (tablespoon, Specific Weight: 0.92)
+- Large Eggs (each, 55g)
+
+=== シナリオ5: 循環参照のテスト（エラーケース） ===
+※ これはエラーになるべきケースです
+
+A → B → C → A のような循環参照を作成してテスト
+
+例（手動で作成）：
+- Item A (Prepped) が Item B を使用
+- Item B (Prepped) が Item C を使用
+- Item C (Prepped) が Item A を使用
+
+========================================
+【入力順序の推奨】
+========================================
+
+1. まず Labor Roles を全て入力（Settings）
+2. Raw Items を全て入力（Items）
+   - 質量単位から
+   - 非質量単位（Specific Weight含む）
+   - each単位
+3. Prepped Items を入力（Cost）
+   - シンプルなものから
+   - 複雑なネストへ
+4. Menu Items を入力（Cost）
+   - Prepped Itemsを使用するもの
+
+========================================
+【注意事項】
+========================================
+
+- Specific Weightは非質量単位（gallon, liter, cup, tablespoon）に必要
+- each単位の場合は「Specific Weight」ではなく「g」として入力（例: 55 g）
+- 循環参照を作成するとエラーになることを確認
+- 各ItemのCost/gが正しく計算されることを確認
+- ネストされたItemのコストが正しく伝播することを確認
+
+========================================
+

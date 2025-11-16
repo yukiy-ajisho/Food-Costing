@@ -1,0 +1,226 @@
+import { Router } from "express";
+import { supabase } from "../config/supabase";
+import { Item, RecipeLine, RawItem } from "../types/database";
+import { convertToGrams } from "../services/units";
+import { MASS_UNIT_CONVERSIONS } from "../constants/units";
+
+const router = Router();
+
+/**
+ * GET /items
+ * 全アイテムを取得（フィルター対応）
+ * Query params: item_kind, is_menu_item
+ */
+router.get("/", async (req, res) => {
+  try {
+    let query = supabase.from("items").select("*");
+
+    // フィルター
+    if (req.query.item_kind) {
+      query = query.eq("item_kind", req.query.item_kind);
+    }
+    if (req.query.is_menu_item !== undefined) {
+      query = query.eq("is_menu_item", req.query.is_menu_item === "true");
+    }
+
+    const { data, error } = await query.order("name");
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /items/:id
+ * アイテム詳細を取得
+ */
+router.get("/:id", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("items")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (error) {
+      return res.status(404).json({ error: error.message });
+    }
+
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /items
+ * アイテムを作成
+ */
+router.post("/", async (req, res) => {
+  try {
+    const item: Partial<Item> = req.body;
+
+    // バリデーション
+    if (!item.name || !item.item_kind) {
+      return res.status(400).json({
+        error: "name and item_kind are required",
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("items")
+      .insert([item])
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(201).json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * PUT /items/:id
+ * アイテムを更新
+ */
+router.put("/:id", async (req, res) => {
+  try {
+    const item: Partial<Item> = req.body;
+    const { id } = req.params;
+
+    // Prepped Itemの場合、Yieldバリデーション
+    if (item.item_kind === "prepped" || item.yield_amount !== undefined) {
+      // 既存のアイテムを取得（item_kindを確認するため）
+      const { data: existingItem } = await supabase
+        .from("items")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (existingItem && existingItem.item_kind === "prepped") {
+        // Yieldが更新される場合のみバリデーション
+        if (item.yield_amount !== undefined && item.yield_unit !== undefined) {
+          // Yieldが"each"の場合はバリデーションをスキップ
+          if (item.yield_unit !== "each") {
+            // レシピラインを取得
+            const { data: recipeLines } = await supabase
+              .from("recipe_lines")
+              .select("*")
+              .eq("parent_item_id", id)
+              .eq("line_type", "ingredient");
+
+            if (recipeLines && recipeLines.length > 0) {
+              // Raw Itemsを取得
+              const { data: rawItems } = await supabase
+                .from("raw_items")
+                .select("*");
+
+              // Itemsを取得
+              const { data: allItems } = await supabase
+                .from("items")
+                .select("*");
+
+              // マップを作成
+              const rawItemsMap = new Map<string, RawItem>();
+              rawItems?.forEach((r) => rawItemsMap.set(r.id, r));
+
+              const itemsMap = new Map<string, Item>();
+              allItems?.forEach((i) => itemsMap.set(i.id, i));
+
+              // 材料の総合計を計算
+              let totalIngredientsGrams = 0;
+              for (const line of recipeLines) {
+                if (!line.child_item_id || !line.quantity || !line.unit) {
+                  continue;
+                }
+
+                try {
+                  const grams = convertToGrams(
+                    line.unit,
+                    line.quantity,
+                    line.child_item_id,
+                    itemsMap,
+                    rawItemsMap
+                  );
+                  totalIngredientsGrams += grams;
+                } catch (error) {
+                  // 変換エラーは無視（バリデーションをスキップ）
+                  console.error(
+                    `Failed to convert ${line.quantity} ${line.unit} to grams:`,
+                    error
+                  );
+                }
+              }
+
+              // Yieldをグラムに変換
+              const yieldMultiplier = MASS_UNIT_CONVERSIONS[item.yield_unit];
+              if (yieldMultiplier) {
+                const yieldGrams = item.yield_amount * yieldMultiplier;
+
+                // バリデーション: Yieldが材料の総合計を超えないかチェック
+                if (yieldGrams > totalIngredientsGrams) {
+                  return res.status(400).json({
+                    error: `Yield (${item.yield_amount} ${
+                      item.yield_unit
+                    } = ${yieldGrams.toFixed(
+                      2
+                    )}g) exceeds total ingredients (${totalIngredientsGrams.toFixed(
+                      2
+                    )}g). Yield must be less than or equal to total ingredients.`,
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const { data, error } = await supabase
+      .from("items")
+      .update(item)
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json(data);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * DELETE /items/:id
+ * アイテムを削除（CASCADEでrecipe_linesも削除される）
+ */
+router.delete("/:id", async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from("items")
+      .delete()
+      .eq("id", req.params.id);
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(204).send();
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+export default router;
