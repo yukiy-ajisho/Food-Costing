@@ -6,8 +6,9 @@ import cors from "cors";
 import itemsRouter from "./routes/items";
 import recipeLinesRouter from "./routes/recipe-lines";
 import costRouter from "./routes/cost";
-import rawItemsRouter from "./routes/raw-items";
+import baseItemsRouter from "./routes/base-items";
 import vendorsRouter from "./routes/vendors";
+import vendorProductsRouter from "./routes/vendor-products";
 import laborRolesRouter from "./routes/labor-roles";
 import nonMassUnitsRouter from "./routes/non-mass-units";
 
@@ -26,8 +27,9 @@ app.get("/", (req, res) => {
 app.use("/items", itemsRouter);
 app.use("/recipe-lines", recipeLinesRouter);
 app.use("/", costRouter);
-app.use("/raw-items", rawItemsRouter);
+app.use("/base-items", baseItemsRouter);
 app.use("/vendors", vendorsRouter);
+app.use("/vendor-products", vendorProductsRouter);
 app.use("/labor-roles", laborRolesRouter);
 app.use("/non-mass-units", nonMassUnitsRouter);
 

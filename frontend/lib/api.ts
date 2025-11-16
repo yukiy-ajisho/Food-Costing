@@ -6,11 +6,10 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 // 型定義
-export interface RawItem {
+export interface BaseItem {
   id: string;
   name: string;
   specific_weight?: number | null; // g/ml for non-mass units (gallon, liter, floz)
-  each_grams?: number | null; // grams for 'each' unit
 }
 
 export interface Vendor {
@@ -18,18 +17,29 @@ export interface Vendor {
   name: string;
 }
 
+export interface VendorProduct {
+  id: string;
+  base_item_id: string; // FK to base_items
+  vendor_id: string; // FK to vendors
+  product_name?: string | null; // NULL可能
+  brand_name?: string | null;
+  purchase_unit: string;
+  purchase_quantity: number;
+  purchase_cost: number;
+}
+
 export interface Item {
   id: string;
   name: string;
   item_kind: "raw" | "prepped";
   is_menu_item: boolean;
-  raw_item_id?: string | null; // FK to raw_items
-  vendor_id?: string | null; // FK to vendors
-  purchase_unit?: string | null;
-  purchase_quantity?: number | null;
-  purchase_cost?: number | null;
-  yield_amount?: number | null;
-  yield_unit?: string | null;
+  // Raw item fields
+  base_item_id?: string | null; // FK to base_items
+  // Prepped item fields
+  proceed_yield_amount?: number | null;
+  proceed_yield_unit?: string | null;
+  // Common fields
+  each_grams?: number | null; // grams for 'each' unit (used for both raw and prepped items)
   notes?: string | null;
 }
 
@@ -139,22 +149,22 @@ export const costAPI = {
   },
 };
 
-// Raw Items API
-export const rawItemsAPI = {
-  getAll: () => fetchAPI<RawItem[]>("/raw-items"),
-  getById: (id: string) => fetchAPI<RawItem>(`/raw-items/${id}`),
-  create: (rawItem: Partial<RawItem>) =>
-    fetchAPI<RawItem>("/raw-items", {
+// Base Items API
+export const baseItemsAPI = {
+  getAll: () => fetchAPI<BaseItem[]>("/base-items"),
+  getById: (id: string) => fetchAPI<BaseItem>(`/base-items/${id}`),
+  create: (baseItem: Partial<BaseItem>) =>
+    fetchAPI<BaseItem>("/base-items", {
       method: "POST",
-      body: JSON.stringify(rawItem),
+      body: JSON.stringify(baseItem),
     }),
-  update: (id: string, rawItem: Partial<RawItem>) =>
-    fetchAPI<RawItem>(`/raw-items/${id}`, {
+  update: (id: string, baseItem: Partial<BaseItem>) =>
+    fetchAPI<BaseItem>(`/base-items/${id}`, {
       method: "PUT",
-      body: JSON.stringify(rawItem),
+      body: JSON.stringify(baseItem),
     }),
   delete: (id: string) =>
-    fetchAPI<void>(`/raw-items/${id}`, {
+    fetchAPI<void>(`/base-items/${id}`, {
       method: "DELETE",
     }),
 };
@@ -175,6 +185,26 @@ export const vendorsAPI = {
     }),
   delete: (id: string) =>
     fetchAPI<void>(`/vendors/${id}`, {
+      method: "DELETE",
+    }),
+};
+
+// Vendor Products API
+export const vendorProductsAPI = {
+  getAll: () => fetchAPI<VendorProduct[]>("/vendor-products"),
+  getById: (id: string) => fetchAPI<VendorProduct>(`/vendor-products/${id}`),
+  create: (vendorProduct: Partial<VendorProduct>) =>
+    fetchAPI<VendorProduct>("/vendor-products", {
+      method: "POST",
+      body: JSON.stringify(vendorProduct),
+    }),
+  update: (id: string, vendorProduct: Partial<VendorProduct>) =>
+    fetchAPI<VendorProduct>(`/vendor-products/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(vendorProduct),
+    }),
+  delete: (id: string) =>
+    fetchAPI<void>(`/vendor-products/${id}`, {
       method: "DELETE",
     }),
 };

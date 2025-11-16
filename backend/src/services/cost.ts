@@ -1,5 +1,11 @@
 import { supabase } from "../config/supabase";
-import { Item, RecipeLine, RawItem, LaborRole } from "../types/database";
+import {
+  Item,
+  RecipeLine,
+  BaseItem,
+  LaborRole,
+  VendorProduct,
+} from "../types/database";
 import { convertToGrams } from "./units";
 import {
   MASS_UNIT_CONVERSIONS,
@@ -18,75 +24,87 @@ const costCache = new Map<string, number>();
 /**
  * Raw Itemのコストを計算
  */
-function computeRawCost(item: Item, rawItemsMap: Map<string, RawItem>): number {
-  if (!item.purchase_unit || !item.purchase_quantity || !item.purchase_cost) {
-    throw new Error(`Raw item ${item.id} is missing purchase information`);
-  }
-
-  if (!item.raw_item_id) {
-    throw new Error(`Raw item ${item.id} is missing raw_item_id`);
+function computeRawCost(
+  item: Item,
+  vendorProduct: VendorProduct,
+  baseItemsMap: Map<string, BaseItem>
+): number {
+  if (
+    !vendorProduct.purchase_unit ||
+    !vendorProduct.purchase_quantity ||
+    !vendorProduct.purchase_cost
+  ) {
+    throw new Error(
+      `Raw item ${item.id} is missing purchase information in vendor_product`
+    );
   }
 
   // 質量単位の場合
-  const multiplier = MASS_UNIT_CONVERSIONS[item.purchase_unit];
+  const multiplier = MASS_UNIT_CONVERSIONS[vendorProduct.purchase_unit];
   if (multiplier) {
-    const grams = item.purchase_quantity * multiplier;
-    return item.purchase_cost / grams;
+    const grams = vendorProduct.purchase_quantity * multiplier;
+    return vendorProduct.purchase_cost / grams;
   }
 
-  // 非質量単位の場合、raw_itemsから取得
-  const rawItem = rawItemsMap.get(item.raw_item_id);
-  if (!rawItem) {
+  // 非質量単位の場合、base_itemsから取得
+  if (!item.base_item_id) {
+    throw new Error(`Raw item ${item.id} has no base_item_id`);
+  }
+
+  const baseItem = baseItemsMap.get(item.base_item_id);
+  if (!baseItem) {
     throw new Error(
-      `Raw item ${item.id} references non-existent raw_item_id: ${item.raw_item_id}`
+      `Raw item ${item.id} references non-existent base_item_id: ${item.base_item_id}`
     );
   }
 
   let grams: number;
 
-  if (item.purchase_unit === "each") {
-    // eachの場合
-    if (!rawItem.each_grams) {
+  if (vendorProduct.purchase_unit === "each") {
+    // eachの場合、items.each_gramsを使用
+    if (!item.each_grams) {
       throw new Error(
-        `Raw item ${item.id} uses 'each' unit but raw_item ${item.raw_item_id} has no each_grams`
+        `Raw item ${item.id} uses 'each' unit but has no each_grams`
       );
     }
-    grams = item.purchase_quantity * rawItem.each_grams;
-  } else if (isNonMassUnit(item.purchase_unit)) {
+    grams = vendorProduct.purchase_quantity * item.each_grams;
+  } else if (isNonMassUnit(vendorProduct.purchase_unit)) {
     // その他の非質量単位（gallon, liter, floz）
-    if (!rawItem.specific_weight) {
+    if (!baseItem.specific_weight) {
       throw new Error(
-        `Raw item ${item.id} uses non-mass unit ${item.purchase_unit} but raw_item ${item.raw_item_id} has no specific_weight`
+        `Raw item ${item.id} uses non-mass unit ${vendorProduct.purchase_unit} but base_item ${item.base_item_id} has no specific_weight`
       );
     }
     // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
-    const litersPerUnit = VOLUME_UNIT_TO_LITERS[item.purchase_unit];
+    const litersPerUnit = VOLUME_UNIT_TO_LITERS[vendorProduct.purchase_unit];
     if (!litersPerUnit) {
-      throw new Error(`Invalid non-mass unit: ${item.purchase_unit}`);
+      throw new Error(`Invalid non-mass unit: ${vendorProduct.purchase_unit}`);
     }
-    const gramsPerSourceUnit = rawItem.specific_weight * 1000 * litersPerUnit;
-    grams = item.purchase_quantity * gramsPerSourceUnit;
+    const gramsPerSourceUnit = baseItem.specific_weight * 1000 * litersPerUnit;
+    grams = vendorProduct.purchase_quantity * gramsPerSourceUnit;
   } else {
-    throw new Error(`Invalid unit: ${item.purchase_unit}`);
+    throw new Error(`Invalid unit: ${vendorProduct.purchase_unit}`);
   }
 
-  return item.purchase_cost / grams;
+  return vendorProduct.purchase_cost / grams;
 }
 
 /**
  * 再帰的なコスト計算
  * @param itemId - アイテムID
  * @param visited - 訪問済みアイテムのセット（循環検出用）
- * @param rawItemsMap - Raw Itemsのマップ（raw_item_idをキーとして）
+ * @param baseItemsMap - Base Itemsのマップ（base_item_idをキーとして）
  * @param itemsMap - Itemsのマップ（item_idをキーとして）
+ * @param vendorProductsMap - Vendor Productsのマップ（vendor_product_idをキーとして）
  * @param laborRoles - 役職のマップ
  * @returns 1グラムあたりのコスト
  */
 export async function getCost(
   itemId: string,
   visited: Set<string> = new Set(),
-  rawItemsMap: Map<string, RawItem> = new Map(),
+  baseItemsMap: Map<string, BaseItem> = new Map(),
   itemsMap: Map<string, Item> = new Map(),
+  vendorProductsMap: Map<string, VendorProduct> = new Map(),
   laborRoles: Map<string, LaborRole> = new Map()
 ): Promise<number> {
   // 1. キャッシュチェック
@@ -119,39 +137,102 @@ export async function getCost(
 
     // Raw Itemの場合
     if (item.item_kind === "raw") {
-      const costPerGram = computeRawCost(item, rawItemsMap);
+      if (!item.base_item_id) {
+        throw new Error(`Raw item ${itemId} has no base_item_id`);
+      }
+
+      // base_item_idでvendor_productを検索
+      let vendorProduct: VendorProduct | undefined;
+      for (const vp of vendorProductsMap.values()) {
+        if (vp.base_item_id === item.base_item_id) {
+          vendorProduct = vp;
+          break;
+        }
+      }
+
+      if (!vendorProduct) {
+        throw new Error(
+          `Vendor product not found for base_item ${item.base_item_id}`
+        );
+      }
+
+      const costPerGram = computeRawCost(item, vendorProduct, baseItemsMap);
       costCache.set(itemId, costPerGram);
       return costPerGram;
     }
 
     // Prepped Itemの場合
-    if (!item.yield_amount || !item.yield_unit) {
+    if (!item.proceed_yield_amount || !item.proceed_yield_unit) {
       throw new Error(`Prepped item ${itemId} has no yield defined`);
     }
 
     // Yieldをグラムに変換
     // Yieldの単位は"g"または"each"のみ許可
-    if (item.yield_unit !== "g" && item.yield_unit !== "each") {
+    if (item.proceed_yield_unit !== "g" && item.proceed_yield_unit !== "each") {
       throw new Error(
-        `Prepped item ${itemId} has invalid yield unit: ${item.yield_unit}. Only "g" and "each" are allowed.`
+        `Prepped item ${itemId} has invalid yield unit: ${item.proceed_yield_unit}. Only "g" and "each" are allowed.`
       );
     }
 
     let yieldGrams: number;
-    if (item.yield_unit === "each") {
-      // Yieldが"each"の場合、グラムに変換できない
-      // この場合、コスト計算は1 eachあたりのコストを計算する
-      // yieldGramsとしてYieldの数量をそのまま使用
-      yieldGrams = item.yield_amount;
-    } else {
-      // Yieldが"g"の場合
-      const yieldMultiplier = MASS_UNIT_CONVERSIONS[item.yield_unit];
-      if (!yieldMultiplier) {
+    if (item.proceed_yield_unit === "each") {
+      // Yieldが"each"の場合、材料の総合計（グラム）を使用
+      // まず材料の総合計を計算
+      const { data: recipeLines } = await supabase
+        .from("recipe_lines")
+        .select("*")
+        .eq("parent_item_id", itemId)
+        .eq("line_type", "ingredient");
+
+      if (!recipeLines || recipeLines.length === 0) {
         throw new Error(
-          `Prepped item ${itemId} has invalid yield unit: ${item.yield_unit}`
+          `Prepped item ${itemId} with 'each' yield must have at least one ingredient line`
         );
       }
-      yieldGrams = item.yield_amount * yieldMultiplier;
+
+      let totalIngredientsGrams = 0;
+      for (const line of recipeLines) {
+        if (!line.child_item_id || !line.quantity || !line.unit) {
+          continue;
+        }
+
+        const grams = convertToGrams(
+          line.unit,
+          line.quantity,
+          line.child_item_id,
+          itemsMap,
+          rawItemsMap,
+          vendorProductsMap
+        );
+        totalIngredientsGrams += grams;
+      }
+
+      if (totalIngredientsGrams === 0) {
+        throw new Error(
+          `Prepped item ${itemId} with 'each' yield has zero total ingredients`
+        );
+      }
+
+      // 材料の総合計をeach_gramsに保存（まだ保存されていない場合）
+      if (!item.each_grams) {
+        await supabase
+          .from("items")
+          .update({ each_grams: totalIngredientsGrams })
+          .eq("id", itemId);
+        // itemsMapも更新
+        itemsMap.set(itemId, { ...item, each_grams: totalIngredientsGrams });
+      }
+
+      yieldGrams = totalIngredientsGrams;
+    } else {
+      // Yieldが"g"の場合
+      const yieldMultiplier = MASS_UNIT_CONVERSIONS[item.proceed_yield_unit];
+      if (!yieldMultiplier) {
+        throw new Error(
+          `Prepped item ${itemId} has invalid yield unit: ${item.proceed_yield_unit}`
+        );
+      }
+      yieldGrams = item.proceed_yield_amount * yieldMultiplier;
     }
 
     if (yieldGrams === 0) {
@@ -194,15 +275,17 @@ export async function getCost(
           line.quantity,
           line.child_item_id,
           itemsMap,
-          rawItemsMap
+          baseItemsMap,
+          vendorProductsMap
         );
 
         // 子アイテムのコストを再帰的に取得
         const childCostPerGram = await getCost(
           line.child_item_id,
           visited,
-          rawItemsMap,
+          baseItemsMap,
           itemsMap,
+          vendorProductsMap,
           laborRoles
         );
 
@@ -243,19 +326,19 @@ export function clearCostCache(): void {
 }
 
 /**
- * Raw Itemsを取得してマップに変換（raw_item_idをキーとして）
+ * Base Itemsを取得してマップに変換（base_item_idをキーとして）
  */
-export async function getRawItemsMap(): Promise<Map<string, RawItem>> {
-  const { data, error } = await supabase.from("raw_items").select("*");
+export async function getBaseItemsMap(): Promise<Map<string, BaseItem>> {
+  const { data, error } = await supabase.from("base_items").select("*");
 
   if (error) {
-    throw new Error(`Failed to fetch raw items: ${error.message}`);
+    throw new Error(`Failed to fetch base items: ${error.message}`);
   }
 
-  const map = new Map<string, RawItem>();
+  const map = new Map<string, BaseItem>();
   if (data) {
-    for (const rawItem of data) {
-      map.set(rawItem.id, rawItem);
+    for (const baseItem of data) {
+      map.set(baseItem.id, baseItem);
     }
   }
   return map;
@@ -300,11 +383,40 @@ export async function getLaborRolesMap(): Promise<Map<string, LaborRole>> {
 }
 
 /**
+ * Vendor Productsを取得してマップに変換（vendor_product_idをキーとして）
+ */
+export async function getVendorProductsMap(): Promise<
+  Map<string, VendorProduct>
+> {
+  const { data, error } = await supabase.from("vendor_products").select("*");
+
+  if (error) {
+    throw new Error(`Failed to fetch vendor products: ${error.message}`);
+  }
+
+  const map = new Map<string, VendorProduct>();
+  if (data) {
+    for (const vendorProduct of data) {
+      map.set(vendorProduct.id, vendorProduct);
+    }
+  }
+  return map;
+}
+
+/**
  * コスト計算のエントリーポイント（ヘルパーデータを自動取得）
  */
 export async function calculateCost(itemId: string): Promise<number> {
-  const rawItemsMap = await getRawItemsMap();
+  const baseItemsMap = await getBaseItemsMap();
   const itemsMap = await getItemsMap();
+  const vendorProductsMap = await getVendorProductsMap();
   const laborRoles = await getLaborRolesMap();
-  return getCost(itemId, new Set(), rawItemsMap, itemsMap, laborRoles);
+  return getCost(
+    itemId,
+    new Set(),
+    baseItemsMap,
+    itemsMap,
+    vendorProductsMap,
+    laborRoles
+  );
 }

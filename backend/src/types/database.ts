@@ -1,10 +1,9 @@
 // Database types based on the schema
 
-export interface RawItem {
+export interface BaseItem {
   id: string;
   name: string;
   specific_weight?: number | null; // g/ml for non-mass units (gallon, liter, floz)
-  each_grams?: number | null; // grams for 'each' unit
   created_at?: string;
   updated_at?: string;
 }
@@ -16,20 +15,31 @@ export interface Vendor {
   updated_at?: string;
 }
 
+export interface VendorProduct {
+  id: string;
+  base_item_id: string; // FK to base_items
+  vendor_id: string; // FK to vendors
+  product_name?: string | null; // NULL可能
+  brand_name?: string | null;
+  purchase_unit: string;
+  purchase_quantity: number;
+  purchase_cost: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Item {
   id: string;
   name: string;
   item_kind: "raw" | "prepped";
   is_menu_item: boolean;
   // Raw item fields
-  raw_item_id?: string | null; // FK to raw_items
-  vendor_id?: string | null; // FK to vendors
-  purchase_unit?: string | null;
-  purchase_quantity?: number | null;
-  purchase_cost?: number | null;
+  base_item_id?: string | null; // FK to base_items
   // Prepped item fields
-  yield_amount?: number | null;
-  yield_unit?: string | null;
+  proceed_yield_amount?: number | null;
+  proceed_yield_unit?: string | null;
+  // Common fields
+  each_grams?: number | null; // grams for 'each' unit (used for both raw and prepped items)
   notes?: string | null;
   created_at?: string;
   updated_at?: string;

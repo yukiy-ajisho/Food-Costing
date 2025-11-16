@@ -1,38 +1,38 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
-import { BaseItem } from "../types/database";
+import { VendorProduct, Item } from "../types/database";
 
 const router = Router();
 
 /**
- * GET /base-items
- * 全Base Itemsを取得
+ * GET /vendor-products
+ * 全vendor productsを取得
  */
 router.get("/", async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from("base_items")
+      .from("vendor_products")
       .select("*")
-      .order("name", { ascending: true });
+      .order("product_name");
 
     if (error) {
       return res.status(500).json({ error: error.message });
     }
 
-    res.json(data || []);
+    res.json(data);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
 /**
- * GET /base-items/:id
- * Base ItemをIDで取得
+ * GET /vendor-products/:id
+ * vendor product詳細を取得
  */
 router.get("/:id", async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from("base_items")
+      .from("vendor_products")
       .select("*")
       .eq("id", req.params.id)
       .single();
@@ -48,46 +48,57 @@ router.get("/:id", async (req, res) => {
 });
 
 /**
- * POST /base-items
- * Base Itemを作成
+ * POST /vendor-products
+ * vendor productを作成
+ * 注意: itemsレコードはBase ItemsタブでBase Itemを作成したときに既に作成されている
  */
 router.post("/", async (req, res) => {
   try {
-    const baseItem: Partial<BaseItem> = req.body;
+    const vendorProduct: Partial<VendorProduct> = req.body;
 
     // バリデーション
-    if (!baseItem.name) {
-      return res.status(400).json({ error: "name is required" });
+    if (
+      !vendorProduct.base_item_id ||
+      !vendorProduct.vendor_id ||
+      !vendorProduct.purchase_unit ||
+      !vendorProduct.purchase_quantity ||
+      !vendorProduct.purchase_cost
+    ) {
+      return res.status(400).json({
+        error:
+          "base_item_id, vendor_id, purchase_unit, purchase_quantity, and purchase_cost are required",
+      });
     }
 
-    const { data, error } = await supabase
-      .from("base_items")
-      .insert([baseItem])
+    // vendor_productsを作成
+    const { data: newVendorProduct, error: vpError } = await supabase
+      .from("vendor_products")
+      .insert([vendorProduct])
       .select()
       .single();
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    if (vpError) {
+      return res.status(400).json({ error: vpError.message });
     }
 
-    res.status(201).json(data);
+    res.status(201).json(newVendorProduct);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
 /**
- * PUT /base-items/:id
- * Base Itemを更新
+ * PUT /vendor-products/:id
+ * vendor productを更新
  */
 router.put("/:id", async (req, res) => {
   try {
-    const baseItem: Partial<BaseItem> = req.body;
+    const vendorProduct: Partial<VendorProduct> = req.body;
     const { id } = req.params;
 
     const { data, error } = await supabase
-      .from("base_items")
-      .update(baseItem)
+      .from("vendor_products")
+      .update(vendorProduct)
       .eq("id", id)
       .select()
       .single();
@@ -103,13 +114,13 @@ router.put("/:id", async (req, res) => {
 });
 
 /**
- * DELETE /base-items/:id
- * Base Itemを削除
+ * DELETE /vendor-products/:id
+ * vendor productを削除（CASCADEでitemsも削除される）
  */
 router.delete("/:id", async (req, res) => {
   try {
     const { error } = await supabase
-      .from("base_items")
+      .from("vendor_products")
       .delete()
       .eq("id", req.params.id);
 

@@ -17,11 +17,13 @@ import {
   recipeLinesAPI,
   laborRolesAPI,
   costAPI,
-  rawItemsAPI,
+  baseItemsAPI,
+  vendorProductsAPI,
   type Item,
   type RecipeLine as APIRecipeLine,
   type LaborRole,
-  type RawItem,
+  type BaseItem,
+  type VendorProduct,
 } from "@/lib/api";
 import {
   MASS_UNIT_CONVERSIONS,
@@ -50,8 +52,8 @@ interface PreppedItem {
   name: string;
   item_kind: "prepped";
   is_menu_item: boolean;
-  yield_amount: number;
-  yield_unit: string;
+  proceed_yield_amount: number;
+  proceed_yield_unit: string;
   recipe_lines: RecipeLine[];
   notes: string;
   isExpanded?: boolean;
@@ -69,7 +71,8 @@ const yieldUnitOptions = ["g", "each"];
 export default function CostPage() {
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
-  const [rawItems, setRawItems] = useState<RawItem[]>([]);
+  const [baseItems, setBaseItems] = useState<BaseItem[]>([]);
+  const [vendorProducts, setVendorProducts] = useState<VendorProduct[]>([]);
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);
   const [originalItems, setOriginalItems] = useState<PreppedItem[]>([]);
@@ -92,9 +95,12 @@ export default function CostPage() {
         // 全アイテムを取得（ingredient選択用）
         const allItems = await itemsAPI.getAll();
         setAvailableItems(allItems);
-        // Raw Itemsを取得（バリデーション用）
-        const rawItemsData = await rawItemsAPI.getAll();
-        setRawItems(rawItemsData);
+        // Base Itemsを取得（バリデーション用）
+        const baseItemsData = await baseItemsAPI.getAll();
+        setBaseItems(baseItemsData);
+        // Vendor Productsを取得（バリデーション用）
+        const vendorProductsData = await vendorProductsAPI.getAll();
+        setVendorProducts(vendorProductsData);
         // Labor Rolesを取得
         const roles = await laborRolesAPI.getAll();
         setLaborRoles(roles);
@@ -120,8 +126,8 @@ export default function CostPage() {
               name: item.name,
               item_kind: "prepped",
               is_menu_item: item.is_menu_item,
-              yield_amount: item.yield_amount || 0,
-              yield_unit: item.yield_unit || "g",
+              proceed_yield_amount: item.proceed_yield_amount || 0,
+              proceed_yield_unit: item.proceed_yield_unit || "g",
               recipe_lines: recipeLines.map((line) => ({
                 id: line.id,
                 line_type: line.line_type,
@@ -181,22 +187,16 @@ export default function CostPage() {
 
     // Itemを取得
     const item = availableItems.find((i) => i.id === itemId);
-    if (!item || !item.raw_item_id) {
-      return 0; // エラーではなく0を返す（バリデーションで処理）
-    }
-
-    // Raw Itemを取得
-    const rawItem = rawItems.find((r) => r.id === item.raw_item_id);
-    if (!rawItem) {
+    if (!item) {
       return 0; // エラーではなく0を返す（バリデーションで処理）
     }
 
     if (unit === "each") {
-      // eachの場合
-      if (!rawItem.each_grams) {
+      // eachの場合、items.each_gramsを使用
+      if (!item.each_grams) {
         return 0; // エラーではなく0を返す（バリデーションで処理）
       }
-      return quantity * rawItem.each_grams;
+      return quantity * item.each_grams;
     }
 
     // その他の非質量単位（gallon, liter, floz）
@@ -204,17 +204,29 @@ export default function CostPage() {
       return 0; // エラーではなく0を返す（バリデーションで処理）
     }
 
-    if (!rawItem.specific_weight) {
-      return 0; // エラーではなく0を返す（バリデーションで処理）
+    // Raw Itemの場合、base_item → specific_weight
+    if (item.item_kind === "raw") {
+      if (!item.base_item_id) {
+        return 0; // エラーではなく0を返す（バリデーションで処理）
+      }
+
+      const baseItem = baseItems.find((b) => b.id === item.base_item_id);
+      if (!baseItem || !baseItem.specific_weight) {
+        return 0; // エラーではなく0を返す（バリデーションで処理）
+      }
+
+      // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
+      const litersPerUnit = VOLUME_UNIT_TO_LITERS[unit];
+      if (!litersPerUnit) {
+        return 0; // エラーではなく0を返す（バリデーションで処理）
+      }
+      const gramsPerSourceUnit =
+        baseItem.specific_weight * 1000 * litersPerUnit;
+      return quantity * gramsPerSourceUnit;
     }
 
-    // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
-    const litersPerUnit = VOLUME_UNIT_TO_LITERS[unit];
-    if (!litersPerUnit) {
-      return 0; // エラーではなく0を返す（バリデーションで処理）
-    }
-    const gramsPerSourceUnit = rawItem.specific_weight * 1000 * litersPerUnit;
-    return quantity * gramsPerSourceUnit;
+    // Prepped Itemの場合、非質量単位は使用できない
+    return 0; // エラーではなく0を返す（バリデーションで処理）
   };
 
   // Yieldをグラムに変換
@@ -265,7 +277,7 @@ export default function CostPage() {
       // 削除予定のアイテムと空の新規レコードをフィルター
       const filteredItems = items.filter((item) => {
         if (item.isMarkedForDeletion) return false;
-        if (item.name.trim() === "" && item.yield_amount === 0) {
+        if (item.name.trim() === "" && item.proceed_yield_amount === 0) {
           return false;
         }
         return true;
@@ -274,7 +286,7 @@ export default function CostPage() {
       // バリデーション: Yieldが材料の総合計を超えないかチェック
       for (const item of filteredItems) {
         // Yieldが"each"の場合はバリデーションをスキップ（グラムに変換できないため）
-        if (item.yield_unit === "each") {
+        if (item.proceed_yield_unit === "each") {
           continue;
         }
 
@@ -282,8 +294,8 @@ export default function CostPage() {
           item.recipe_lines
         );
         const yieldGrams = convertYieldToGrams(
-          item.yield_amount,
-          item.yield_unit
+          item.proceed_yield_amount,
+          item.proceed_yield_unit
         );
 
         if (yieldGrams < 0) {
@@ -295,8 +307,8 @@ export default function CostPage() {
 
         if (yieldGrams > totalIngredientsGrams) {
           alert(
-            `"${item.name}"のYield（${item.yield_amount} ${
-              item.yield_unit
+            `"${item.name}"のYield（${item.proceed_yield_amount} ${
+              item.proceed_yield_unit
             } = ${yieldGrams.toFixed(
               2
             )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
@@ -316,8 +328,8 @@ export default function CostPage() {
             name: item.name,
             item_kind: "prepped",
             is_menu_item: item.is_menu_item,
-            yield_amount: item.yield_amount,
-            yield_unit: item.yield_unit,
+            proceed_yield_amount: item.proceed_yield_amount,
+            proceed_yield_unit: item.proceed_yield_unit,
             notes: item.notes || null,
           });
 
@@ -348,8 +360,8 @@ export default function CostPage() {
           await itemsAPI.update(item.id, {
             name: item.name,
             is_menu_item: item.is_menu_item,
-            yield_amount: item.yield_amount,
-            yield_unit: item.yield_unit,
+            proceed_yield_amount: item.proceed_yield_amount,
+            proceed_yield_unit: item.proceed_yield_unit,
             notes: item.notes || null,
           });
 
@@ -423,8 +435,8 @@ export default function CostPage() {
             name: item.name,
             item_kind: "prepped",
             is_menu_item: item.is_menu_item,
-            yield_amount: item.yield_amount || 0,
-            yield_unit: item.yield_unit || "g",
+            proceed_yield_amount: item.proceed_yield_amount || 0,
+            proceed_yield_unit: item.proceed_yield_unit || "g",
             recipe_lines: recipeLines.map((line) => ({
               id: line.id,
               line_type: line.line_type,
@@ -497,7 +509,7 @@ export default function CostPage() {
     // Prepped Itemの場合
     if (selectedItem.item_kind === "prepped") {
       // Yieldが"each"の場合
-      if (selectedItem.yield_unit === "each") {
+      if (selectedItem.proceed_yield_unit === "each") {
         return ["each"]; // "each"のみ選択可能
       }
       // Yieldが"g"の場合
@@ -506,7 +518,27 @@ export default function CostPage() {
 
     // Raw Itemの場合
     if (selectedItem.item_kind === "raw") {
-      const purchaseUnit = selectedItem.purchase_unit;
+      if (!selectedItem.base_item_id) {
+        return Object.keys(MASS_UNIT_CONVERSIONS); // デフォルトは質量単位のみ
+      }
+
+      // base_itemを取得
+      const baseItem = baseItems.find(
+        (b) => b.id === selectedItem.base_item_id
+      );
+      if (!baseItem) {
+        return Object.keys(MASS_UNIT_CONVERSIONS); // デフォルトは質量単位のみ
+      }
+
+      // vendor_productを取得（purchase_unitを取得するため）
+      const vendorProduct = vendorProducts.find(
+        (vp) => vp.base_item_id === selectedItem.base_item_id
+      );
+      if (!vendorProduct) {
+        return Object.keys(MASS_UNIT_CONVERSIONS); // デフォルトは質量単位のみ
+      }
+
+      const purchaseUnit = vendorProduct.purchase_unit;
 
       // 非質量単位（gallon, liter, floz）で登録されている場合
       if (
@@ -596,8 +628,8 @@ export default function CostPage() {
       name: "",
       item_kind: "prepped",
       is_menu_item: false,
-      yield_amount: 0,
-      yield_unit: "g",
+      proceed_yield_amount: 0,
+      proceed_yield_unit: "g",
       recipe_lines: [],
       notes: "",
       isExpanded: true,
@@ -694,10 +726,10 @@ export default function CostPage() {
     }
 
     // フィルター（Yield範囲）
-    if (yieldMin !== "" && item.yield_amount < yieldMin) {
+    if (yieldMin !== "" && item.proceed_yield_amount < yieldMin) {
       return false;
     }
-    if (yieldMax !== "" && item.yield_amount > yieldMax) {
+    if (yieldMax !== "" && item.proceed_yield_amount > yieldMax) {
       return false;
     }
 
@@ -723,7 +755,7 @@ export default function CostPage() {
   if (loading) {
     return (
       <div className="p-8">
-        <div className="max-w-7xl mx-auto text-center">読み込み中...</div>
+        <div className="max-w-7xl mx-auto text-center">Loading...</div>
       </div>
     );
   }
@@ -1003,7 +1035,9 @@ export default function CostPage() {
                           <input
                             type="number"
                             value={
-                              item.yield_amount === 0 ? "" : item.yield_amount
+                              item.proceed_yield_amount === 0
+                                ? ""
+                                : item.proceed_yield_amount
                             }
                             onChange={(e) => {
                               const value = e.target.value;
@@ -1012,7 +1046,7 @@ export default function CostPage() {
                                 value === "" ? 0 : parseFloat(value) || 0;
                               handleItemChange(
                                 item.id,
-                                "yield_amount",
+                                "proceed_yield_amount",
                                 numValue
                               );
                             }}
@@ -1022,11 +1056,11 @@ export default function CostPage() {
                             step="0.01"
                           />
                           <select
-                            value={item.yield_unit}
+                            value={item.proceed_yield_unit}
                             onChange={(e) =>
                               handleItemChange(
                                 item.id,
-                                "yield_unit",
+                                "proceed_yield_unit",
                                 e.target.value
                               )
                             }
@@ -1041,7 +1075,7 @@ export default function CostPage() {
                         </div>
                       ) : (
                         <div className="text-sm text-gray-900">
-                          {item.yield_amount} {item.yield_unit}
+                          {item.proceed_yield_amount} {item.proceed_yield_unit}
                         </div>
                       )}
                     </td>

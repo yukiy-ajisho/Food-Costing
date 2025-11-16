@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
-import { Item, RecipeLine, RawItem } from "../types/database";
+import { Item, RecipeLine, BaseItem, VendorProduct } from "../types/database";
 import { convertToGrams } from "../services/units";
 import { MASS_UNIT_CONVERSIONS } from "../constants/units";
 
@@ -98,7 +98,10 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
 
     // Prepped Itemの場合、Yieldバリデーション
-    if (item.item_kind === "prepped" || item.yield_amount !== undefined) {
+    if (
+      item.item_kind === "prepped" ||
+      item.proceed_yield_amount !== undefined
+    ) {
       // 既存のアイテムを取得（item_kindを確認するため）
       const { data: existingItem } = await supabase
         .from("items")
@@ -108,9 +111,12 @@ router.put("/:id", async (req, res) => {
 
       if (existingItem && existingItem.item_kind === "prepped") {
         // Yieldが更新される場合のみバリデーション
-        if (item.yield_amount !== undefined && item.yield_unit !== undefined) {
+        if (
+          item.proceed_yield_amount !== undefined &&
+          item.proceed_yield_unit !== undefined
+        ) {
           // Yieldが"each"の場合はバリデーションをスキップ
-          if (item.yield_unit !== "each") {
+          if (item.proceed_yield_unit !== "each") {
             // レシピラインを取得
             const { data: recipeLines } = await supabase
               .from("recipe_lines")
@@ -119,9 +125,9 @@ router.put("/:id", async (req, res) => {
               .eq("line_type", "ingredient");
 
             if (recipeLines && recipeLines.length > 0) {
-              // Raw Itemsを取得
-              const { data: rawItems } = await supabase
-                .from("raw_items")
+              // Base Itemsを取得
+              const { data: baseItems } = await supabase
+                .from("base_items")
                 .select("*");
 
               // Itemsを取得
@@ -129,12 +135,20 @@ router.put("/:id", async (req, res) => {
                 .from("items")
                 .select("*");
 
+              // Vendor Productsを取得
+              const { data: vendorProducts } = await supabase
+                .from("vendor_products")
+                .select("*");
+
               // マップを作成
-              const rawItemsMap = new Map<string, RawItem>();
-              rawItems?.forEach((r) => rawItemsMap.set(r.id, r));
+              const baseItemsMap = new Map<string, BaseItem>();
+              baseItems?.forEach((b) => baseItemsMap.set(b.id, b));
 
               const itemsMap = new Map<string, Item>();
               allItems?.forEach((i) => itemsMap.set(i.id, i));
+
+              const vendorProductsMap = new Map<string, VendorProduct>();
+              vendorProducts?.forEach((vp) => vendorProductsMap.set(vp.id, vp));
 
               // 材料の総合計を計算
               let totalIngredientsGrams = 0;
@@ -149,7 +163,8 @@ router.put("/:id", async (req, res) => {
                     line.quantity,
                     line.child_item_id,
                     itemsMap,
-                    rawItemsMap
+                    baseItemsMap,
+                    vendorProductsMap
                   );
                   totalIngredientsGrams += grams;
                 } catch (error) {
@@ -162,15 +177,16 @@ router.put("/:id", async (req, res) => {
               }
 
               // Yieldをグラムに変換
-              const yieldMultiplier = MASS_UNIT_CONVERSIONS[item.yield_unit];
+              const yieldMultiplier =
+                MASS_UNIT_CONVERSIONS[item.proceed_yield_unit];
               if (yieldMultiplier) {
-                const yieldGrams = item.yield_amount * yieldMultiplier;
+                const yieldGrams = item.proceed_yield_amount * yieldMultiplier;
 
                 // バリデーション: Yieldが材料の総合計を超えないかチェック
                 if (yieldGrams > totalIngredientsGrams) {
                   return res.status(400).json({
-                    error: `Yield (${item.yield_amount} ${
-                      item.yield_unit
+                    error: `Yield (${item.proceed_yield_amount} ${
+                      item.proceed_yield_unit
                     } = ${yieldGrams.toFixed(
                       2
                     )}g) exceeds total ingredients (${totalIngredientsGrams.toFixed(
