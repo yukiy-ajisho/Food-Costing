@@ -1320,16 +1320,496 @@ Seasoned Flourの材料を変更:
 6. 各階層でのコスト計算が正確であること
 
 ========================================
+【テストケース15: 循環参照チェック - 単純な循環参照（A → B → A）】
+========================================
+
+目的: 循環参照チェック機能をテスト（保存前にエラーが発生することを確認）
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**ステップ1: Item Aを作成（正常）**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 1000
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+
+**ステップ2: Item Bを作成（正常）**
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用
+
+**ステップ3: Item AにItem Bを追加（循環参照エラー）**
+3. Item Aを編集
+   Name: Item A
+   Proceed Yield Amount: 1000
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Item B (200g) ← Item Bを材料として追加（循環参照！）
+
+=== 5. 期待される結果 ===
+
+**ステップ1と2: 正常に保存される**
+- Item AとItem Bは正常に保存される
+
+**ステップ3: エラーが発生する**
+- Item AにItem Bを追加しようとすると、保存前に循環参照エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item A' creates a circular dependency. Path: Item A → Item B → Item A"
+- 保存がキャンセルされ、データベースには保存されない
+
+=== 6. 確認ポイント ===
+1. 循環参照が検出されること
+2. エラーメッセージに循環参照のパスが表示されること
+3. データベースに保存されないこと
+4. 既存のItem AとItem Bのデータが変更されないこと
+
+========================================
+【テストケース16: 循環参照チェック - 複雑な循環参照（A → B → C → A）】
+========================================
+
+目的: 3つ以上のアイテムを含む循環参照をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Butter
+   Name: Butter
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+3. Butter from Supplier A
+   Base Item: Butter
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 2
+   Purchase Cost: 40.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**ステップ1: Item Aを作成（正常）**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 1000
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+
+**ステップ2: Item Bを作成（正常）**
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用
+
+**ステップ3: Item Cを作成（正常）**
+3. Item C
+   Name: Item C
+   Proceed Yield Amount: 800
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Butter (400g)
+     - Ingredient: Item B (400g) ← Item Bを材料として使用
+
+**ステップ4: Item AにItem Cを追加（循環参照エラー）**
+4. Item Aを編集
+   Name: Item A
+   Proceed Yield Amount: 1000
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Item C (200g) ← Item Cを材料として追加（循環参照！）
+       （Item C → Item B → Item A → Item C の循環）
+
+=== 5. 期待される結果 ===
+
+**ステップ1、2、3: 正常に保存される**
+- Item A、Item B、Item Cは正常に保存される
+
+**ステップ4: エラーが発生する**
+- Item AにItem Cを追加しようとすると、保存前に循環参照エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item A' creates a circular dependency. Path: Item A → Item C → Item B → Item A"
+- 保存がキャンセルされ、データベースには保存されない
+
+=== 6. 確認ポイント ===
+1. 3つ以上のアイテムを含む循環参照が検出されること
+2. エラーメッセージに完全な循環参照のパスが表示されること
+3. データベースに保存されないこと
+4. 既存のItem A、Item B、Item Cのデータが変更されないこと
+
+========================================
+【テストケース17: 循環参照チェック - 複数アイテムの同時保存】
+========================================
+
+目的: 複数のアイテムを同時に保存する場合の循環参照チェックをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**既存のアイテム:**
+- Item X（既に存在）
+  Name: Item X
+  Proceed Yield Amount: 1000
+  Proceed Yield Unit: g
+  Recipe Lines:
+    - Ingredient: Flour (500g)
+
+**ステップ1: Item Yを作成して保存（正常）**
+1. Item Y（新規）
+   Name: Item Y
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item X (300g) ← 既存のItem Xを材料として使用
+   → 保存ボタンをクリックして保存（Item Yがデータベースに保存される）
+
+**ステップ2: Item Zを作成（正常）**
+2. Item Z（新規）
+   Name: Item Z
+   Proceed Yield Amount: 800
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Item Y (400g) ← 既に保存されたItem Yを材料として使用（選択可能）
+     - Ingredient: Item X (200g) ← 既存のItem Xを材料として使用
+
+**ステップ3: Item Xを編集（循環参照エラー）**
+3. Item Xを編集
+   Name: Item X
+   Proceed Yield Amount: 1000
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Item Z (200g) ← 新規作成のItem Zを材料として追加（循環参照！）
+       （Item X → Item Z → Item Y → Item X の循環）
+
+**ステップ4: すべてを同時に保存:**
+- Item Z（新規）、Item X（更新）を同時に保存ボタンで保存
+  （Item Yは既に保存済みのため、保存対象に含めない）
+
+=== 5. 期待される結果 ===
+
+**ステップ1: 正常に保存される**
+- Item Yは正常に保存される
+- Item Yがデータベースに保存され、他のアイテムの材料として選択可能になる
+
+**ステップ4: 保存前に循環参照エラーが発生する**
+- 保存ボタンをクリックすると、保存前に循環参照チェックが実行される
+- 循環参照が検出され、エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item X' creates a circular dependency. Path: Item X → Item Z → Item Y → Item X"
+- 保存がキャンセルされ、データベースには保存されない
+- 既存のItem Xのデータが変更されない
+- 新規のItem Zも作成されない
+- 既に保存されたItem Yのデータは変更されない
+
+=== 6. 確認ポイント ===
+1. Item Yを先に保存することで、Item ZのレシピラインでItem Yを選択できること
+2. 複数のアイテムを同時に保存する場合でも循環参照が検出されること
+3. 新規作成と更新が混在する場合でも正しくチェックされること
+4. エラーメッセージに循環参照のパスが表示されること
+5. データベースに保存されないこと（Item ZとItem Xの更新）
+6. 既存のデータが変更されないこと（Item XとItem Y）
+
+========================================
+【テストケース18: 循環参照チェック - 正常なケース（循環参照なし）】
+========================================
+
+目的: 循環参照がない正常なケースで、保存が成功することを確認
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Butter
+   Name: Butter
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+3. Butter from Supplier A
+   Base Item: Butter
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 2
+   Purchase Cost: 40.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**正常な依存関係（循環参照なし）:**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 1000
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Sugar (300g)
+
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Butter (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用（正常）
+
+3. Item C
+   Name: Item C
+   Proceed Yield Amount: 800
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Item A (400g) ← Item Aを材料として使用（正常）
+     - Ingredient: Item B (400g) ← Item Bを材料として使用（正常）
+
+**すべてを同時に保存:**
+- Item A、Item B、Item Cを同時に保存ボタンで保存
+
+=== 5. 期待される結果 ===
+
+**正常に保存される**
+- 循環参照がないため、エラーが発生しない
+- すべてのアイテムが正常に保存される
+- コスト計算が正しく実行される
+
+=== 6. 確認ポイント ===
+1. 循環参照がない場合、エラーが発生しないこと
+2. すべてのアイテムが正常に保存されること
+3. コスト計算が正しく実行されること
+4. 依存関係が正しく構築されること
+
+========================================
+【テストケース19: 循環参照チェック - レシピライン更新時のチェック】
+========================================
+
+目的: レシピラインを更新する際の循環参照チェックをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**ステップ1: Item Aを作成（正常）**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 1000
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+
+**ステップ2: Item Bを作成（正常）**
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用
+   → 保存ボタンをクリックして保存（Item Bがデータベースに保存される）
+
+**ステップ3: Item Cを作成（正常）**
+3. Item C
+   Name: Item C
+   Proceed Yield Amount: 800
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Item B (400g) ← 既に保存されたItem Bを材料として使用（選択可能）
+   → 保存ボタンをクリックして保存（Item Cがデータベースに保存される）
+
+**ステップ4: Item Bを編集してItem Cを追加（循環参照エラー）**
+4. Item Bを編集
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← 既存のレシピライン
+     - Ingredient: Item C (100g) ← 既に保存されたItem Cを材料として追加（循環参照！）
+       （Item B → Item C → Item B の循環）
+
+=== 5. 期待される結果 ===
+
+**ステップ1、2、3: 正常に保存される**
+- Item A、Item B、Item Cは正常に保存される
+- Item Cがデータベースに保存され、他のアイテムの材料として選択可能になる
+
+**ステップ4: エラーが発生する**
+- Item Bのレシピラインを更新しようとすると、保存前に循環参照エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item B' creates a circular dependency. Path: Item B → Item C → Item B"
+- 保存がキャンセルされ、データベースには保存されない
+- 既存のItem Bのデータが変更されない
+- 既に保存されたItem AとItem Cのデータは変更されない
+
+=== 6. 確認ポイント ===
+1. Item BとItem Cを先に保存することで、それぞれが材料として選択可能になること
+2. レシピラインを更新する際にも循環参照が検出されること
+3. 既存のレシピラインと新規のレシピラインの両方が考慮されること
+4. エラーメッセージに循環参照のパスが表示されること
+5. データベースに保存されないこと（Item Bの更新）
+6. 既存のデータが変更されないこと（Item A、Item B、Item C）
+
+========================================
 【注意事項】
 ========================================
 
 1. テストケースは独立して実行できるように設計されています
 2. 各テストケースの前にデータベースをクリアすることを推奨します
 3. 計算結果は浮動小数点の精度により、わずかに異なる場合があります
-4. 循環参照のテストケース（15）は、エラーが発生することが期待されます
-5. Yieldが"each"の場合、each_gramsが自動的に計算・保存されることを確認してください
-6. Base ItemsタブでBase Itemを作成すると、自動的にitemsテーブルにitem_kind='raw'のレコードが作成されます
-7. Itemsタブではvendor_productsテーブルにデータを保存します（itemsレコードは既に存在している必要があります）
-8. Costページではitemsテーブルにitem_kind='prepped'のレコードを作成し、recipe_linesテーブルにレシピを保存します
+4. 循環参照のテストケース（15、16、17、19）は、エラーが発生することが期待されます
+5. 循環参照のテストケース（18）は、正常に保存されることが期待されます
+6. Yieldが"each"の場合、each_gramsが自動的に計算・保存されることを確認してください
+7. Base ItemsタブでBase Itemを作成すると、自動的にitemsテーブルにitem_kind='raw'のレコードが作成されます
+8. Itemsタブではvendor_productsテーブルにデータを保存します（itemsレコードは既に存在している必要があります）
+9. Costページではitemsテーブルにitem_kind='prepped'のレコードを作成し、recipe_linesテーブルにレシピを保存します
+10. 循環参照チェックは、保存前に実行されます（フロントエンドとバックエンドの両方で実装）
+11. 循環参照が検出された場合、エラーメッセージに循環参照のパスが表示されます
+12. 複数のアイテムを同時に保存する場合でも、循環参照チェックが正しく機能します
 
 ========================================

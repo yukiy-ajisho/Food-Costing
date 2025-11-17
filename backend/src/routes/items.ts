@@ -3,6 +3,7 @@ import { supabase } from "../config/supabase";
 import { Item, RecipeLine, BaseItem, VendorProduct } from "../types/database";
 import { convertToGrams } from "../services/units";
 import { MASS_UNIT_CONVERSIONS } from "../constants/units";
+import { checkCycle } from "../services/cycle-detection";
 
 const router = Router();
 
@@ -97,18 +98,18 @@ router.put("/:id", async (req, res) => {
     const item: Partial<Item> = req.body;
     const { id } = req.params;
 
+    // 既存のアイテムを取得（Yieldバリデーションと循環参照チェックの両方で使用）
+    const { data: existingItem } = await supabase
+      .from("items")
+      .select("*")
+      .eq("id", id)
+      .single();
+
     // Prepped Itemの場合、Yieldバリデーション
     if (
       item.item_kind === "prepped" ||
       item.proceed_yield_amount !== undefined
     ) {
-      // 既存のアイテムを取得（item_kindを確認するため）
-      const { data: existingItem } = await supabase
-        .from("items")
-        .select("*")
-        .eq("id", id)
-        .single();
-
       if (existingItem && existingItem.item_kind === "prepped") {
         // Yieldが更新される場合のみバリデーション
         if (
@@ -197,6 +198,50 @@ router.put("/:id", async (req, res) => {
               }
             }
           }
+        }
+      }
+    }
+
+    // 循環参照チェック（Prepped Itemの場合）
+    if (
+      item.item_kind === "prepped" ||
+      (existingItem && existingItem.item_kind === "prepped")
+    ) {
+      // レシピラインを取得（既存のもの）
+      const { data: recipeLines } = await supabase
+        .from("recipe_lines")
+        .select("*")
+        .eq("parent_item_id", id)
+        .eq("line_type", "ingredient");
+
+      if (recipeLines && recipeLines.length > 0) {
+        // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
+        const { data: allItems } = await supabase.from("items").select("*");
+
+        // マップを作成
+        const itemsMap = new Map<string, Item>();
+        allItems?.forEach((i) => itemsMap.set(i.id, i));
+
+        // Recipe Linesのマップを作成（すべてのレシピラインを取得）
+        const { data: allRecipeLines } = await supabase
+          .from("recipe_lines")
+          .select("*")
+          .eq("line_type", "ingredient");
+
+        const recipeLinesMap = new Map<string, RecipeLine[]>();
+        allRecipeLines?.forEach((line) => {
+          const existing = recipeLinesMap.get(line.parent_item_id) || [];
+          existing.push(line);
+          recipeLinesMap.set(line.parent_item_id, existing);
+        });
+
+        // 循環参照をチェック（既存データも含めてチェック）
+        try {
+          await checkCycle(id, new Set(), itemsMap, recipeLinesMap, []);
+        } catch (cycleError: any) {
+          return res.status(400).json({
+            error: cycleError.message,
+          });
         }
       }
     }

@@ -25,6 +25,7 @@ import {
   type BaseItem,
   type VendorProduct,
 } from "@/lib/api";
+import { checkCyclesForItems } from "@/lib/cycle-detection";
 import {
   MASS_UNIT_CONVERSIONS,
   NON_MASS_UNITS,
@@ -319,6 +320,127 @@ export default function CostPage() {
           setLoading(false);
           return;
         }
+      }
+
+      // 循環参照チェック（保存前）
+      try {
+        // すべてのアイテムを取得
+        const allItems = await itemsAPI.getAll();
+        const itemsMap = new Map<string, Item>();
+        allItems.forEach((item) => itemsMap.set(item.id, item));
+
+        // すべてのレシピラインを取得
+        const allRecipeLines: APIRecipeLine[] = [];
+        for (const item of allItems) {
+          if (item.item_kind === "prepped") {
+            const lines = await recipeLinesAPI.getByItemId(item.id);
+            allRecipeLines.push(...lines);
+          }
+        }
+
+        // レシピラインのマップを作成
+        const recipeLinesMap = new Map<string, APIRecipeLine[]>();
+        allRecipeLines.forEach((line) => {
+          if (line.line_type === "ingredient") {
+            const existing = recipeLinesMap.get(line.parent_item_id) || [];
+            existing.push(line);
+            recipeLinesMap.set(line.parent_item_id, existing);
+          }
+        });
+
+        // 更新されるアイテムのレシピラインを反映
+        for (const item of filteredItems) {
+          if (!item.isNew) {
+            // 既存アイテムの更新の場合、新しいレシピラインを反映
+            const updatedLines: APIRecipeLine[] = [];
+            for (const line of item.recipe_lines) {
+              if (line.isMarkedForDeletion) continue;
+              if (line.line_type === "ingredient") {
+                if (!line.child_item_id || !line.quantity || !line.unit)
+                  continue;
+                if (line.isNew) {
+                  // 新規レシピライン（一時的なIDを使用）
+                  updatedLines.push({
+                    id: `temp-${item.id}-${line.id}`,
+                    parent_item_id: item.id,
+                    line_type: "ingredient",
+                    child_item_id: line.child_item_id,
+                    quantity: line.quantity,
+                    unit: line.unit,
+                    labor_role: null,
+                    minutes: null,
+                  } as APIRecipeLine);
+                } else {
+                  // 既存レシピラインの更新
+                  updatedLines.push({
+                    id: line.id,
+                    parent_item_id: item.id,
+                    line_type: "ingredient",
+                    child_item_id: line.child_item_id || null,
+                    quantity: line.quantity || null,
+                    unit: line.unit || null,
+                    labor_role: null,
+                    minutes: null,
+                  } as APIRecipeLine);
+                }
+              }
+            }
+            recipeLinesMap.set(item.id, updatedLines);
+          } else {
+            // 新規アイテムの場合、一時的なIDを使用（一意性を確保するため、インデックスを使用）
+            const itemIndex = filteredItems.findIndex((i) => i === item);
+            const tempId = `temp-new-${itemIndex}`;
+            itemsMap.set(tempId, {
+              id: tempId,
+              name: item.name,
+              item_kind: "prepped",
+              is_menu_item: item.is_menu_item,
+              proceed_yield_amount: item.proceed_yield_amount,
+              proceed_yield_unit: item.proceed_yield_unit,
+              notes: item.notes || null,
+              base_item_id: null,
+              each_grams: null,
+            } as Item);
+
+            const newLines: APIRecipeLine[] = [];
+            for (const line of item.recipe_lines) {
+              if (line.isMarkedForDeletion) continue;
+              if (line.line_type === "ingredient") {
+                if (!line.child_item_id || !line.quantity || !line.unit)
+                  continue;
+                newLines.push({
+                  id: `temp-${tempId}-${line.id}`,
+                  parent_item_id: tempId,
+                  line_type: "ingredient",
+                  child_item_id: line.child_item_id,
+                  quantity: line.quantity,
+                  unit: line.unit,
+                  labor_role: null,
+                  minutes: null,
+                } as APIRecipeLine);
+              }
+            }
+            recipeLinesMap.set(tempId, newLines);
+          }
+        }
+
+        // チェックするアイテムIDのリストを作成
+        const itemIdsToCheck: string[] = [];
+        for (let i = 0; i < filteredItems.length; i++) {
+          const item = filteredItems[i];
+          if (item.isNew) {
+            itemIdsToCheck.push(`temp-new-${i}`);
+          } else {
+            itemIdsToCheck.push(item.id);
+          }
+        }
+
+        // 循環参照をチェック
+        checkCyclesForItems(itemIdsToCheck, itemsMap, recipeLinesMap);
+      } catch (cycleError: any) {
+        alert(cycleError.message);
+        setLoading(false);
+        return;
       }
 
       // API呼び出し
