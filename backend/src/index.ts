@@ -5,6 +5,7 @@ import express from "express";
 import cors from "cors";
 import itemsRouter from "./routes/items";
 import recipeLinesRouter from "./routes/recipe-lines";
+import recipeLinesItemsRouter from "./routes/recipe-lines-items";
 import costRouter from "./routes/cost";
 import baseItemsRouter from "./routes/base-items";
 import vendorsRouter from "./routes/vendors";
@@ -25,6 +26,7 @@ app.get("/", (req, res) => {
 });
 
 app.use("/items", itemsRouter);
+app.use("/", recipeLinesItemsRouter);
 app.use("/recipe-lines", recipeLinesRouter);
 app.use("/", costRouter);
 app.use("/base-items", baseItemsRouter);

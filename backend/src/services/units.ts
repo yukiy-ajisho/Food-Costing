@@ -95,32 +95,12 @@ export function convertToGrams(
       );
     }
 
-    // vendor_productからpurchase_unitを取得（非質量単位の場合）
-    if (!vendorProductsMap) {
-      throw new Error(`Vendor products map is required for raw item ${itemId}`);
-    }
-
-    // base_item_idでvendor_productを検索
-    let vendorProduct: VendorProduct | undefined;
-    for (const vp of vendorProductsMap.values()) {
-      if (vp.base_item_id === item.base_item_id) {
-        vendorProduct = vp;
-        break;
-      }
-    }
-
-    if (!vendorProduct) {
-      throw new Error(
-        `Vendor product not found for base_item ${item.base_item_id}`
-      );
-    }
-
     // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
     const litersPerUnit = VOLUME_UNIT_TO_LITERS[unit];
     if (!litersPerUnit) {
       throw new Error(`Invalid non-mass unit: ${unit}`);
     }
-    const gramsPerSourceUnit = rawItem.specific_weight * 1000 * litersPerUnit;
+    const gramsPerSourceUnit = baseItem.specific_weight * 1000 * litersPerUnit;
     return quantity * gramsPerSourceUnit;
   }
 

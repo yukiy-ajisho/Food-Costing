@@ -22,7 +22,7 @@ import {
 const costCache = new Map<string, number>();
 
 /**
- * Raw Itemのコストを計算
+ * Raw Itemのコストを計算（1グラムあたりのコスト）
  */
 function computeRawCost(
   item: Item,
@@ -124,16 +124,43 @@ export async function getCost(
   visited.add(itemId);
 
   try {
-    // アイテムを取得
-    const { data: item, error: itemError } = await supabase
-      .from("items")
-      .select("*")
-      .eq("id", itemId)
-      .single();
+    // アイテムを取得（itemsMapから取得を試みる、存在しない場合のみデータベースから取得）
+    let item = itemsMap.get(itemId);
+    if (!item) {
+      const { data: fetchedItem, error: itemError } = await supabase
+        .from("items")
+        .select("*")
+        .eq("id", itemId)
+        .single();
 
-    if (itemError || !item) {
-      throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
+      if (itemError || !fetchedItem) {
+        throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
+      }
+      item = fetchedItem;
+      // itemsMapに保存（次回以降はitemsMapから取得できる）
+      itemsMap.set(itemId, item);
     }
+
+    /**
+     * 子アイテムがitemsMapに存在することを保証するヘルパー関数
+     * convertToGrams呼び出し前に使用
+     */
+    const ensureItemInMap = async (childItemId: string): Promise<void> => {
+      if (!itemsMap.has(childItemId)) {
+        const { data: fetchedItem, error: itemError } = await supabase
+          .from("items")
+          .select("*")
+          .eq("id", childItemId)
+          .single();
+
+        if (itemError || !fetchedItem) {
+          throw new Error(
+            `Item ${childItemId} not found: ${itemError?.message}`
+          );
+        }
+        itemsMap.set(childItemId, fetchedItem);
+      }
+    };
 
     // Raw Itemの場合
     if (item.item_kind === "raw") {
@@ -141,22 +168,47 @@ export async function getCost(
         throw new Error(`Raw item ${itemId} has no base_item_id`);
       }
 
-      // base_item_idでvendor_productを検索
-      let vendorProduct: VendorProduct | undefined;
+      // base_item_idで全てのvendor_productsを取得
+      const matchingVendorProducts: VendorProduct[] = [];
       for (const vp of vendorProductsMap.values()) {
         if (vp.base_item_id === item.base_item_id) {
-          vendorProduct = vp;
-          break;
+          matchingVendorProducts.push(vp);
         }
       }
 
-      if (!vendorProduct) {
+      if (matchingVendorProducts.length === 0) {
         throw new Error(
           `Vendor product not found for base_item ${item.base_item_id}`
         );
       }
 
-      const costPerGram = computeRawCost(item, vendorProduct, baseItemsMap);
+      // 1グラムあたりのコストを計算して、最安のものを選択
+      let cheapestVendorProduct: VendorProduct | undefined;
+      let cheapestCostPerGram = Infinity;
+
+      for (const vp of matchingVendorProducts) {
+        try {
+          const costPerGram = computeRawCost(item, vp, baseItemsMap);
+          if (costPerGram < cheapestCostPerGram) {
+            cheapestCostPerGram = costPerGram;
+            cheapestVendorProduct = vp;
+          }
+        } catch (error) {
+          // 計算できないvendor_productはスキップ
+          console.warn(
+            `Failed to calculate cost for vendor product ${vp.id}:`,
+            error
+          );
+        }
+      }
+
+      if (!cheapestVendorProduct) {
+        throw new Error(
+          `No valid vendor product found for base_item ${item.base_item_id}`
+        );
+      }
+
+      const costPerGram = cheapestCostPerGram;
       costCache.set(itemId, costPerGram);
       return costPerGram;
     }
@@ -174,72 +226,7 @@ export async function getCost(
       );
     }
 
-    let yieldGrams: number;
-    if (item.proceed_yield_unit === "each") {
-      // Yieldが"each"の場合、材料の総合計（グラム）を使用
-      // まず材料の総合計を計算
-      const { data: recipeLines } = await supabase
-        .from("recipe_lines")
-        .select("*")
-        .eq("parent_item_id", itemId)
-        .eq("line_type", "ingredient");
-
-      if (!recipeLines || recipeLines.length === 0) {
-        throw new Error(
-          `Prepped item ${itemId} with 'each' yield must have at least one ingredient line`
-        );
-      }
-
-      let totalIngredientsGrams = 0;
-      for (const line of recipeLines) {
-        if (!line.child_item_id || !line.quantity || !line.unit) {
-          continue;
-        }
-
-        const grams = convertToGrams(
-          line.unit,
-          line.quantity,
-          line.child_item_id,
-          itemsMap,
-          rawItemsMap,
-          vendorProductsMap
-        );
-        totalIngredientsGrams += grams;
-      }
-
-      if (totalIngredientsGrams === 0) {
-        throw new Error(
-          `Prepped item ${itemId} with 'each' yield has zero total ingredients`
-        );
-      }
-
-      // 材料の総合計をeach_gramsに保存（まだ保存されていない場合）
-      if (!item.each_grams) {
-        await supabase
-          .from("items")
-          .update({ each_grams: totalIngredientsGrams })
-          .eq("id", itemId);
-        // itemsMapも更新
-        itemsMap.set(itemId, { ...item, each_grams: totalIngredientsGrams });
-      }
-
-      yieldGrams = totalIngredientsGrams;
-    } else {
-      // Yieldが"g"の場合
-      const yieldMultiplier = MASS_UNIT_CONVERSIONS[item.proceed_yield_unit];
-      if (!yieldMultiplier) {
-        throw new Error(
-          `Prepped item ${itemId} has invalid yield unit: ${item.proceed_yield_unit}`
-        );
-      }
-      yieldGrams = item.proceed_yield_amount * yieldMultiplier;
-    }
-
-    if (yieldGrams === 0) {
-      throw new Error(`Prepped item ${itemId} has zero yield`);
-    }
-
-    // レシピラインを取得
+    // レシピラインを1回だけ取得（問題6-1の修正）
     const { data: recipeLines, error: linesError } = await supabase
       .from("recipe_lines")
       .select("*")
@@ -257,6 +244,83 @@ export async function getCost(
       );
     }
 
+    // 材料のグラム数を保存するMap（問題6-2の修正）
+    const ingredientGramsMap = new Map<string, number>();
+
+    // Yield計算
+    let yieldGrams: number;
+    if (item.proceed_yield_unit === "each") {
+      // Yieldが"each"の場合、材料の総合計（グラム）を使用
+      const ingredientLines = recipeLines.filter(
+        (line) => line.line_type === "ingredient"
+      );
+
+      if (ingredientLines.length === 0) {
+        throw new Error(
+          `Prepped item ${itemId} with 'each' yield must have at least one ingredient line`
+        );
+      }
+
+      let totalIngredientsGrams = 0;
+      for (const line of ingredientLines) {
+        if (!line.child_item_id || !line.quantity || !line.unit) {
+          continue;
+        }
+
+        // 子アイテムがitemsMapに存在することを保証（問題5の修正）
+        await ensureItemInMap(line.child_item_id);
+
+        const grams = convertToGrams(
+          line.unit,
+          line.quantity,
+          line.child_item_id,
+          itemsMap,
+          baseItemsMap,
+          vendorProductsMap
+        );
+
+        ingredientGramsMap.set(line.id, grams); // 保存（問題6-2の修正）
+        totalIngredientsGrams += grams;
+      }
+
+      if (totalIngredientsGrams === 0) {
+        throw new Error(
+          `Prepped item ${itemId} with 'each' yield has zero total ingredients`
+        );
+      }
+
+      // 材料の総合計をeach_gramsに保存（値が変わった場合のみ更新）（問題6-3の修正）
+      if (item.each_grams !== totalIngredientsGrams) {
+        const { error: updateError } = await supabase
+          .from("items")
+          .update({ each_grams: totalIngredientsGrams })
+          .eq("id", itemId);
+
+        if (updateError) {
+          console.warn(
+            `Failed to update each_grams for item ${itemId}:`,
+            updateError.message
+          );
+          // エラーが発生しても計算は続行（itemsMapの更新は行う）
+        }
+
+        // itemsMapも更新（次の再帰呼び出しで使用される）
+        itemsMap.set(itemId, { ...item, each_grams: totalIngredientsGrams });
+        // item変数も更新（この関数内で使用される）
+        item = { ...item, each_grams: totalIngredientsGrams };
+      }
+
+      yieldGrams = totalIngredientsGrams;
+    } else {
+      // Yieldが"g"の場合（問題6-4の修正）
+      // 171行目で既に"g"と"each"のみ許可されているため、ここでは必ず proceed_yield_unit === "g"
+      yieldGrams = item.proceed_yield_amount;
+    }
+
+    if (yieldGrams === 0) {
+      throw new Error(`Prepped item ${itemId} has zero yield`);
+    }
+
     let ingredientCost = 0;
     let laborCost = 0;
 
@@ -269,15 +333,21 @@ export async function getCost(
           );
         }
 
-        // 数量をグラムに変換
-        const grams = convertToGrams(
-          line.unit,
-          line.quantity,
-          line.child_item_id,
-          itemsMap,
-          baseItemsMap,
-          vendorProductsMap
-        );
+        // 数量をグラムに変換（保存された値があれば再利用）（問題6-2の修正）
+        let grams = ingredientGramsMap.get(line.id);
+        if (grams === undefined) {
+          // 子アイテムがitemsMapに存在することを保証（問題5の修正）
+          await ensureItemInMap(line.child_item_id);
+
+          grams = convertToGrams(
+            line.unit,
+            line.quantity,
+            line.child_item_id,
+            itemsMap,
+            baseItemsMap,
+            vendorProductsMap
+          );
+        }
 
         // 子アイテムのコストを再帰的に取得
         const childCostPerGram = await getCost(
@@ -407,6 +477,10 @@ export async function getVendorProductsMap(): Promise<
  * コスト計算のエントリーポイント（ヘルパーデータを自動取得）
  */
 export async function calculateCost(itemId: string): Promise<number> {
+  // 計算開始時に全てのキャッシュをクリア（問題1、2、3、4の解決）
+  // これにより、常に最新のデータで計算され、古いキャッシュによる問題を回避
+  costCache.clear();
+
   const baseItemsMap = await getBaseItemsMap();
   const itemsMap = await getItemsMap();
   const vendorProductsMap = await getVendorProductsMap();
@@ -419,4 +493,7 @@ export async function calculateCost(itemId: string): Promise<number> {
     vendorProductsMap,
     laborRoles
   );
+  // 計算終了時のクリアは削除
+  // 理由: 計算開始時にクリアするため、不要
+  // 次の計算開始時に自動的にクリアされる
 }

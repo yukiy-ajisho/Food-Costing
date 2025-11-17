@@ -256,6 +256,7 @@ export default function CostPage() {
 
     for (const line of recipeLines) {
       if (line.line_type !== "ingredient") continue;
+      if (line.isMarkedForDeletion) continue; // 削除マークが付いた材料を除外
       if (!line.child_item_id || !line.quantity || !line.unit) continue;
 
       const grams = convertToGrams(
@@ -300,20 +301,20 @@ export default function CostPage() {
 
         if (yieldGrams < 0) {
           alert(
-            `"${item.name}"のYield単位が無効です。バリデーションをスキップします。`
+            `"${item.name}"のProceed単位が無効です。バリデーションをスキップします。`
           );
           continue;
         }
 
         if (yieldGrams > totalIngredientsGrams) {
           alert(
-            `"${item.name}"のYield（${item.proceed_yield_amount} ${
+            `"${item.name}"のProceed（${item.proceed_yield_amount} ${
               item.proceed_yield_unit
             } = ${yieldGrams.toFixed(
               2
             )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
               2
-            )}g）を超えています。Yieldは材料の総合計以下である必要があります。`
+            )}g）を超えています。Proceedは材料の総合計以下である必要があります。`
           );
           setLoading(false);
           return;
@@ -850,10 +851,10 @@ export default function CostPage() {
                   </select>
                 </div>
 
-                {/* Yield範囲フィルター */}
+                {/* Proceed範囲フィルター */}
                 <div>
                   <label className="block text-xs text-gray-600 mb-1">
-                    Yield (g):
+                    Proceed (g):
                   </label>
                   <div className="flex items-center gap-2">
                     <input
@@ -949,7 +950,7 @@ export default function CostPage() {
                   Type
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Yield
+                  Proceed
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Cost/g
@@ -1028,7 +1029,7 @@ export default function CostPage() {
                       )}
                     </td>
 
-                    {/* Yield */}
+                    {/* Proceed */}
                     <td className="px-6 py-4 whitespace-nowrap">
                       {isEditMode ? (
                         <div className="flex items-center gap-2">
