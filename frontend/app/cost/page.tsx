@@ -1160,7 +1160,7 @@ export default function CostPage() {
                             value={
                               item.proceed_yield_amount === 0
                                 ? ""
-                                : item.proceed_yield_amount
+                                : String(item.proceed_yield_amount)
                             }
                             onChange={(e) => {
                               const value = e.target.value;
@@ -1307,9 +1307,10 @@ export default function CostPage() {
                                           <input
                                             type="number"
                                             value={
-                                              line.quantity === 0
+                                              line.quantity === 0 ||
+                                              !line.quantity
                                                 ? ""
-                                                : line.quantity || ""
+                                                : String(line.quantity)
                                             }
                                             onChange={(e) => {
                                               const value = e.target.value;

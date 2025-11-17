@@ -1028,7 +1028,7 @@ export default function ItemsPage() {
                             value={
                               vp.purchase_quantity === 0
                                 ? ""
-                                : vp.purchase_quantity
+                                : String(vp.purchase_quantity)
                             }
                             onChange={(e) => {
                               const value = e.target.value;
@@ -1060,7 +1060,9 @@ export default function ItemsPage() {
                             <input
                               type="number"
                               value={
-                                vp.purchase_cost === 0 ? "" : vp.purchase_cost
+                                vp.purchase_cost === 0
+                                  ? ""
+                                  : String(vp.purchase_cost)
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
