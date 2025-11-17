@@ -1371,14 +1371,42 @@ export default function CostPage() {
                                                 );
                                               }
                                               return availableUnits.map(
-                                                (unit) => (
-                                                  <option
-                                                    key={unit}
-                                                    value={unit}
-                                                  >
-                                                    {unit}
-                                                  </option>
-                                                )
+                                                (unit) => {
+                                                  // eachの場合、選択されたアイテムのeach_gramsを確認
+                                                  let isEachDisabled = false;
+                                                  if (
+                                                    unit === "each" &&
+                                                    line.child_item_id
+                                                  ) {
+                                                    const selectedItem =
+                                                      availableItems.find(
+                                                        (i) =>
+                                                          i.id ===
+                                                          line.child_item_id
+                                                      );
+                                                    isEachDisabled =
+                                                      !selectedItem?.each_grams ||
+                                                      selectedItem.each_grams ===
+                                                        0;
+                                                  }
+
+                                                  return (
+                                                    <option
+                                                      key={unit}
+                                                      value={unit}
+                                                      disabled={isEachDisabled}
+                                                      title={
+                                                        isEachDisabled
+                                                          ? "Please set each_grams in the Base Items tab"
+                                                          : ""
+                                                      }
+                                                    >
+                                                      {unit}
+                                                      {isEachDisabled &&
+                                                        " (setup required)"}
+                                                    </option>
+                                                  );
+                                                }
                                               );
                                             })()}
                                           </select>
