@@ -638,7 +638,9 @@ export default function CostPage() {
     if (selectedItem.item_kind === "prepped") {
       // Yieldが"each"の場合
       if (selectedItem.proceed_yield_unit === "each") {
-        return ["each"]; // "each"のみ選択可能
+        // 質量単位 + "each"が選択可能（順番を制御）
+        // each_gramsがあるので、質量単位でも問題なく計算できる
+        return [...MASS_UNITS_ORDERED, "each"];
       }
       // Yieldが"g"の場合
       return MASS_UNITS_ORDERED; // 質量単位のみ選択可能

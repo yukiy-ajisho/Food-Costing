@@ -174,6 +174,84 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 - each_grams = 50 (itemsテーブルに自動的に保存される)
 
 ========================================
+【テストケース4.5: 簡単 - Prepped Item（Yield = "each"）を材料として使用】
+========================================
+
+目的: Yieldが"each"のPrepped Itemを材料として使う場合、質量単位（g, kg, oz, lb）と"each"を選択できることをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Egg
+   Name: Egg
+   Specific Weight: (不要 - "each"のため)
+   Each Grams: 50 ← "each"を使用するため必須
+   → itemsテーブルのeach_gramsに保存される
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier C
+   Name: Supplier C
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Egg from Supplier C
+   Base Item: Egg
+   Vendor: Supplier C
+   Product Name: Large Eggs
+   Purchase Unit: each
+   Purchase Quantity: 12
+   Purchase Cost: 3.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Boiled Egg
+   Name: Boiled Egg
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: each
+   Notes: (任意)
+
+   Recipe Lines:
+   - Ingredient: Egg
+     Quantity: 1
+     Unit: each
+
+2. Egg Salad
+   Name: Egg Salad
+   Type: Prepped
+   Yield Amount: 200
+   Yield Unit: g
+   Notes: (Boiled Eggを材料として使用、質量単位で選択可能)
+
+   Recipe Lines:
+   - Ingredient: Boiled Egg
+     Quantity: 2
+     Unit: each ← または g, kg, oz, lb を選択可能
+     （例: 2 each = 100g、または 100 g を直接指定）
+
+期待される結果:
+- Egg cost per gram = 3.00 / (12 * 50) = 0.005 $/g
+- Boiled Egg:
+  * Ingredient grams = 1 * 50 = 50 g
+  * Ingredient cost = 50 * 0.005 = 0.25
+  * Yield = 50 g (材料の総合計 - 自動的に計算・保存される)
+  * Cost per gram = 0.25 / 50 = 0.005 $/g
+  * each_grams = 50 (itemsテーブルに自動的に保存される)
+- Egg Salad（unit = each の場合）:
+  * Boiled Egg grams = 2 * 50 = 100 g
+  * Ingredient cost = 100 * 0.005 = 0.50
+  * Yield = 200 g
+  * Cost per gram = 0.50 / 200 = 0.0025 $/g
+- Egg Salad（unit = g の場合、例: 100g）:
+  * Boiled Egg grams = 100 g
+  * Ingredient cost = 100 * 0.005 = 0.50
+  * Yield = 200 g
+  * Cost per gram = 0.50 / 200 = 0.0025 $/g
+
+=== 5. 確認ポイント ===
+1. Boiled Egg（Yield Unit = "each"）を材料として選択できること
+2. unit選択時に、g, kg, oz, lb, eachが選択可能であること
+3. 質量単位（g, kg, oz, lb）を選択した場合、正しくグラムに変換されること
+4. "each"を選択した場合、each_gramsを使って正しくグラムに変換されること
+5. コスト計算が正しく実行されること
+
+========================================
 【テストケース5: 中程度 - 複数の材料を含むPrepped Item】
 ========================================
 
