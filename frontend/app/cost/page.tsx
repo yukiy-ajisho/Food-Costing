@@ -1359,6 +1359,15 @@ export default function CostPage() {
                           <div>
                             <h3 className="text-sm font-semibold text-gray-700 mb-3">
                               Recipe:
+                              {isEditMode && (
+                                <span className="ml-4 text-sm font-normal text-gray-600">
+                                  Total:{" "}
+                                  {calculateTotalIngredientsGrams(
+                                    item.recipe_lines
+                                  ).toFixed(2)}{" "}
+                                  g
+                                </span>
+                              )}
                             </h3>
                             <table className="w-full">
                               <thead className="bg-gray-100">
