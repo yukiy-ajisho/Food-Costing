@@ -1796,6 +1796,90 @@ Seasoned Flourの材料を変更:
 6. 既存のデータが変更されないこと（Item A、Item B、Item C）
 
 ========================================
+【テストケース20: ml単位のテスト】
+========================================
+
+目的: ml単位を使用したRaw ItemとPrepped Itemのコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Milk
+   Name: Milk
+   Specific Weight: 1.03 (g/ml) ← mlを使用するため必須
+   Each Grams: (不要)
+
+2. Water
+   Name: Water
+   Specific Weight: 1.00 (g/ml) ← mlを使用するため必須
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+2. Supplier B
+   Name: Supplier B
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Milk from Supplier A
+   Base Item: Milk
+   Vendor: Supplier A
+   Product Name: Whole Milk
+   Brand Name: (任意)
+   Purchase Unit: liter
+   Purchase Quantity: 1
+   Purchase Cost: 2.50
+   (Cost per gram ≈ 0.00243 $/g)
+
+2. Water from Supplier B
+   Base Item: Water
+   Vendor: Supplier B
+   Product Name: Spring Water
+   Brand Name: (任意)
+   Purchase Unit: ml
+   Purchase Quantity: 500
+   Purchase Cost: 0.50
+   (Cost per gram = 0.50 / (500 * 1.00) = 0.001 $/g)
+
+=== 4. Prepped Items（Costページ） ===
+1. Diluted Milk
+   Name: Diluted Milk
+   Type: Prepped
+   Yield Amount: 1500
+   Yield Unit: g
+   Notes: (材料の合計1500g)
+
+   Recipe Lines:
+   - Ingredient: Milk
+     Quantity: 1000
+     Unit: ml
+   - Ingredient: Water
+     Quantity: 500
+     Unit: ml
+
+期待される結果:
+- Milk cost per gram:
+  * 1 liter = 1000 ml
+  * Grams per liter = 1.03 * 1000 = 1030 g
+  * Cost per gram = 2.50 / 1030 ≈ 0.00243 $/g
+- Water cost per gram:
+  * 500 ml = 500 * 1.00 = 500 g
+  * Cost per gram = 0.50 / 500 = 0.001 $/g
+- Diluted Milk:
+  * Milk grams = 1000 * 1.03 = 1030 g
+  * Water grams = 500 * 1.00 = 500 g
+  * Total ingredients grams = 1030 + 500 = 1530 g
+  * Ingredient cost = (1030 * 0.00243) + (500 * 0.001) ≈ 2.503 + 0.50 = 3.003
+  * Yield = 1500 g (材料の総合計1530g以下であることを確認)
+  * Cost per gram = 3.003 / 1500 ≈ 0.002 $/g
+
+=== 5. 確認ポイント ===
+1. ml単位が正しく変換されること（1 ml = specific_weightグラム）
+2. mlを使用する場合、specific_weightが必要であること
+3. ml単位のRaw Itemのコスト計算が正しいこと
+4. ml単位の材料を含むPrepped Itemのコスト計算が正しいこと
+5. Yieldが材料の総合計を超えないこと（1500g ≤ 1530g）
+
+========================================
 【注意事項】
 ========================================
 
