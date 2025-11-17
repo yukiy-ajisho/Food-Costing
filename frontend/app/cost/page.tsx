@@ -539,6 +539,9 @@ export default function CostPage() {
 
       // データを再取得
       const preppedItems = await itemsAPI.getAll({ item_kind: "prepped" });
+      // 全アイテムを再取得（ingredient選択用）
+      const allItems = await itemsAPI.getAll();
+      setAvailableItems(allItems);
       const itemsWithRecipes: PreppedItem[] = await Promise.all(
         preppedItems.map(async (item) => {
           const recipeLines = await recipeLinesAPI.getByItemId(item.id);

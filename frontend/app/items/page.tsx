@@ -553,6 +553,8 @@ export default function ItemsPage() {
 
       setBaseItemsUI(baseItemsUIUpdated);
       setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUIUpdated)));
+      // Itemsタブのプルダウン用にbaseItemsも更新
+      setBaseItems(baseItemsData);
       setIsEditModeBaseItems(false);
     } catch (error: any) {
       console.error("Failed to save:", error);
