@@ -16,6 +16,8 @@ import { SearchableSelect } from "@/components/SearchableSelect";
 import {
   MASS_UNIT_CONVERSIONS,
   NON_MASS_UNITS,
+  MASS_UNITS_ORDERED,
+  NON_MASS_UNITS_ORDERED,
   isNonMassUnit,
 } from "@/lib/constants";
 
@@ -82,11 +84,8 @@ export default function ItemsPage() {
   const [loadingVendors, setLoadingVendors] = useState(false);
   const [hasLoadedVendorsOnce, setHasLoadedVendorsOnce] = useState(false);
 
-  // 単位オプション（質量単位 + 非質量単位）
-  const unitOptions = [
-    ...Object.keys(MASS_UNIT_CONVERSIONS),
-    ...NON_MASS_UNITS,
-  ];
+  // 単位オプション（質量単位 + 非質量単位、順番を制御）
+  const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
 
   // =========================================================
   // Itemsタブのデータ取得（vendor_productsテーブルを操作）

@@ -28,6 +28,18 @@ export const NON_MASS_UNITS: string[] = [
   "each",
 ];
 
+// 質量単位の順番（表示順序を制御）
+export const MASS_UNITS_ORDERED: string[] = ["g", "kg", "oz", "lb"];
+
+// 非質量単位の順番（表示順序を制御）
+export const NON_MASS_UNITS_ORDERED: string[] = [
+  "floz",
+  "ml",
+  "liter",
+  "gallon",
+  "each",
+];
+
 /**
  * 質量単位かどうかを判定
  */

@@ -29,6 +29,8 @@ import { checkCyclesForItems } from "@/lib/cycle-detection";
 import {
   MASS_UNIT_CONVERSIONS,
   NON_MASS_UNITS,
+  MASS_UNITS_ORDERED,
+  NON_MASS_UNITS_ORDERED,
   VOLUME_UNIT_TO_LITERS,
   isNonMassUnit,
   isMassUnit,
@@ -63,8 +65,8 @@ interface PreppedItem {
   cost_per_gram?: number; // コスト計算結果
 }
 
-// 単位のオプション
-const unitOptions = [...Object.keys(MASS_UNIT_CONVERSIONS), ...NON_MASS_UNITS];
+// 単位のオプション（順番を制御）
+const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
 
 // Yieldの単位オプション（gとeachのみ）
 const yieldUnitOptions = ["g", "each"];
@@ -639,13 +641,13 @@ export default function CostPage() {
         return ["each"]; // "each"のみ選択可能
       }
       // Yieldが"g"の場合
-      return Object.keys(MASS_UNIT_CONVERSIONS); // 質量単位のみ選択可能
+      return MASS_UNITS_ORDERED; // 質量単位のみ選択可能
     }
 
     // Raw Itemの場合
     if (selectedItem.item_kind === "raw") {
       if (!selectedItem.base_item_id) {
-        return Object.keys(MASS_UNIT_CONVERSIONS); // デフォルトは質量単位のみ
+        return MASS_UNITS_ORDERED; // デフォルトは質量単位のみ
       }
 
       // base_itemを取得
@@ -653,7 +655,7 @@ export default function CostPage() {
         (b) => b.id === selectedItem.base_item_id
       );
       if (!baseItem) {
-        return Object.keys(MASS_UNIT_CONVERSIONS); // デフォルトは質量単位のみ
+        return MASS_UNITS_ORDERED; // デフォルトは質量単位のみ
       }
 
       // vendor_productを取得（purchase_unitを取得するため）
@@ -661,30 +663,30 @@ export default function CostPage() {
         (vp) => vp.base_item_id === selectedItem.base_item_id
       );
       if (!vendorProduct) {
-        return Object.keys(MASS_UNIT_CONVERSIONS); // デフォルトは質量単位のみ
+        return MASS_UNITS_ORDERED; // デフォルトは質量単位のみ
       }
 
       const purchaseUnit = vendorProduct.purchase_unit;
 
-      // 非質量単位（gallon, liter, floz）で登録されている場合
+      // 非質量単位（gallon, liter, floz, ml）で登録されている場合
       if (
         purchaseUnit &&
         isNonMassUnit(purchaseUnit) &&
         purchaseUnit !== "each"
       ) {
-        // すべての単位が選択可能
-        return [...Object.keys(MASS_UNIT_CONVERSIONS), ...NON_MASS_UNITS];
+        // すべての単位が選択可能（順番を制御）
+        return [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
       }
 
       // eachで登録されている場合
       if (purchaseUnit === "each") {
-        // 質量単位 + "each"が選択可能
-        return [...Object.keys(MASS_UNIT_CONVERSIONS), "each"];
+        // 質量単位 + "each"が選択可能（順番を制御）
+        return [...MASS_UNITS_ORDERED, "each"];
       }
 
       // 質量単位で登録されている場合
       // 質量単位のみ選択可能
-      return Object.keys(MASS_UNIT_CONVERSIONS);
+      return MASS_UNITS_ORDERED;
     }
 
     return [];
