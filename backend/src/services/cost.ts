@@ -289,11 +289,23 @@ export async function getCost(
         );
       }
 
-      // 材料の総合計をeach_gramsに保存（値が変わった場合のみ更新）（問題6-3の修正）
-      if (item.each_grams !== totalIngredientsGrams) {
+      // Yield Amountを考慮してeach_gramsを計算（1個あたりの重量）
+      const yieldAmount = item.proceed_yield_amount || 1;
+      let eachGrams: number;
+
+      if (item.each_grams && item.each_grams > 0) {
+        // フロントエンドから手動入力された値を使用
+        eachGrams = item.each_grams;
+      } else {
+        // 自動計算: 材料の総合計 / Yield Amount
+        eachGrams = totalIngredientsGrams / yieldAmount;
+      }
+
+      // each_gramsに保存（値が変わった場合のみ更新）
+      if (item.each_grams !== eachGrams) {
         const { error: updateError } = await supabase
           .from("items")
-          .update({ each_grams: totalIngredientsGrams })
+          .update({ each_grams: eachGrams })
           .eq("id", itemId);
 
         if (updateError) {
@@ -305,12 +317,13 @@ export async function getCost(
         }
 
         // itemsMapも更新（次の再帰呼び出しで使用される）
-        itemsMap.set(itemId, { ...item, each_grams: totalIngredientsGrams });
+        itemsMap.set(itemId, { ...item, each_grams: eachGrams });
         // item変数も更新（この関数内で使用される）
-        item = { ...item, each_grams: totalIngredientsGrams };
+        item = { ...item, each_grams: eachGrams };
       }
 
-      yieldGrams = totalIngredientsGrams;
+      // コスト計算用: 出来上がりの総重量（each_grams × Yield Amount）
+      yieldGrams = eachGrams * yieldAmount;
     } else {
       // Yieldが"g"の場合（問題6-4の修正）
       // 171行目で既に"g"と"each"のみ許可されているため、ここでは必ず proceed_yield_unit === "g"

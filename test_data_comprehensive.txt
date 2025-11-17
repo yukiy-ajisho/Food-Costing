@@ -252,6 +252,364 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 5. コスト計算が正しく実行されること
 
 ========================================
+【テストケース4.6: Yield Unit = "each"でeach_gramsの自動計算と手動入力】
+========================================
+
+目的: Yield Unit = "each"の場合のeach_grams入力機能をテスト（自動計算と手動入力）
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+3. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 8.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Dough Batch（Yield Amount = 10, each_grams未入力）
+   Name: Dough Batch
+   Type: Prepped
+   Yield Amount: 10
+   Yield Unit: each
+   Each Grams: (未入力 - 自動計算される)
+   Notes: (10個分のドーナツ生地)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 5000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 100
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 200
+     Unit: g
+
+期待される結果:
+- 材料の総合計 = 5000 + 100 + 200 = 5300g
+- each_grams（自動計算）= 5300g / 10 = 530g
+- 表示: 10 each (530g / each)
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Sugar cost per gram = 8.00 / 10000 = 0.0008 $/g
+- Ingredient cost = (5000 * 0.0005) + (100 * 0.01) + (200 * 0.0008) = 2.50 + 1.00 + 0.16 = 3.66
+- yieldGrams = 530g × 10 = 5300g
+- Cost per gram = 3.66 / 5300 = 0.000691 $/g
+
+=== 5. 確認ポイント ===
+1. Yield Unit = "each"の場合、右側に入力ボックスが表示されること
+2. 入力ボックスに"g/each"ラベルが表示されること
+3. 未入力の場合、プレースホルダーに自動計算値が表示されること（"Auto (530g)"）
+4. 保存後、表示が"(530g / each)"形式になること
+
+========================================
+【テストケース4.7: Yield Unit = "each"でeach_gramsを手動入力（正常）】
+========================================
+
+目的: Yield Unit = "each"の場合、each_gramsを手動入力できることをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Dough Batch（Yield Amount = 10, each_grams = 500g手動入力）
+   Name: Dough Batch
+   Type: Prepped
+   Yield Amount: 10
+   Yield Unit: each
+   Each Grams: 500g（手動入力、自動計算値530gから変更）
+   Notes: (10個分のドーナツ生地、調理で水分が失われる)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 5000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 100
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 200
+     Unit: g
+
+期待される結果:
+- 材料の総合計 = 5000 + 100 + 200 = 5300g
+- each_grams（手動入力）= 500g
+- バリデーション: 500g × 10 = 5000g ≤ 5300g ✓（正常）
+- 表示: 10 each (500g / each)
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Sugar cost per gram = 8.00 / 10000 = 0.0008 $/g
+- Ingredient cost = (5000 * 0.0005) + (100 * 0.01) + (200 * 0.0008) = 2.50 + 1.00 + 0.16 = 3.66
+- yieldGrams = 500g × 10 = 5000g（手動入力値を使用）
+- Cost per gram = 3.66 / 5000 = 0.000732 $/g
+
+=== 5. 確認ポイント ===
+1. each_gramsを手動入力できること
+2. バリデーションが正常に通過すること（500g × 10 = 5000g ≤ 5300g）
+3. 保存後、手動入力値が表示されること（"(500g / each)"）
+4. コスト計算が手動入力値に基づいて行われること
+
+========================================
+【テストケース4.8: Yield Unit = "each"でeach_gramsを手動入力（エラー）】
+========================================
+
+目的: Yield Unit = "each"の場合、each_grams × yield_amountが材料の総合計を超える場合のエラーをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Dough Batch（Yield Amount = 10, each_grams = 600g手動入力 - エラー）
+   Name: Dough Batch
+   Type: Prepped
+   Yield Amount: 10
+   Yield Unit: each
+   Each Grams: 600g（手動入力、材料の総合計を超える）
+   Notes: (10個分のドーナツ生地)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 5000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 100
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 200
+     Unit: g
+
+期待される結果:
+- 材料の総合計 = 5000 + 100 + 200 = 5300g
+- each_grams（手動入力）= 600g
+- バリデーション: 600g × 10 = 6000g > 5300g ✗（エラー）
+- エラーメッセージ: "Dough Batchのeach_grams (600g) × yield_amount (10) = 6000g が材料の総合計（5300g）を超えています。each_grams × yield_amountは材料の総合計以下である必要があります。"
+- 保存がキャンセルされる
+
+=== 5. 確認ポイント ===
+1. each_gramsを手動入力できること
+2. バリデーションエラーが正しく表示されること
+3. 保存がキャンセルされること
+4. エラーメッセージに適切な値が表示されること
+
+========================================
+【テストケース4.9: Yield Unit = "each"でYield Amount = 1の場合】
+========================================
+
+目的: Yield Amount = 1の場合のeach_gramsの動作をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Egg
+   Name: Egg
+   Specific Weight: (不要)
+   Each Grams: 50
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier C
+   Name: Supplier C
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Egg from Supplier C
+   Base Item: Egg
+   Vendor: Supplier C
+   Purchase Unit: each
+   Purchase Quantity: 12
+   Purchase Cost: 3.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Boiled Egg（Yield Amount = 1, each_grams未入力）
+   Name: Boiled Egg
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: each
+   Each Grams: (未入力 - 自動計算される)
+   Notes: (1個の茹で卵)
+
+   Recipe Lines:
+   - Ingredient: Egg
+     Quantity: 1
+     Unit: each
+
+期待される結果:
+- 材料の総合計 = 1 × 50g = 50g
+- each_grams（自動計算）= 50g / 1 = 50g
+- 表示: 1 each (50g / each)
+- Egg cost per gram = 3.00 / (12 * 50) = 0.005 $/g
+- Ingredient cost = 50 * 0.005 = 0.25
+- yieldGrams = 50g × 1 = 50g
+- Cost per gram = 0.25 / 50 = 0.005 $/g
+
+=== 5. 確認ポイント ===
+1. Yield Amount = 1の場合も正常に動作すること
+2. each_grams = 材料の総合計になること（1で割るため）
+3. 表示が正しいこと
+
+========================================
+【テストケース4.10: Yield Unit = "each"で複数の材料とLaborを含む場合】
+========================================
+
+目的: Yield Unit = "each"で複数の材料とLaborを含む場合のコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Labor Roles（Settingsページ） ===
+1. Baker
+   Name: Baker
+   Hourly Wage: 20.00
+
+=== 5. Prepped Items（Costページ） ===
+1. Donut（Yield Amount = 12, each_grams = 80g手動入力）
+   Name: Donut
+   Type: Prepped
+   Yield Amount: 12
+   Yield Unit: each
+   Each Grams: 80g（手動入力）
+   Notes: (12個のドーナツ、調理で水分が失われる)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 1000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 20
+     Unit: g
+   - Labor: Baker
+     Minutes: 60
+
+期待される結果:
+- 材料の総合計 = 1000 + 20 = 1020g
+- each_grams（手動入力）= 80g
+- バリデーション: 80g × 12 = 960g ≤ 1020g ✓（正常）
+- 表示: 12 each (80g / each)
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Ingredient cost = (1000 * 0.0005) + (20 * 0.01) = 0.50 + 0.20 = 0.70
+- Labor cost = (60 / 60) * 20.00 = 20.00
+- Total batch cost = 0.70 + 20.00 = 20.70
+- yieldGrams = 80g × 12 = 960g
+- Cost per gram = 20.70 / 960 = 0.021563 $/g
+
+=== 6. 確認ポイント ===
+1. 複数の材料とLaborを含む場合も正常に動作すること
+2. バリデーションが正常に通過すること
+3. コスト計算が正しく行われること（Laborも含む）
+
+========================================
 【テストケース5: 中程度 - 複数の材料を含むPrepped Item】
 ========================================
 

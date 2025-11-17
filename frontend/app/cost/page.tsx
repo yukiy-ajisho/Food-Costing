@@ -63,6 +63,7 @@ interface PreppedItem {
   isMarkedForDeletion?: boolean;
   isNew?: boolean; // 新規作成フラグ
   cost_per_gram?: number; // コスト計算結果
+  each_grams?: number | null; // 1個あたりの重量（g）（Yield Unit = "each"の場合）
 }
 
 // 単位のオプション（順番を制御）
@@ -143,6 +144,7 @@ export default function CostPage() {
               notes: item.notes || "",
               isExpanded: false,
               cost_per_gram: costPerGram,
+              each_grams: item.each_grams || null,
             };
           })
         );
@@ -289,38 +291,65 @@ export default function CostPage() {
 
       // バリデーション: Yieldが材料の総合計を超えないかチェック
       for (const item of filteredItems) {
-        // Yieldが"each"の場合はバリデーションをスキップ（グラムに変換できないため）
-        if (item.proceed_yield_unit === "each") {
-          continue;
-        }
-
         const totalIngredientsGrams = calculateTotalIngredientsGrams(
           item.recipe_lines
         );
-        const yieldGrams = convertYieldToGrams(
-          item.proceed_yield_amount,
-          item.proceed_yield_unit
-        );
 
-        if (yieldGrams < 0) {
-          alert(
-            `"${item.name}"のProceed単位が無効です。バリデーションをスキップします。`
-          );
-          continue;
-        }
+        if (item.proceed_yield_unit === "each") {
+          // Yieldが"each"の場合、each_grams × proceed_yield_amount ≤ 材料の総合計
+          const yieldAmount = item.proceed_yield_amount || 1;
+          let eachGrams: number;
 
-        if (yieldGrams > totalIngredientsGrams) {
-          alert(
-            `"${item.name}"のProceed（${item.proceed_yield_amount} ${
-              item.proceed_yield_unit
-            } = ${yieldGrams.toFixed(
-              2
-            )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
-              2
-            )}g）を超えています。Proceedは材料の総合計以下である必要があります。`
+          if (item.each_grams && item.each_grams > 0) {
+            // 手動入力された値を使用
+            eachGrams = item.each_grams;
+          } else {
+            // 未入力の場合、自動計算値を使用
+            eachGrams = totalIngredientsGrams / yieldAmount;
+          }
+
+          const totalYieldGrams = eachGrams * yieldAmount;
+
+          if (totalYieldGrams > totalIngredientsGrams) {
+            alert(
+              `"${item.name}"のeach_grams (${eachGrams.toFixed(
+                2
+              )}g) × yield_amount (${yieldAmount}) = ${totalYieldGrams.toFixed(
+                2
+              )}g が材料の総合計（${totalIngredientsGrams.toFixed(
+                2
+              )}g）を超えています。each_grams × yield_amountは材料の総合計以下である必要があります。`
+            );
+            setLoading(false);
+            return;
+          }
+        } else {
+          // Yieldが"g"の場合
+          const yieldGrams = convertYieldToGrams(
+            item.proceed_yield_amount,
+            item.proceed_yield_unit
           );
-          setLoading(false);
-          return;
+
+          if (yieldGrams < 0) {
+            alert(
+              `"${item.name}"のProceed単位が無効です。バリデーションをスキップします。`
+            );
+            continue;
+          }
+
+          if (yieldGrams > totalIngredientsGrams) {
+            alert(
+              `"${item.name}"のProceed（${item.proceed_yield_amount} ${
+                item.proceed_yield_unit
+              } = ${yieldGrams.toFixed(
+                2
+              )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
+                2
+              )}g）を超えています。Proceedは材料の総合計以下である必要があります。`
+            );
+            setLoading(false);
+            return;
+          }
         }
       }
 
@@ -456,6 +485,10 @@ export default function CostPage() {
             proceed_yield_amount: item.proceed_yield_amount,
             proceed_yield_unit: item.proceed_yield_unit,
             notes: item.notes || null,
+            each_grams:
+              item.proceed_yield_unit === "each"
+                ? item.each_grams || null
+                : null,
           });
 
           // レシピラインを作成
@@ -488,6 +521,10 @@ export default function CostPage() {
             proceed_yield_amount: item.proceed_yield_amount,
             proceed_yield_unit: item.proceed_yield_unit,
             notes: item.notes || null,
+            each_grams:
+              item.proceed_yield_unit === "each"
+                ? item.each_grams || null
+                : null,
           });
 
           // レシピラインを更新
@@ -577,6 +614,7 @@ export default function CostPage() {
             notes: item.notes || "",
             isExpanded: false,
             cost_per_gram: costPerGram,
+            each_grams: item.each_grams || null,
           };
         })
       );
@@ -764,6 +802,7 @@ export default function CostPage() {
       notes: "",
       isExpanded: true,
       isNew: true,
+      each_grams: null,
     };
     setItems([...items, newItem]);
   };
@@ -1202,10 +1241,78 @@ export default function CostPage() {
                               </option>
                             ))}
                           </select>
+                          {/* Yield Unitが"each"の場合、右側に入力ボックスを表示 */}
+                          {item.proceed_yield_unit === "each" && (
+                            <>
+                              <input
+                                type="number"
+                                value={
+                                  item.each_grams === null ||
+                                  item.each_grams === undefined ||
+                                  item.each_grams === 0
+                                    ? ""
+                                    : String(item.each_grams)
+                                }
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  const numValue =
+                                    value === ""
+                                      ? null
+                                      : parseFloat(value) || null;
+                                  handleItemChange(
+                                    item.id,
+                                    "each_grams",
+                                    numValue
+                                  );
+                                }}
+                                placeholder={(() => {
+                                  const totalIngredientsGrams =
+                                    calculateTotalIngredientsGrams(
+                                      item.recipe_lines
+                                    );
+                                  const yieldAmount =
+                                    item.proceed_yield_amount || 1;
+                                  const defaultEachGrams =
+                                    totalIngredientsGrams / yieldAmount;
+                                  return `Auto (${defaultEachGrams.toFixed(
+                                    2
+                                  )}g)`;
+                                })()}
+                                className="w-20 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                min="0"
+                                step="0.01"
+                              />
+                              <span className="text-sm text-gray-600">
+                                g/each
+                              </span>
+                            </>
+                          )}
                         </div>
                       ) : (
-                        <div className="text-sm text-gray-900">
-                          {item.proceed_yield_amount} {item.proceed_yield_unit}
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-900">
+                            {item.proceed_yield_amount}{" "}
+                            {item.proceed_yield_unit}
+                          </span>
+                          {/* Yield Unitが"each"の場合、each_gramsを表示 */}
+                          {item.proceed_yield_unit === "each" && (
+                            <span className="text-xs text-gray-500">
+                              {(() => {
+                                const eachGrams =
+                                  item.each_grams ||
+                                  (() => {
+                                    const totalIngredientsGrams =
+                                      calculateTotalIngredientsGrams(
+                                        item.recipe_lines
+                                      );
+                                    const yieldAmount =
+                                      item.proceed_yield_amount || 1;
+                                    return totalIngredientsGrams / yieldAmount;
+                                  })();
+                                return `(${eachGrams.toFixed(2)}g / each)`;
+                              })()}
+                            </span>
+                          )}
                         </div>
                       )}
                     </td>
