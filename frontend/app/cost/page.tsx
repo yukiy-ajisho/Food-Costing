@@ -19,11 +19,13 @@ import {
   costAPI,
   baseItemsAPI,
   vendorProductsAPI,
+  vendorsAPI,
   type Item,
   type RecipeLine as APIRecipeLine,
   type LaborRole,
   type BaseItem,
   type VendorProduct,
+  type Vendor,
 } from "@/lib/api";
 import { checkCyclesForItems } from "@/lib/cycle-detection";
 import {
@@ -42,6 +44,7 @@ interface RecipeLine {
   child_item_id?: string; // ingredient only
   quantity?: number; // ingredient only
   unit?: string; // ingredient only
+  specific_child?: string | null; // "lowest" or vendor_product.id (only for raw items)
   labor_role?: string; // labor only
   minutes?: number; // labor only
   isMarkedForDeletion?: boolean;
@@ -76,6 +79,7 @@ export default function CostPage() {
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
   const [baseItems, setBaseItems] = useState<BaseItem[]>([]);
   const [vendorProducts, setVendorProducts] = useState<VendorProduct[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);
   const [originalItems, setOriginalItems] = useState<PreppedItem[]>([]);
@@ -104,6 +108,9 @@ export default function CostPage() {
         // Vendor Productsを取得（バリデーション用）
         const vendorProductsData = await vendorProductsAPI.getAll();
         setVendorProducts(vendorProductsData);
+        // Vendorsを取得（Vendor列の表示用）
+        const vendorsData = await vendorsAPI.getAll();
+        setVendors(vendorsData);
         // Labor Rolesを取得
         const roles = await laborRolesAPI.getAll();
         setLaborRoles(roles);
@@ -137,6 +144,7 @@ export default function CostPage() {
                 child_item_id: line.child_item_id || undefined,
                 quantity: line.quantity || undefined,
                 unit: line.unit || undefined,
+                specific_child: line.specific_child || null,
                 labor_role: line.labor_role || undefined,
                 minutes: line.minutes || undefined,
               })),
@@ -503,6 +511,7 @@ export default function CostPage() {
                 child_item_id: line.child_item_id,
                 quantity: line.quantity,
                 unit: line.unit,
+                specific_child: line.specific_child || null,
               });
             } else if (line.line_type === "labor") {
               if (!line.minutes) continue;
@@ -542,6 +551,7 @@ export default function CostPage() {
                   child_item_id: line.child_item_id,
                   quantity: line.quantity,
                   unit: line.unit,
+                  specific_child: line.specific_child || null,
                 });
               } else if (line.line_type === "labor") {
                 if (!line.minutes) continue;
@@ -558,6 +568,7 @@ export default function CostPage() {
                   child_item_id: line.child_item_id || null,
                   quantity: line.quantity || null,
                   unit: line.unit || null,
+                  specific_child: line.specific_child || null,
                 });
               } else if (line.line_type === "labor") {
                 await recipeLinesAPI.update(line.id, {
@@ -609,6 +620,7 @@ export default function CostPage() {
               child_item_id: line.child_item_id || undefined,
               quantity: line.quantity || undefined,
               unit: line.unit || undefined,
+              specific_child: line.specific_child || null,
               labor_role: line.labor_role || undefined,
               minutes: line.minutes || undefined,
             })),
@@ -739,7 +751,7 @@ export default function CostPage() {
     itemId: string,
     lineId: string,
     field: keyof RecipeLine,
-    value: string | number
+    value: string | number | null
   ) => {
     setItems(
       items.map((item) =>
@@ -750,7 +762,7 @@ export default function CostPage() {
                 if (line.id === lineId) {
                   const updatedLine = { ...line, [field]: value };
 
-                  // child_item_idが変更された場合、unitをリセット
+                  // child_item_idが変更された場合、unitとspecific_childをリセット
                   if (field === "child_item_id") {
                     const availableUnits = getAvailableUnitsForItem(
                       value as string
@@ -758,6 +770,8 @@ export default function CostPage() {
                     // 利用可能な単位の最初のものをデフォルトとして設定
                     updatedLine.unit =
                       availableUnits.length > 0 ? availableUnits[0] : "g";
+                    // specific_childをリセット（新しいitemに応じて再設定する必要がある）
+                    updatedLine.specific_child = null;
                   }
 
                   return updatedLine;
@@ -809,6 +823,24 @@ export default function CostPage() {
     setItems([...items, newItem]);
   };
 
+  // 利用可能なvendor_productsを取得（child_item_idがrawの場合）
+  const getAvailableVendorProducts = (childItemId: string): VendorProduct[] => {
+    if (!childItemId) return [];
+
+    const childItem = availableItems.find((i) => i.id === childItemId);
+    if (
+      !childItem ||
+      childItem.item_kind !== "raw" ||
+      !childItem.base_item_id
+    ) {
+      return [];
+    }
+
+    return vendorProducts.filter(
+      (vp) => vp.base_item_id === childItem.base_item_id
+    );
+  };
+
   // レシピライン追加（Ingredient）
   const handleAddIngredientLine = (itemId: string) => {
     setItems(
@@ -824,6 +856,7 @@ export default function CostPage() {
                   child_item_id: "",
                   quantity: 0,
                   unit: "g",
+                  specific_child: null,
                   isNew: true,
                 },
               ],
@@ -1378,6 +1411,9 @@ export default function CostPage() {
                                     Item
                                   </th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                    Vendor
+                                  </th>
+                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
                                     Quantity
                                   </th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
@@ -1426,6 +1462,177 @@ export default function CostPage() {
                                             )?.name || "-"}
                                           </div>
                                         )}
+                                      </td>
+                                      {/* Vendor列 */}
+                                      <td className="px-4 py-2">
+                                        {(() => {
+                                          const childItem = availableItems.find(
+                                            (i) => i.id === line.child_item_id
+                                          );
+                                          const isRawItem =
+                                            childItem?.item_kind === "raw";
+                                          const availableVendorProducts =
+                                            getAvailableVendorProducts(
+                                              line.child_item_id || ""
+                                            );
+
+                                          if (!isRawItem) {
+                                            return (
+                                              <div className="text-sm text-gray-400">
+                                                -
+                                              </div>
+                                            );
+                                          }
+
+                                          if (isEditMode) {
+                                            return (
+                                              <div className="space-y-2">
+                                                <div className="flex items-center gap-4">
+                                                  <label className="flex items-center gap-1">
+                                                    <input
+                                                      type="radio"
+                                                      name={`vendor-${line.id}`}
+                                                      checked={
+                                                        line.specific_child ===
+                                                          null ||
+                                                        line.specific_child ===
+                                                          "lowest"
+                                                      }
+                                                      onChange={() =>
+                                                        handleRecipeLineChange(
+                                                          item.id,
+                                                          line.id,
+                                                          "specific_child",
+                                                          "lowest"
+                                                        )
+                                                      }
+                                                      className="w-4 h-4"
+                                                    />
+                                                    <span className="text-sm">
+                                                      Lowest
+                                                    </span>
+                                                  </label>
+                                                  <label className="flex items-center gap-1">
+                                                    <input
+                                                      type="radio"
+                                                      name={`vendor-${line.id}`}
+                                                      checked={
+                                                        line.specific_child !==
+                                                          null &&
+                                                        line.specific_child !==
+                                                          "lowest"
+                                                      }
+                                                      onChange={() => {
+                                                        // Specificを選択したら、最初のvendor_productを選択
+                                                        if (
+                                                          availableVendorProducts.length >
+                                                          0
+                                                        ) {
+                                                          handleRecipeLineChange(
+                                                            item.id,
+                                                            line.id,
+                                                            "specific_child",
+                                                            availableVendorProducts[0]
+                                                              .id
+                                                          );
+                                                        }
+                                                      }}
+                                                      className="w-4 h-4"
+                                                    />
+                                                    <span className="text-sm">
+                                                      Specific
+                                                    </span>
+                                                  </label>
+                                                </div>
+                                                {line.specific_child !== null &&
+                                                  line.specific_child !==
+                                                    "lowest" && (
+                                                    <select
+                                                      value={
+                                                        line.specific_child
+                                                      }
+                                                      onChange={(e) =>
+                                                        handleRecipeLineChange(
+                                                          item.id,
+                                                          line.id,
+                                                          "specific_child",
+                                                          e.target.value
+                                                        )
+                                                      }
+                                                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    >
+                                                      {availableVendorProducts.map(
+                                                        (vp) => {
+                                                          const vendor =
+                                                            vendors.find(
+                                                              (v) =>
+                                                                v.id ===
+                                                                vp.vendor_id
+                                                            );
+                                                          const displayName =
+                                                            vp.product_name ||
+                                                            vp.brand_name ||
+                                                            vendor?.name ||
+                                                            vp.id;
+                                                          return (
+                                                            <option
+                                                              key={vp.id}
+                                                              value={vp.id}
+                                                            >
+                                                              {displayName}
+                                                              {vendor
+                                                                ? ` (${vendor.name})`
+                                                                : ""}
+                                                            </option>
+                                                          );
+                                                        }
+                                                      )}
+                                                    </select>
+                                                  )}
+                                              </div>
+                                            );
+                                          } else {
+                                            // 表示モード
+                                            if (
+                                              line.specific_child === null ||
+                                              line.specific_child === "lowest"
+                                            ) {
+                                              return (
+                                                <div className="text-sm text-gray-900">
+                                                  Lowest
+                                                </div>
+                                              );
+                                            } else {
+                                              const selectedVendorProduct =
+                                                availableVendorProducts.find(
+                                                  (vp) =>
+                                                    vp.id ===
+                                                    line.specific_child
+                                                );
+                                              const vendor =
+                                                selectedVendorProduct
+                                                  ? vendors.find(
+                                                      (v) =>
+                                                        v.id ===
+                                                        selectedVendorProduct.vendor_id
+                                                    )
+                                                  : null;
+                                              const displayName =
+                                                selectedVendorProduct?.product_name ||
+                                                selectedVendorProduct?.brand_name ||
+                                                vendor?.name ||
+                                                line.specific_child;
+                                              return (
+                                                <div className="text-sm text-gray-900">
+                                                  {displayName}
+                                                  {vendor
+                                                    ? ` (${vendor.name})`
+                                                    : ""}
+                                                </div>
+                                              );
+                                            }
+                                          }
+                                        })()}
                                       </td>
                                       <td className="px-4 py-2">
                                         {isEditMode ? (
@@ -1560,7 +1767,7 @@ export default function CostPage() {
                                 {isEditMode && (
                                   <tr>
                                     <td
-                                      colSpan={isEditMode ? 4 : 3}
+                                      colSpan={isEditMode ? 5 : 4}
                                       className="px-4 py-2"
                                     >
                                       <button

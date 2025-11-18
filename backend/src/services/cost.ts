@@ -91,6 +91,7 @@ function computeRawCost(
  * @param itemsMap - Itemsのマップ（item_idをキーとして）
  * @param vendorProductsMap - Vendor Productsのマップ（vendor_product_idをキーとして）
  * @param laborRoles - 役職のマップ
+ * @param specificVendorProductId - 特定のvendor_productを指定（"lowest" | vendor_product.id | null）
  * @returns 1グラムあたりのコスト
  */
 export async function getCost(
@@ -99,7 +100,8 @@ export async function getCost(
   baseItemsMap: Map<string, BaseItem> = new Map(),
   itemsMap: Map<string, Item> = new Map(),
   vendorProductsMap: Map<string, VendorProduct> = new Map(),
-  laborRoles: Map<string, LaborRole> = new Map()
+  laborRoles: Map<string, LaborRole> = new Map(),
+  specificVendorProductId: string | "lowest" | null = null
 ): Promise<number> {
   // 1. キャッシュチェック
   if (costCache.has(itemId)) {
@@ -162,7 +164,7 @@ export async function getCost(
         throw new Error(`Raw item ${itemId} has no base_item_id`);
       }
 
-      // base_item_idで全てのvendor_productsを取得
+      // base_item_idで全てのvendor_productsを取得（統一した経路）
       const matchingVendorProducts: VendorProduct[] = [];
       for (const vp of vendorProductsMap.values()) {
         if (vp.base_item_id === item.base_item_id) {
@@ -176,33 +178,55 @@ export async function getCost(
         );
       }
 
-      // 1グラムあたりのコストを計算して、最安のものを選択
-      let cheapestVendorProduct: VendorProduct | undefined;
-      let cheapestCostPerGram = Infinity;
+      let selectedVendorProduct: VendorProduct | undefined;
+      let costPerGram: number;
 
-      for (const vp of matchingVendorProducts) {
-        try {
-          const costPerGram = computeRawCost(item, vp, baseItemsMap);
-          if (costPerGram < cheapestCostPerGram) {
-            cheapestCostPerGram = costPerGram;
-            cheapestVendorProduct = vp;
+      // specificVendorProductIdに応じて処理を分岐
+      if (
+        specificVendorProductId === "lowest" ||
+        specificVendorProductId === null
+      ) {
+        // 最安のものを選択
+        let cheapestCostPerGram = Infinity;
+
+        for (const vp of matchingVendorProducts) {
+          try {
+            const vpCostPerGram = computeRawCost(item, vp, baseItemsMap);
+            if (vpCostPerGram < cheapestCostPerGram) {
+              cheapestCostPerGram = vpCostPerGram;
+              selectedVendorProduct = vp;
+            }
+          } catch (error) {
+            // 計算できないvendor_productはスキップ
+            console.warn(
+              `Failed to calculate cost for vendor product ${vp.id}:`,
+              error
+            );
           }
-        } catch (error) {
-          // 計算できないvendor_productはスキップ
-          console.warn(
-            `Failed to calculate cost for vendor product ${vp.id}:`,
-            error
+        }
+
+        if (!selectedVendorProduct) {
+          throw new Error(
+            `No valid vendor product found for base_item ${item.base_item_id}`
           );
         }
-      }
 
-      if (!cheapestVendorProduct) {
-        throw new Error(
-          `No valid vendor product found for base_item ${item.base_item_id}`
+        costPerGram = cheapestCostPerGram;
+      } else {
+        // 特定のvendor_productを指定
+        selectedVendorProduct = matchingVendorProducts.find(
+          (vp) => vp.id === specificVendorProductId
         );
+
+        if (!selectedVendorProduct) {
+          throw new Error(
+            `Vendor product ${specificVendorProductId} not found for base_item ${item.base_item_id}`
+          );
+        }
+
+        costPerGram = computeRawCost(item, selectedVendorProduct, baseItemsMap);
       }
 
-      const costPerGram = cheapestCostPerGram;
       costCache.set(itemId, costPerGram);
       return costPerGram;
     }
@@ -356,6 +380,18 @@ export async function getCost(
           );
         }
 
+        // 子アイテムのitem_kindを確認
+        await ensureItemInMap(line.child_item_id);
+        const childItem = itemsMap.get(line.child_item_id);
+        if (!childItem) {
+          throw new Error(`Child item ${line.child_item_id} not found`);
+        }
+
+        // 子アイテムがrawの場合、specific_childを渡す
+        // preppedの場合はnullを渡す（vendor_productは関係ない）
+        const specificVendorProductId =
+          childItem.item_kind === "raw" ? line.specific_child || null : null;
+
         // 子アイテムのコストを再帰的に取得
         const childCostPerGram = await getCost(
           line.child_item_id,
@@ -363,7 +399,8 @@ export async function getCost(
           baseItemsMap,
           itemsMap,
           vendorProductsMap,
-          laborRoles
+          laborRoles,
+          specificVendorProductId
         );
 
         ingredientCost += grams * childCostPerGram;

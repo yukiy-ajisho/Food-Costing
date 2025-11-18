@@ -50,6 +50,7 @@ export interface RecipeLine {
   child_item_id?: string | null;
   quantity?: number | null;
   unit?: string | null;
+  specific_child?: string | null; // "lowest" or vendor_product.id (only for raw items)
   labor_role?: string | null;
   minutes?: number | null;
 }
