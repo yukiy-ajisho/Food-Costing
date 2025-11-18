@@ -4,7 +4,7 @@ import {
   isMassUnit,
   isNonMassUnit,
 } from "../constants/units";
-import { Item, RawItem } from "../types/database";
+import { Item, BaseItem, VendorProduct } from "../types/database";
 
 /**
  * 単位変換サービス
@@ -39,7 +39,8 @@ function convertVolumeUnitToLiters(unit: string, quantity: number): number {
  * @param quantity - 数量
  * @param itemId - アイテムID（非質量単位の場合に必要）
  * @param itemsMap - Itemsのマップ（item_idをキーとして）
- * @param rawItemsMap - Raw Itemsのマップ（raw_item_idをキーとして）
+ * @param baseItemsMap - Base Itemsのマップ（base_item_idをキーとして）
+ * @param vendorProductsMap - Vendor Productsのマップ（vendor_product_idをキーとして）
  * @returns グラム数
  */
 export function convertToGrams(
@@ -47,38 +48,27 @@ export function convertToGrams(
   quantity: number,
   itemId: string,
   itemsMap: Map<string, Item>,
-  rawItemsMap: Map<string, RawItem>
+  baseItemsMap: Map<string, BaseItem>,
+  vendorProductsMap?: Map<string, VendorProduct>
 ): number {
   // 質量単位の場合
   if (isMassUnit(unit)) {
     return convertMassUnitToGrams(unit, quantity);
   }
 
-  // 非質量単位の場合、itemからraw_item_idを取得
+  // 非質量単位の場合
   const item = itemsMap.get(itemId);
   if (!item) {
     throw new Error(`Item ${itemId} not found in itemsMap`);
   }
 
-  if (!item.raw_item_id) {
-    throw new Error(`Item ${itemId} has no raw_item_id`);
-  }
-
-  const rawItem = rawItemsMap.get(item.raw_item_id);
-  if (!rawItem) {
-    throw new Error(
-      `Raw item ${item.raw_item_id} not found in rawItemsMap for item ${itemId}`
-    );
-  }
-
   if (unit === "each") {
     // eachの場合
-    if (!rawItem.each_grams) {
-      throw new Error(
-        `Item ${itemId} uses 'each' unit but raw_item ${item.raw_item_id} has no each_grams`
-      );
+    // Prepped ItemまたはRaw Itemのeach_gramsを使用
+    if (!item.each_grams) {
+      throw new Error(`Item ${itemId} uses 'each' unit but has no each_grams`);
     }
-    return quantity * rawItem.each_grams;
+    return quantity * item.each_grams;
   }
 
   // その他の非質量単位（gallon, liter, floz）
@@ -86,17 +76,34 @@ export function convertToGrams(
     throw new Error(`Invalid unit: ${unit}`);
   }
 
-  if (!rawItem.specific_weight) {
-    throw new Error(
-      `Item ${itemId} uses non-mass unit ${unit} but raw_item ${item.raw_item_id} has no specific_weight`
-    );
+  // Raw Itemの場合、base_item → specific_weight
+  if (item.item_kind === "raw") {
+    if (!item.base_item_id) {
+      throw new Error(`Raw item ${itemId} has no base_item_id`);
+    }
+
+    const baseItem = baseItemsMap.get(item.base_item_id);
+    if (!baseItem) {
+      throw new Error(
+        `Base item ${item.base_item_id} not found for item ${itemId}`
+      );
+    }
+
+    if (!baseItem.specific_weight) {
+      throw new Error(
+        `Item ${itemId} uses non-mass unit ${unit} but base_item ${item.base_item_id} has no specific_weight`
+      );
+    }
+
+    // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
+    const litersPerUnit = VOLUME_UNIT_TO_LITERS[unit];
+    if (!litersPerUnit) {
+      throw new Error(`Invalid non-mass unit: ${unit}`);
+    }
+    const gramsPerSourceUnit = baseItem.specific_weight * 1000 * litersPerUnit;
+    return quantity * gramsPerSourceUnit;
   }
 
-  // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
-  const litersPerUnit = VOLUME_UNIT_TO_LITERS[unit];
-  if (!litersPerUnit) {
-    throw new Error(`Invalid non-mass unit: ${unit}`);
-  }
-  const gramsPerSourceUnit = rawItem.specific_weight * 1000 * litersPerUnit;
-  return quantity * gramsPerSourceUnit;
+  // Prepped Itemの場合、非質量単位は使用できない
+  throw new Error(`Prepped item ${itemId} cannot use non-mass unit ${unit}`);
 }

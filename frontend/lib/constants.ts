@@ -16,10 +16,29 @@ export const VOLUME_UNIT_TO_LITERS: Record<string, number> = {
   gallon: 3.78541, // 1 gallon = 3.78541 liters
   liter: 1, // 1 liter = 1 liter
   floz: 0.0295735, // 1 floz = 0.0295735 liters
+  ml: 0.001, // 1 ml = 0.001 liter
 };
 
 // 非質量単位のリスト
-export const NON_MASS_UNITS: string[] = ["gallon", "liter", "floz", "each"];
+export const NON_MASS_UNITS: string[] = [
+  "gallon",
+  "liter",
+  "floz",
+  "ml",
+  "each",
+];
+
+// 質量単位の順番（表示順序を制御）
+export const MASS_UNITS_ORDERED: string[] = ["g", "kg", "oz", "lb"];
+
+// 非質量単位の順番（表示順序を制御）
+export const NON_MASS_UNITS_ORDERED: string[] = [
+  "floz",
+  "ml",
+  "liter",
+  "gallon",
+  "each",
+];
 
 /**
  * 質量単位かどうかを判定
