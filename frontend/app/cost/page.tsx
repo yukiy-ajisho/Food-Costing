@@ -836,9 +836,92 @@ export default function CostPage() {
       return [];
     }
 
-    return vendorProducts.filter(
+    const matchingVendorProducts = vendorProducts.filter(
       (vp) => vp.base_item_id === childItem.base_item_id
     );
+
+    // vendor名（アルファベット順）→ product_name（アルファベット順）でソート
+    return matchingVendorProducts.sort((a, b) => {
+      const vendorA = vendors.find((v) => v.id === a.vendor_id);
+      const vendorB = vendors.find((v) => v.id === b.vendor_id);
+      const vendorNameA = vendorA?.name || "";
+      const vendorNameB = vendorB?.name || "";
+
+      // まずvendor名で比較
+      if (vendorNameA !== vendorNameB) {
+        return vendorNameA.localeCompare(vendorNameB);
+      }
+
+      // 同じvendorの場合、product_nameで比較
+      const productNameA = a.product_name || a.brand_name || "";
+      const productNameB = b.product_name || b.brand_name || "";
+      return productNameA.localeCompare(productNameB);
+    });
+  };
+
+  // vendor_productの1kgあたりのコストを計算（gあたりのコスト × 1000）
+  const calculateCostPerKg = (
+    vendorProduct: VendorProduct,
+    childItem: Item
+  ): number | null => {
+    try {
+      if (
+        !vendorProduct.purchase_unit ||
+        !vendorProduct.purchase_quantity ||
+        !vendorProduct.purchase_cost
+      ) {
+        return null;
+      }
+
+      // 質量単位の場合
+      const multiplier = MASS_UNIT_CONVERSIONS[vendorProduct.purchase_unit];
+      if (multiplier) {
+        const grams = vendorProduct.purchase_quantity * multiplier;
+        const costPerGram = vendorProduct.purchase_cost / grams;
+        return costPerGram * 1000; // kgあたりのコスト
+      }
+
+      // 非質量単位の場合
+      if (!childItem.base_item_id) {
+        return null;
+      }
+
+      const baseItem = baseItems.find((b) => b.id === childItem.base_item_id);
+      if (!baseItem) {
+        return null;
+      }
+
+      let grams: number;
+
+      if (vendorProduct.purchase_unit === "each") {
+        // eachの場合、items.each_gramsを使用
+        if (!childItem.each_grams) {
+          return null;
+        }
+        grams = vendorProduct.purchase_quantity * childItem.each_grams;
+      } else if (isNonMassUnit(vendorProduct.purchase_unit)) {
+        // その他の非質量単位（gallon, liter, floz, ml）
+        if (!baseItem.specific_weight) {
+          return null;
+        }
+        // g/ml × 1000 (ml/L) × リットルへの変換係数 = 購入単位あたりのグラム数
+        const litersPerUnit =
+          VOLUME_UNIT_TO_LITERS[vendorProduct.purchase_unit];
+        if (!litersPerUnit) {
+          return null;
+        }
+        const gramsPerSourceUnit =
+          baseItem.specific_weight * 1000 * litersPerUnit;
+        grams = vendorProduct.purchase_quantity * gramsPerSourceUnit;
+      } else {
+        return null;
+      }
+
+      const costPerGram = vendorProduct.purchase_cost / grams;
+      return costPerGram * 1000; // kgあたりのコスト
+    } catch (error) {
+      return null;
+    }
   };
 
   // レシピライン追加（Ingredient）
@@ -1411,7 +1494,7 @@ export default function CostPage() {
                                     Item
                                   </th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
-                                    Vendor
+                                    Vendor Selection
                                   </th>
                                   <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
                                     Quantity
@@ -1569,20 +1652,39 @@ export default function CostPage() {
                                                                 v.id ===
                                                                 vp.vendor_id
                                                             );
-                                                          const displayName =
+                                                          const vendorName =
+                                                            vendor?.name || "";
+                                                          const productName =
                                                             vp.product_name ||
                                                             vp.brand_name ||
-                                                            vendor?.name ||
-                                                            vp.id;
+                                                            "";
+                                                          const childItem =
+                                                            availableItems.find(
+                                                              (i) =>
+                                                                i.id ===
+                                                                line.child_item_id
+                                                            );
+                                                          const costPerKg =
+                                                            childItem
+                                                              ? calculateCostPerKg(
+                                                                  vp,
+                                                                  childItem
+                                                                )
+                                                              : null;
+                                                          const costDisplay =
+                                                            costPerKg !== null
+                                                              ? `    $${costPerKg.toFixed(
+                                                                  2
+                                                                )}/kg`
+                                                              : "";
                                                           return (
                                                             <option
                                                               key={vp.id}
                                                               value={vp.id}
                                                             >
-                                                              {displayName}
-                                                              {vendor
-                                                                ? ` (${vendor.name})`
-                                                                : ""}
+                                                              {vendorName} -{" "}
+                                                              {productName}
+                                                              {costDisplay}
                                                             </option>
                                                           );
                                                         }
@@ -1617,17 +1719,35 @@ export default function CostPage() {
                                                         selectedVendorProduct.vendor_id
                                                     )
                                                   : null;
-                                              const displayName =
+                                              const vendorName =
+                                                vendor?.name || "";
+                                              const productName =
                                                 selectedVendorProduct?.product_name ||
                                                 selectedVendorProduct?.brand_name ||
-                                                vendor?.name ||
-                                                line.specific_child;
+                                                "";
+                                              const childItem =
+                                                availableItems.find(
+                                                  (i) =>
+                                                    i.id === line.child_item_id
+                                                );
+                                              const costPerKg =
+                                                childItem &&
+                                                selectedVendorProduct
+                                                  ? calculateCostPerKg(
+                                                      selectedVendorProduct,
+                                                      childItem
+                                                    )
+                                                  : null;
+                                              const costDisplay =
+                                                costPerKg !== null
+                                                  ? `    $${costPerKg.toFixed(
+                                                      2
+                                                    )}/kg`
+                                                  : "";
                                               return (
                                                 <div className="text-sm text-gray-900">
-                                                  {displayName}
-                                                  {vendor
-                                                    ? ` (${vendor.name})`
-                                                    : ""}
+                                                  {vendorName} - {productName}
+                                                  {costDisplay}
                                                 </div>
                                               );
                                             }
