@@ -385,9 +385,11 @@ export default function ItemsPage() {
       setVendorProducts(vendorProductsUI);
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
       setIsEditModeItems(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoadingItems(false);
     }
@@ -555,9 +557,11 @@ export default function ItemsPage() {
       // Itemsタブのプルダウン用にbaseItemsも更新
       setBaseItems(baseItemsData);
       setIsEditModeBaseItems(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoadingBaseItems(false);
     }
@@ -642,9 +646,11 @@ export default function ItemsPage() {
       setVendorsUI(vendorsUIUpdated);
       setOriginalVendors(JSON.parse(JSON.stringify(vendorsUIUpdated)));
       setIsEditModeVendors(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoadingVendors(false);
     }

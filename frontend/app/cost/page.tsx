@@ -468,8 +468,10 @@ export default function CostPage() {
 
         // 循環参照をチェック
         checkCyclesForItems(itemIdsToCheck, itemsMap, recipeLinesMap);
-      } catch (cycleError: any) {
-        alert(cycleError.message);
+      } catch (cycleError: unknown) {
+        const message =
+          cycleError instanceof Error ? cycleError.message : String(cycleError);
+        alert(message);
         setLoading(false);
         return;
       }
@@ -622,9 +624,11 @@ export default function CostPage() {
       setItems(itemsWithRecipes);
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
       setIsEditMode(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoading(false);
     }

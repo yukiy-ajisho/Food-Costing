@@ -94,9 +94,11 @@ export default function SettingsPage() {
       setLaborRoles(roles);
       setOriginalLaborRoles(JSON.parse(JSON.stringify(roles)));
       setIsEditMode(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoading(false);
     }
