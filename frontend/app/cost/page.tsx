@@ -643,7 +643,7 @@ export default function CostPage() {
   const handleItemChange = (
     id: string,
     field: keyof PreppedItem,
-    value: string | number | boolean
+    value: string | number | boolean | null
   ) => {
     setItems(
       items.map((item) => (item.id === id ? { ...item, [field]: value } : item))
