@@ -40,8 +40,10 @@ router.post("/", async (req, res) => {
     }
 
     res.status(201).json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
   }
 });
 
@@ -66,8 +68,10 @@ router.put("/:id", async (req, res) => {
     }
 
     res.json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
   }
 });
 
@@ -87,8 +91,10 @@ router.delete("/:id", async (req, res) => {
     }
 
     res.status(204).send();
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
   }
 });
 

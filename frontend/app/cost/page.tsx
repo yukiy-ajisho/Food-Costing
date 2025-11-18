@@ -28,7 +28,6 @@ import {
 import { checkCyclesForItems } from "@/lib/cycle-detection";
 import {
   MASS_UNIT_CONVERSIONS,
-  NON_MASS_UNITS,
   MASS_UNITS_ORDERED,
   NON_MASS_UNITS_ORDERED,
   VOLUME_UNIT_TO_LITERS,
@@ -67,7 +66,7 @@ interface PreppedItem {
 }
 
 // 単位のオプション（順番を制御）
-const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
+// const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED]; // 未使用のためコメントアウト
 
 // Yieldの単位オプション（gとeachのみ）
 const yieldUnitOptions = ["g", "each"];
@@ -468,8 +467,10 @@ export default function CostPage() {
 
         // 循環参照をチェック
         checkCyclesForItems(itemIdsToCheck, itemsMap, recipeLinesMap);
-      } catch (cycleError: any) {
-        alert(cycleError.message);
+      } catch (cycleError: unknown) {
+        const message =
+          cycleError instanceof Error ? cycleError.message : String(cycleError);
+        alert(message);
         setLoading(false);
         return;
       }
@@ -622,9 +623,10 @@ export default function CostPage() {
       setItems(itemsWithRecipes);
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
       setIsEditMode(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -866,10 +868,10 @@ export default function CostPage() {
   }));
 
   // laborRolesをSearchableSelect用の形式に変換
-  const laborRolesForSelect = laborRoles.map((role) => ({
-    id: role.name,
-    name: role.name,
-  }));
+  // const laborRolesForSelect = laborRoles.map((role) => ({
+  //   id: role.name,
+  //   name: role.name,
+  // })); // 未使用のためコメントアウト
 
   // 検索・フィルター処理
   const filteredItems = items.filter((item) => {

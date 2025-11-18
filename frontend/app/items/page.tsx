@@ -7,15 +7,12 @@ import {
   itemsAPI,
   baseItemsAPI,
   vendorsAPI,
-  type VendorProduct,
   type Item,
   type BaseItem as APIBaseItem,
   type Vendor,
 } from "@/lib/api";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import {
-  MASS_UNIT_CONVERSIONS,
-  NON_MASS_UNITS,
   MASS_UNITS_ORDERED,
   NON_MASS_UNITS_ORDERED,
   isNonMassUnit,
@@ -304,7 +301,7 @@ export default function ItemsPage() {
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
           // 新規作成: vendor_productsを作成（自動的にitemsも作成される）
-          const newVendorProduct = await vendorProductsAPI.create({
+          await vendorProductsAPI.create({
             base_item_id: vp.base_item_id,
             vendor_id: vp.vendor_id,
             product_name: vp.product_name || null,
@@ -385,9 +382,10 @@ export default function ItemsPage() {
       setVendorProducts(vendorProductsUI);
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
       setIsEditModeItems(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoadingItems(false);
     }
@@ -555,9 +553,10 @@ export default function ItemsPage() {
       // Itemsタブのプルダウン用にbaseItemsも更新
       setBaseItems(baseItemsData);
       setIsEditModeBaseItems(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoadingBaseItems(false);
     }
@@ -642,9 +641,10 @@ export default function ItemsPage() {
       setVendorsUI(vendorsUIUpdated);
       setOriginalVendors(JSON.parse(JSON.stringify(vendorsUIUpdated)));
       setIsEditModeVendors(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoadingVendors(false);
     }
@@ -684,30 +684,31 @@ export default function ItemsPage() {
   // =========================================================
   // レンダリング
   // =========================================================
-  const getLastItemId = () => {
-    return vendorProducts.length > 0
-      ? vendorProducts[vendorProducts.length - 1].id
-      : "";
-  };
+  // 未使用の関数と変数を削除
+  // const getLastItemId = () => {
+  //   return vendorProducts.length > 0
+  //     ? vendorProducts[vendorProducts.length - 1].id
+  //     : "";
+  // };
 
-  const getLastBaseItemId = () => {
-    return baseItemsUI.length > 0 ? baseItemsUI[baseItemsUI.length - 1].id : "";
-  };
+  // const getLastBaseItemId = () => {
+  //   return baseItemsUI.length > 0 ? baseItemsUI[baseItemsUI.length - 1].id : "";
+  // };
 
-  const getLastVendorId = () => {
-    return vendorsUI.length > 0 ? vendorsUI[vendorsUI.length - 1].id : "";
-  };
+  // const getLastVendorId = () => {
+  //   return vendorsUI.length > 0 ? vendorsUI[vendorsUI.length - 1].id : "";
+  // };
 
   // Base ItemsとVendorsのオプション（SearchableSelect用）
-  const baseItemsOptions = baseItems.map((item) => ({
-    id: item.id,
-    name: item.name,
-  }));
+  // const baseItemsOptions = baseItems.map((item) => ({
+  //   id: item.id,
+  //   name: item.name,
+  // })); // 未使用のためコメントアウト
 
-  const vendorsOptions = vendors.map((vendor) => ({
-    id: vendor.id,
-    name: vendor.name,
-  }));
+  // const vendorsOptions = vendors.map((vendor) => ({
+  //   id: vendor.id,
+  //   name: vendor.name,
+  // })); // 未使用のためコメントアウト
 
   // 現在のタブのローディング状態
   const isLoading =

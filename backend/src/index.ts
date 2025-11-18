@@ -1,4 +1,5 @@
 // 環境変数を最初に読み込む（インポートより前）
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 require("dotenv").config();
 
 import express from "express";

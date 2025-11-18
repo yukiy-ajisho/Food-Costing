@@ -16,8 +16,10 @@ router.get("/", async (req, res) => {
     }));
 
     res.json(nonMassUnits);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
   }
 });
 

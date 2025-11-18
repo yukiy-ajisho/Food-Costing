@@ -24,7 +24,9 @@ function convertMassUnitToGrams(unit: string, quantity: number): number {
 
 /**
  * 非質量単位（each以外）をリットルに変換
+ * @deprecated 現在未使用。将来的に使用する可能性があるため残しています。
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function convertVolumeUnitToLiters(unit: string, quantity: number): number {
   const multiplier = VOLUME_UNIT_TO_LITERS[unit];
   if (!multiplier) {
@@ -49,6 +51,7 @@ export function convertToGrams(
   itemId: string,
   itemsMap: Map<string, Item>,
   baseItemsMap: Map<string, BaseItem>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   vendorProductsMap?: Map<string, VendorProduct>
 ): number {
   // 質量単位の場合

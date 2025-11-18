@@ -1,11 +1,5 @@
 import { supabase } from "../config/supabase";
-import {
-  Item,
-  RecipeLine,
-  BaseItem,
-  LaborRole,
-  VendorProduct,
-} from "../types/database";
+import { Item, BaseItem, LaborRole, VendorProduct } from "../types/database";
 import { convertToGrams } from "./units";
 import {
   MASS_UNIT_CONVERSIONS,

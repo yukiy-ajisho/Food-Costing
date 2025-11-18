@@ -4,15 +4,13 @@ import { useState, useEffect } from "react";
 import { Edit, Save, Plus, Trash2, X } from "lucide-react";
 import { laborRolesAPI, type LaborRole } from "@/lib/api";
 
-type TabType = "labor";
-
 // UI用の型（isMarkedForDeletionを追加）
 interface LaborRoleUI extends LaborRole {
   isMarkedForDeletion?: boolean;
 }
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<TabType>("labor");
+  // const [activeTab, setActiveTab] = useState<TabType>("labor"); // 未使用のためコメントアウト
   const [laborRoles, setLaborRoles] = useState<LaborRoleUI[]>([]);
   const [originalLaborRoles, setOriginalLaborRoles] = useState<LaborRoleUI[]>(
     []
@@ -94,9 +92,11 @@ export default function SettingsPage() {
       setLaborRoles(roles);
       setOriginalLaborRoles(JSON.parse(JSON.stringify(roles)));
       setIsEditMode(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to save:", error);
-      alert(`保存に失敗しました: ${error.message}`);
+      const message =
+        error instanceof Error ? error.message : String(error);
+      alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoading(false);
     }
