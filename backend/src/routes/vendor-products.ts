@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
-import { VendorProduct, Item } from "../types/database";
+import { VendorProduct } from "../types/database";
 
 const router = Router();
 
