@@ -174,7 +174,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 - each_grams = 50 (itemsテーブルに自動的に保存される)
 
 ========================================
-【テストケース4.5: 簡単 - Prepped Item（Yield = "each"）を材料として使用】
+【テストケース5: 簡単 - Prepped Item（Yield = "each"）を材料として使用】
 ========================================
 
 目的: Yieldが"each"のPrepped Itemを材料として使う場合、質量単位（g, kg, oz, lb）と"each"を選択できることをテスト
@@ -221,9 +221,9 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 
    Recipe Lines:
    - Ingredient: Boiled Egg
-     Quantity: 2
+     Quantity: 4
      Unit: each ← または g, kg, oz, lb を選択可能
-     （例: 2 each = 100g、または 100 g を直接指定）
+     （例: 4 each = 200g、または 200 g を直接指定）
 
 期待される結果:
 - Egg cost per gram = 3.00 / (12 * 50) = 0.005 $/g
@@ -234,15 +234,15 @@ FOOD COSTING SYSTEM - 包括的テストデータ
   * Cost per gram = 0.25 / 50 = 0.005 $/g
   * each_grams = 50 (itemsテーブルに自動的に保存される)
 - Egg Salad（unit = each の場合）:
-  * Boiled Egg grams = 2 * 50 = 100 g
-  * Ingredient cost = 100 * 0.005 = 0.50
+  * Boiled Egg grams = 4 * 50 = 200 g
+  * Ingredient cost = 200 * 0.005 = 1.00
   * Yield = 200 g
-  * Cost per gram = 0.50 / 200 = 0.0025 $/g
-- Egg Salad（unit = g の場合、例: 100g）:
-  * Boiled Egg grams = 100 g
-  * Ingredient cost = 100 * 0.005 = 0.50
+  * Cost per gram = 1.00 / 200 = 0.005 $/g
+- Egg Salad（unit = g の場合、例: 200g）:
+  * Boiled Egg grams = 200 g
+  * Ingredient cost = 200 * 0.005 = 1.00
   * Yield = 200 g
-  * Cost per gram = 0.50 / 200 = 0.0025 $/g
+  * Cost per gram = 1.00 / 200 = 0.005 $/g
 
 === 5. 確認ポイント ===
 1. Boiled Egg（Yield Unit = "each"）を材料として選択できること
@@ -252,7 +252,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 5. コスト計算が正しく実行されること
 
 ========================================
-【テストケース4.6: Yield Unit = "each"でeach_gramsの自動計算と手動入力】
+【テストケース6: Yield Unit = "each"でeach_gramsの自動計算と手動入力】
 ========================================
 
 目的: Yield Unit = "each"の場合のeach_grams入力機能をテスト（自動計算と手動入力）
@@ -337,7 +337,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 4. 保存後、表示が"(530g / each)"形式になること
 
 ========================================
-【テストケース4.7: Yield Unit = "each"でeach_gramsを手動入力（正常）】
+【テストケース7: Yield Unit = "each"でeach_gramsを手動入力（正常）】
 ========================================
 
 目的: Yield Unit = "each"の場合、each_gramsを手動入力できることをテスト
@@ -411,7 +411,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 4. コスト計算が手動入力値に基づいて行われること
 
 ========================================
-【テストケース4.8: Yield Unit = "each"でeach_gramsを手動入力（エラー）】
+【テストケース8: Yield Unit = "each"でeach_gramsを手動入力（エラー）】
 ========================================
 
 目的: Yield Unit = "each"の場合、each_grams × yield_amountが材料の総合計を超える場合のエラーをテスト
@@ -480,7 +480,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 4. エラーメッセージに適切な値が表示されること
 
 ========================================
-【テストケース4.9: Yield Unit = "each"でYield Amount = 1の場合】
+【テストケース9: Yield Unit = "each"でYield Amount = 1の場合】
 ========================================
 
 目的: Yield Amount = 1の場合のeach_gramsの動作をテスト
@@ -532,7 +532,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 3. 表示が正しいこと
 
 ========================================
-【テストケース4.10: Yield Unit = "each"で複数の材料とLaborを含む場合】
+【テストケース10: Yield Unit = "each"で複数の材料とLaborを含む場合】
 ========================================
 
 目的: Yield Unit = "each"で複数の材料とLaborを含む場合のコスト計算をテスト
@@ -610,7 +610,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 3. コスト計算が正しく行われること（Laborも含む）
 
 ========================================
-【テストケース5: 中程度 - 複数の材料を含むPrepped Item】
+【テストケース11: 中程度 - 複数の材料を含むPrepped Item】
 ========================================
 
 目的: 複数の材料とlaborを含むPrepped Itemのコスト計算をテスト
@@ -699,7 +699,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 - Cost per gram = 11.09 / 1580 ≈ 0.00702 $/g
 
 ========================================
-【テストケース6: 複雑 - 複数のvendor_productsから最安値を選択】
+【テストケース12: 複雑 - 複数のvendor_productsから最安値を選択】
 ========================================
 
 目的: 同じbase_itemに対して複数のvendor_productsがある場合、最安値を選択することをテスト
@@ -756,7 +756,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
   各vendor_productのコストを計算して最安値を選択
 
 ========================================
-【テストケース7: 複雑 - 再帰的な依存関係（Prepped → Prepped → Raw）】
+【テストケース13: 複雑 - 再帰的な依存関係（Prepped → Prepped → Raw）】
 ========================================
 
 目的: Prepped Itemが別のPrepped Itemを使用する場合の再帰的なコスト計算をテスト
@@ -830,7 +830,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
   * Cost per gram = 1.4625 / 1500 = 0.000975 $/g
 
 ========================================
-【テストケース8: 複雑 - 非質量単位の組み合わせ】
+【テストケース14: 複雑 - 非質量単位の組み合わせ】
 ========================================
 
 目的: 複数の非質量単位（gallon, liter, floz）を使用する場合のコスト計算をテスト
@@ -901,7 +901,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
   * Cost per gram = 3.871 / 1004 ≈ 0.00386 $/g
 
 ========================================
-【テストケース9: 複雑 - Yieldが"each"で子アイテムも"each"を使用】
+【テストケース15: 複雑 - Yieldが"each"で子アイテムも"each"を使用】
 ========================================
 
 目的: Yieldが"each"で、子アイテムも"each"を使用する場合のコスト計算をテスト
@@ -967,7 +967,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
   * each_grams = 1100 (itemsテーブルに自動的に保存される)
 
 ========================================
-【テストケース10: 複雑 - 複数のPrepped Itemsが相互に依存】
+【テストケース16: 複雑 - 複数のPrepped Itemsが相互に依存】
 ========================================
 
 目的: 複数のPrepped Itemsが相互に依存する場合のコスト計算をテスト
@@ -1075,7 +1075,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
   * Cost per gram = 1.505 / 2000 = 0.0007525 $/g
 
 ========================================
-【テストケース11: エッジケース - 非常に小さな数量】
+【テストケース17: エッジケース - 非常に小さな数量】
 ========================================
 
 目的: 非常に小さな数量での計算精度をテスト
@@ -1118,7 +1118,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 - Cost per gram = 0.005 / 0.5 = 0.01 $/g
 
 ========================================
-【テストケース12: エッジケース - 非常に大きな数量】
+【テストケース18: エッジケース - 非常に大きな数量】
 ========================================
 
 目的: 非常に大きな数量での計算をテスト
@@ -1161,7 +1161,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 - Cost per gram = 25.00 / 50000 = 0.0005 $/g
 
 ========================================
-【テストケース13: エッジケース - LaborのみのPrepped Item】
+【テストケース19: エッジケース - LaborのみのPrepped Item】
 ========================================
 
 目的: Laborのみで材料がないPrepped Itemのコスト計算をテスト
@@ -1189,7 +1189,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 - Cost per gram = 2.50 / 1 = 2.50 $/g
 
 ========================================
-【テストケース14: エッジケース - 複数のLabor Roles】
+【テストケース20: エッジケース - 複数のLabor Roles】
 ========================================
 
 目的: 複数のLabor Rolesを含むPrepped Itemのコスト計算をテスト
@@ -1246,7 +1246,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 - Cost per gram = 18.25 / 1500 = 0.012167 $/g
 
 ========================================
-【テストケース15: エッジケース - 循環参照の検出】
+【テストケース21: エッジケース - 循環参照の検出】
 ========================================
 
 目的: 循環参照が正しく検出されることをテスト
@@ -1255,7 +1255,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 1. Item A
    Name: Item A
    Type: Prepped
-   Yield Amount: 1000
+   Yield Amount: 500
    Yield Unit: g
 
    Recipe Lines:
@@ -1266,7 +1266,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 2. Item B
    Name: Item B
    Type: Prepped
-   Yield Amount: 1000
+   Yield Amount: 500
    Yield Unit: g
 
    Recipe Lines:
@@ -1294,7 +1294,7 @@ FOOD COSTING SYSTEM - 包括的テストデータ
 5. ログを確認して、正しく動作していることを確認
 
 ========================================
-【テストケース16: 材料変更によるコストの自動更新】
+【テストケース22: 材料変更によるコストの自動更新】
 ========================================
 
 目的: 子アイテムの材料を変更した場合、親アイテムのコストが自動的に更新されることをテスト
@@ -1420,7 +1420,7 @@ Seasoned Flourの材料を変更:
 3. キャッシュが適切にクリアされること（clear_cache=trueを使用するか、自動的にクリアされること）
 
 ========================================
-【テストケース17: 複雑 - 深い階層構造と多様な単位・複数のLabor】
+【テストケース23: 複雑 - 深い階層構造と多様な単位・複数のLabor】
 ========================================
 
 目的: 4階層の深い依存関係、多様な単位（g, kg, gallon, liter, floz, each）、複数のLabor Rolesを含む複雑なコスト計算をテスト
@@ -1585,7 +1585,7 @@ Seasoned Flourの材料を変更:
    Type: Prepped
    Yield Amount: 1050
    Yield Unit: g
-   Notes: (材料の合計1050g、調理で水分が失われる場合を想定)
+   Notes: (材料の合計1050g)
 
    Recipe Lines:
    - Ingredient: Meat
@@ -1623,7 +1623,7 @@ Seasoned Flourの材料を変更:
    Type: Prepped
    Yield Amount: 3000
    Yield Unit: g
-   Notes: (材料の合計3000g)
+   Notes: (材料の合計3054g、水分が蒸発する場合を想定)
 
    Recipe Lines:
    - Ingredient: Teriyaki Sauce
@@ -1717,9 +1717,11 @@ Seasoned Flourの材料を変更:
    - Teriyaki Sauce: 1004 g
    - Seasoned Meat: 1050 g
    - Rice: 1000 g
+   - Total ingredients grams = 1004 + 1050 + 1000 = 3054 g
    - Ingredient cost = (1004 * 0.00685) + (1050 * 0.01746) + (1000 * 0.0012) = 6.877 + 18.333 + 1.20 = 26.41
    - Labor cost = (30 / 60) * 35.00 + (25 / 60) * 25.00 = 17.50 + 10.42 = 27.92
    - Total batch cost = 26.41 + 27.92 = 54.33
+   - Yield = 3000 g (材料の総合計3054g、水分が蒸発して3000gになる)
    - Cost per gram = 54.33 / 3000 = 0.01811 $/g
 
 2. Side Salad:
@@ -1756,7 +1758,7 @@ Seasoned Flourの材料を変更:
 6. 各階層でのコスト計算が正確であること
 
 ========================================
-【テストケース15: 循環参照チェック - 単純な循環参照（A → B → A）】
+【テストケース24: 循環参照チェック - 単純な循環参照（A → B → A）】
 ========================================
 
 目的: 循環参照チェック機能をテスト（保存前にエラーが発生することを確認）
@@ -1796,7 +1798,7 @@ Seasoned Flourの材料を変更:
 **ステップ1: Item Aを作成（正常）**
 1. Item A
    Name: Item A
-   Proceed Yield Amount: 1000
+   Proceed Yield Amount: 500
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Flour (500g)
@@ -1813,7 +1815,7 @@ Seasoned Flourの材料を変更:
 **ステップ3: Item AにItem Bを追加（循環参照エラー）**
 3. Item Aを編集
    Name: Item A
-   Proceed Yield Amount: 1000
+   Proceed Yield Amount: 700
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Flour (500g)
@@ -1837,7 +1839,7 @@ Seasoned Flourの材料を変更:
 4. 既存のItem AとItem Bのデータが変更されないこと
 
 ========================================
-【テストケース16: 循環参照チェック - 複雑な循環参照（A → B → C → A）】
+【テストケース25: 循環参照チェック - 複雑な循環参照（A → B → C → A）】
 ========================================
 
 目的: 3つ以上のアイテムを含む循環参照をテスト
@@ -1889,7 +1891,7 @@ Seasoned Flourの材料を変更:
 **ステップ1: Item Aを作成（正常）**
 1. Item A
    Name: Item A
-   Proceed Yield Amount: 1000
+   Proceed Yield Amount: 500
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Flour (500g)
@@ -1915,7 +1917,7 @@ Seasoned Flourの材料を変更:
 **ステップ4: Item AにItem Cを追加（循環参照エラー）**
 4. Item Aを編集
    Name: Item A
-   Proceed Yield Amount: 1000
+   Proceed Yield Amount: 700
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Flour (500g)
@@ -1940,7 +1942,7 @@ Seasoned Flourの材料を変更:
 4. 既存のItem A、Item B、Item Cのデータが変更されないこと
 
 ========================================
-【テストケース17: 循環参照チェック - 複数アイテムの同時保存】
+【テストケース26: 循環参照チェック - 複数アイテムの同時保存】
 ========================================
 
 目的: 複数のアイテムを同時に保存する場合の循環参照チェックをテスト
@@ -1980,7 +1982,7 @@ Seasoned Flourの材料を変更:
 **既存のアイテム:**
 - Item X（既に存在）
   Name: Item X
-  Proceed Yield Amount: 1000
+  Proceed Yield Amount: 500
   Proceed Yield Unit: g
   Recipe Lines:
     - Ingredient: Flour (500g)
@@ -1998,7 +2000,7 @@ Seasoned Flourの材料を変更:
 **ステップ2: Item Zを作成（正常）**
 2. Item Z（新規）
    Name: Item Z
-   Proceed Yield Amount: 800
+   Proceed Yield Amount: 600
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Item Y (400g) ← 既に保存されたItem Yを材料として使用（選択可能）
@@ -2007,7 +2009,7 @@ Seasoned Flourの材料を変更:
 **ステップ3: Item Xを編集（循環参照エラー）**
 3. Item Xを編集
    Name: Item X
-   Proceed Yield Amount: 1000
+   Proceed Yield Amount: 700
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Flour (500g)
@@ -2043,7 +2045,7 @@ Seasoned Flourの材料を変更:
 6. 既存のデータが変更されないこと（Item XとItem Y）
 
 ========================================
-【テストケース18: 循環参照チェック - 正常なケース（循環参照なし）】
+【テストケース27: 循環参照チェック - 正常なケース（循環参照なし）】
 ========================================
 
 目的: 循環参照がない正常なケースで、保存が成功することを確認
@@ -2095,7 +2097,7 @@ Seasoned Flourの材料を変更:
 **正常な依存関係（循環参照なし）:**
 1. Item A
    Name: Item A
-   Proceed Yield Amount: 1000
+   Proceed Yield Amount: 800
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Flour (500g)
@@ -2134,7 +2136,7 @@ Seasoned Flourの材料を変更:
 4. 依存関係が正しく構築されること
 
 ========================================
-【テストケース19: 循環参照チェック - レシピライン更新時のチェック】
+【テストケース28: 循環参照チェック - レシピライン更新時のチェック】
 ========================================
 
 目的: レシピラインを更新する際の循環参照チェックをテスト
@@ -2174,7 +2176,7 @@ Seasoned Flourの材料を変更:
 **ステップ1: Item Aを作成（正常）**
 1. Item A
    Name: Item A
-   Proceed Yield Amount: 1000
+   Proceed Yield Amount: 500
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Flour (500g)
@@ -2192,7 +2194,7 @@ Seasoned Flourの材料を変更:
 **ステップ3: Item Cを作成（正常）**
 3. Item C
    Name: Item C
-   Proceed Yield Amount: 800
+   Proceed Yield Amount: 400
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Item B (400g) ← 既に保存されたItem Bを材料として使用（選択可能）
@@ -2201,7 +2203,7 @@ Seasoned Flourの材料を変更:
 **ステップ4: Item Bを編集してItem Cを追加（循環参照エラー）**
 4. Item Bを編集
    Name: Item B
-   Proceed Yield Amount: 500
+   Proceed Yield Amount: 600
    Proceed Yield Unit: g
    Recipe Lines:
      - Ingredient: Sugar (200g)
@@ -2232,7 +2234,7 @@ Seasoned Flourの材料を変更:
 6. 既存のデータが変更されないこと（Item A、Item B、Item C）
 
 ========================================
-【テストケース20: ml単位のテスト】
+【テストケース29: ml単位のテスト】
 ========================================
 
 目的: ml単位を使用したRaw ItemとPrepped Itemのコスト計算をテスト
@@ -2282,7 +2284,7 @@ Seasoned Flourの材料を変更:
    Type: Prepped
    Yield Amount: 1500
    Yield Unit: g
-   Notes: (材料の合計1500g)
+   Notes: (材料の合計1530g、水分が蒸発する場合を想定)
 
    Recipe Lines:
    - Ingredient: Milk
@@ -2305,7 +2307,7 @@ Seasoned Flourの材料を変更:
   * Water grams = 500 * 1.00 = 500 g
   * Total ingredients grams = 1030 + 500 = 1530 g
   * Ingredient cost = (1030 * 0.00243) + (500 * 0.001) ≈ 2.503 + 0.50 = 3.003
-  * Yield = 1500 g (材料の総合計1530g以下であることを確認)
+  * Yield = 1500 g (材料の総合計1530g、水分が蒸発して1500gになる)
   * Cost per gram = 3.003 / 1500 ≈ 0.002 $/g
 
 === 5. 確認ポイント ===
@@ -2313,7 +2315,7 @@ Seasoned Flourの材料を変更:
 2. mlを使用する場合、specific_weightが必要であること
 3. ml単位のRaw Itemのコスト計算が正しいこと
 4. ml単位の材料を含むPrepped Itemのコスト計算が正しいこと
-5. Yieldが材料の総合計を超えないこと（1500g ≤ 1530g）
+5. Yieldが材料の総合計を超えないこと（1500g ≤ 1530g、水分が蒸発する場合を想定）
 
 ========================================
 【注意事項】
