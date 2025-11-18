@@ -931,7 +931,7 @@ export default function CostPage() {
 
   return (
     <div className="p-8">
-      <div className="max-w-7xl mx-auto">
+      <div className="max-w-screen-2xl mx-auto">
         {/* ヘッダーとEdit/Save/Cancelボタン */}
         <div className="flex justify-end items-center mb-6 gap-2">
           {isEditMode ? (
