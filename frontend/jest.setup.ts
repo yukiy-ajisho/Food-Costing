@@ -5,5 +5,6 @@ import "@testing-library/jest-dom";
 if (!global.fetch) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   global.fetch = (async () =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ({ ok: true, json: async () => ({}) } as any)) as any;
 }
