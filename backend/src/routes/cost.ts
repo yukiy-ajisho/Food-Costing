@@ -22,7 +22,10 @@ router.get("/items/:id/cost", async (req, res) => {
       item_id: id,
       cost_per_gram: costPerGram,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
     res.status(400).json({
       error: error.message,
     });

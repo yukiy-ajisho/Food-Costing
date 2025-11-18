@@ -27,8 +27,6 @@ import {
 } from "@/lib/api";
 import { checkCyclesForItems } from "@/lib/cycle-detection";
 import {
-  MASS_UNIT_CONVERSIONS,
-  NON_MASS_UNITS,
   MASS_UNITS_ORDERED,
   NON_MASS_UNITS_ORDERED,
   VOLUME_UNIT_TO_LITERS,
@@ -67,7 +65,7 @@ interface PreppedItem {
 }
 
 // 単位のオプション（順番を制御）
-const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
+// const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED]; // 未使用のためコメントアウト
 
 // Yieldの単位オプション（gとeachのみ）
 const yieldUnitOptions = ["g", "each"];
@@ -626,8 +624,7 @@ export default function CostPage() {
       setIsEditMode(false);
     } catch (error: unknown) {
       console.error("Failed to save:", error);
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoading(false);
@@ -870,10 +867,10 @@ export default function CostPage() {
   }));
 
   // laborRolesをSearchableSelect用の形式に変換
-  const laborRolesForSelect = laborRoles.map((role) => ({
-    id: role.name,
-    name: role.name,
-  }));
+  // const laborRolesForSelect = laborRoles.map((role) => ({
+  //   id: role.name,
+  //   name: role.name,
+  // })); // 未使用のためコメントアウト
 
   // 検索・フィルター処理
   const filteredItems = items.filter((item) => {

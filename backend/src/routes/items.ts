@@ -31,7 +31,10 @@ router.get("/", async (req, res) => {
     }
 
     res.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
     res.status(500).json({ error: error.message });
   }
 });
@@ -53,7 +56,10 @@ router.get("/:id", async (req, res) => {
     }
 
     res.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
     res.status(500).json({ error: error.message });
   }
 });
@@ -84,7 +90,10 @@ router.post("/", async (req, res) => {
     }
 
     res.status(201).json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
     res.status(500).json({ error: error.message });
   }
 });
@@ -238,9 +247,13 @@ router.put("/:id", async (req, res) => {
         // 循環参照をチェック（既存データも含めてチェック）
         try {
           await checkCycle(id, new Set(), itemsMap, recipeLinesMap, []);
-        } catch (cycleError: any) {
+        } catch (cycleError: unknown) {
+          const message =
+            cycleError instanceof Error
+              ? cycleError.message
+              : String(cycleError);
           return res.status(400).json({
-            error: cycleError.message,
+            error: message,
           });
         }
       }
@@ -258,7 +271,10 @@ router.put("/:id", async (req, res) => {
     }
 
     res.json(data);
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
     res.status(500).json({ error: error.message });
   }
 });
@@ -279,7 +295,10 @@ router.delete("/:id", async (req, res) => {
     }
 
     res.status(204).send();
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
     res.status(500).json({ error: error.message });
   }
 });

@@ -12,7 +12,7 @@ interface LaborRoleUI extends LaborRole {
 }
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<TabType>("labor");
+  // const [activeTab, setActiveTab] = useState<TabType>("labor"); // 未使用のためコメントアウト
   const [laborRoles, setLaborRoles] = useState<LaborRoleUI[]>([]);
   const [originalLaborRoles, setOriginalLaborRoles] = useState<LaborRoleUI[]>(
     []
