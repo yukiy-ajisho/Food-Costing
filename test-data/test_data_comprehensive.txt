@@ -1,0 +1,2337 @@
+========================================
+FOOD COSTING SYSTEM - 包括的テストデータ
+========================================
+
+このファイルには、簡単なケースから複雑なケースまでのテストデータが含まれています。
+各テストケースは独立してテストできます。
+
+【重要】データ投入の順序:
+1. Base Items（Itemsページ - Base Itemsタブ）
+2. Vendors（Itemsページ - Vendorsタブ）
+3. Vendor Products（Itemsページ - Itemsタブ）
+4. Labor Roles（Settingsページ）
+5. Prepped Items（Costページ）
+
+========================================
+【テストケース1: 簡単 - Raw Itemのみ（質量単位）】
+========================================
+
+目的: 基本的なRaw Itemのコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Salt
+   Name: Salt
+   Specific Weight: (不要 - 質量単位のため)
+   Each Grams: (不要 - "each"ではないため)
+   → base_itemsテーブルに保存
+   → itemsテーブルに自動的にitem_kind='raw'のレコードが作成される（base_item_idで参照）
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+   → vendorsテーブルに保存
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Salt from Supplier A
+   Base Item: Salt（プルダウンから選択）
+   Vendor: Supplier A（プルダウンから選択）
+   Product Name: Sea Salt
+   Brand Name: (任意)
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+   → vendor_productsテーブルに保存
+
+期待される結果:
+- Cost per gram = 200.00 / (20 * 1000) = 0.01 $/g
+- 計算方法: itemsテーブルのSaltレコード（item_kind='raw'）のbase_item_idを使って、
+  vendor_productsテーブルから同じbase_item_idを持つものを検索し、最安値を選択
+
+========================================
+【テストケース2: 簡単 - Raw Itemのみ（非質量単位）】
+========================================
+
+目的: 非質量単位（gallon）のRaw Itemのコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Vegetable Oil
+   Name: Vegetable Oil
+   Specific Weight: 0.92 (g/ml) ← 非質量単位のため必須
+   Each Grams: (不要 - "each"ではないため)
+   → base_itemsテーブルに保存
+   → itemsテーブルに自動的にitem_kind='raw'のレコードが作成される
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier B
+   Name: Supplier B
+   → vendorsテーブルに保存
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Vegetable Oil from Supplier B
+   Base Item: Vegetable Oil
+   Vendor: Supplier B
+   Product Name: Canola Oil
+   Brand Name: (任意)
+   Purchase Unit: gallon
+   Purchase Quantity: 1
+   Purchase Cost: 15.00
+   → vendor_productsテーブルに保存
+
+期待される結果:
+- 1 gallon = 3.78541 liters
+- Grams = 0.92 * 1000 * 3.78541 = 3484.5772 g
+- Cost per gram = 15.00 / 3484.5772 ≈ 0.0043 $/g
+
+========================================
+【テストケース3: 簡単 - Prepped Item（Yield = "g"）】
+========================================
+
+目的: 基本的なPrepped Itemのコスト計算をテスト（Yield = "g"）
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Product Name: Sea Salt
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Seasoned Salt
+   Name: Seasoned Salt
+   Type: Prepped
+   Yield Amount: 950
+   Yield Unit: g
+   Notes: (任意)
+
+   Recipe Lines:
+   - Ingredient: Salt
+     Quantity: 950
+     Unit: g
+
+期待される結果:
+- Salt cost per gram = 0.01 $/g
+- Ingredient cost = 950 * 0.01 = 9.50
+- Yield = 950 g
+- Cost per gram = 9.50 / 950 = 0.01 $/g
+
+========================================
+【テストケース4: 簡単 - Prepped Item（Yield = "each"）】
+========================================
+
+目的: Yieldが"each"の場合のPrepped Itemのコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Egg
+   Name: Egg
+   Specific Weight: (不要 - "each"のため)
+   Each Grams: 50 ← "each"を使用するため必須
+   → itemsテーブルのeach_gramsに保存される
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier C
+   Name: Supplier C
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Egg from Supplier C
+   Base Item: Egg
+   Vendor: Supplier C
+   Product Name: Large Eggs
+   Purchase Unit: each
+   Purchase Quantity: 12
+   Purchase Cost: 3.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Boiled Egg
+   Name: Boiled Egg
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: each
+   Notes: (任意)
+
+   Recipe Lines:
+   - Ingredient: Egg
+     Quantity: 1
+     Unit: each
+
+期待される結果:
+- Egg cost per gram = 3.00 / (12 * 50) = 0.005 $/g
+- Ingredient grams = 1 * 50 = 50 g
+- Ingredient cost = 50 * 0.005 = 0.25
+- Yield = 50 g (材料の総合計 - 自動的に計算・保存される)
+- Cost per gram = 0.25 / 50 = 0.005 $/g
+- each_grams = 50 (itemsテーブルに自動的に保存される)
+
+========================================
+【テストケース5: 簡単 - Prepped Item（Yield = "each"）を材料として使用】
+========================================
+
+目的: Yieldが"each"のPrepped Itemを材料として使う場合、質量単位（g, kg, oz, lb）と"each"を選択できることをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Egg
+   Name: Egg
+   Specific Weight: (不要 - "each"のため)
+   Each Grams: 50 ← "each"を使用するため必須
+   → itemsテーブルのeach_gramsに保存される
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier C
+   Name: Supplier C
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Egg from Supplier C
+   Base Item: Egg
+   Vendor: Supplier C
+   Product Name: Large Eggs
+   Purchase Unit: each
+   Purchase Quantity: 12
+   Purchase Cost: 3.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Boiled Egg
+   Name: Boiled Egg
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: each
+   Notes: (任意)
+
+   Recipe Lines:
+   - Ingredient: Egg
+     Quantity: 1
+     Unit: each
+
+2. Egg Salad
+   Name: Egg Salad
+   Type: Prepped
+   Yield Amount: 200
+   Yield Unit: g
+   Notes: (Boiled Eggを材料として使用、質量単位で選択可能)
+
+   Recipe Lines:
+   - Ingredient: Boiled Egg
+     Quantity: 4
+     Unit: each ← または g, kg, oz, lb を選択可能
+     （例: 4 each = 200g、または 200 g を直接指定）
+
+期待される結果:
+- Egg cost per gram = 3.00 / (12 * 50) = 0.005 $/g
+- Boiled Egg:
+  * Ingredient grams = 1 * 50 = 50 g
+  * Ingredient cost = 50 * 0.005 = 0.25
+  * Yield = 50 g (材料の総合計 - 自動的に計算・保存される)
+  * Cost per gram = 0.25 / 50 = 0.005 $/g
+  * each_grams = 50 (itemsテーブルに自動的に保存される)
+- Egg Salad（unit = each の場合）:
+  * Boiled Egg grams = 4 * 50 = 200 g
+  * Ingredient cost = 200 * 0.005 = 1.00
+  * Yield = 200 g
+  * Cost per gram = 1.00 / 200 = 0.005 $/g
+- Egg Salad（unit = g の場合、例: 200g）:
+  * Boiled Egg grams = 200 g
+  * Ingredient cost = 200 * 0.005 = 1.00
+  * Yield = 200 g
+  * Cost per gram = 1.00 / 200 = 0.005 $/g
+
+=== 5. 確認ポイント ===
+1. Boiled Egg（Yield Unit = "each"）を材料として選択できること
+2. unit選択時に、g, kg, oz, lb, eachが選択可能であること
+3. 質量単位（g, kg, oz, lb）を選択した場合、正しくグラムに変換されること
+4. "each"を選択した場合、each_gramsを使って正しくグラムに変換されること
+5. コスト計算が正しく実行されること
+
+========================================
+【テストケース6: Yield Unit = "each"でeach_gramsの自動計算と手動入力】
+========================================
+
+目的: Yield Unit = "each"の場合のeach_grams入力機能をテスト（自動計算と手動入力）
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+3. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 8.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Dough Batch（Yield Amount = 10, each_grams未入力）
+   Name: Dough Batch
+   Type: Prepped
+   Yield Amount: 10
+   Yield Unit: each
+   Each Grams: (未入力 - 自動計算される)
+   Notes: (10個分のドーナツ生地)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 5000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 100
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 200
+     Unit: g
+
+期待される結果:
+- 材料の総合計 = 5000 + 100 + 200 = 5300g
+- each_grams（自動計算）= 5300g / 10 = 530g
+- 表示: 10 each (530g / each)
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Sugar cost per gram = 8.00 / 10000 = 0.0008 $/g
+- Ingredient cost = (5000 * 0.0005) + (100 * 0.01) + (200 * 0.0008) = 2.50 + 1.00 + 0.16 = 3.66
+- yieldGrams = 530g × 10 = 5300g
+- Cost per gram = 3.66 / 5300 = 0.000691 $/g
+
+=== 5. 確認ポイント ===
+1. Yield Unit = "each"の場合、右側に入力ボックスが表示されること
+2. 入力ボックスに"g/each"ラベルが表示されること
+3. 未入力の場合、プレースホルダーに自動計算値が表示されること（"Auto (530g)"）
+4. 保存後、表示が"(530g / each)"形式になること
+
+========================================
+【テストケース7: Yield Unit = "each"でeach_gramsを手動入力（正常）】
+========================================
+
+目的: Yield Unit = "each"の場合、each_gramsを手動入力できることをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Dough Batch（Yield Amount = 10, each_grams = 500g手動入力）
+   Name: Dough Batch
+   Type: Prepped
+   Yield Amount: 10
+   Yield Unit: each
+   Each Grams: 500g（手動入力、自動計算値530gから変更）
+   Notes: (10個分のドーナツ生地、調理で水分が失われる)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 5000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 100
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 200
+     Unit: g
+
+期待される結果:
+- 材料の総合計 = 5000 + 100 + 200 = 5300g
+- each_grams（手動入力）= 500g
+- バリデーション: 500g × 10 = 5000g ≤ 5300g ✓（正常）
+- 表示: 10 each (500g / each)
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Sugar cost per gram = 8.00 / 10000 = 0.0008 $/g
+- Ingredient cost = (5000 * 0.0005) + (100 * 0.01) + (200 * 0.0008) = 2.50 + 1.00 + 0.16 = 3.66
+- yieldGrams = 500g × 10 = 5000g（手動入力値を使用）
+- Cost per gram = 3.66 / 5000 = 0.000732 $/g
+
+=== 5. 確認ポイント ===
+1. each_gramsを手動入力できること
+2. バリデーションが正常に通過すること（500g × 10 = 5000g ≤ 5300g）
+3. 保存後、手動入力値が表示されること（"(500g / each)"）
+4. コスト計算が手動入力値に基づいて行われること
+
+========================================
+【テストケース8: Yield Unit = "each"でeach_gramsを手動入力（エラー）】
+========================================
+
+目的: Yield Unit = "each"の場合、each_grams × yield_amountが材料の総合計を超える場合のエラーをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Dough Batch（Yield Amount = 10, each_grams = 600g手動入力 - エラー）
+   Name: Dough Batch
+   Type: Prepped
+   Yield Amount: 10
+   Yield Unit: each
+   Each Grams: 600g（手動入力、材料の総合計を超える）
+   Notes: (10個分のドーナツ生地)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 5000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 100
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 200
+     Unit: g
+
+期待される結果:
+- 材料の総合計 = 5000 + 100 + 200 = 5300g
+- each_grams（手動入力）= 600g
+- バリデーション: 600g × 10 = 6000g > 5300g ✗（エラー）
+- エラーメッセージ: "Dough Batchのeach_grams (600g) × yield_amount (10) = 6000g が材料の総合計（5300g）を超えています。each_grams × yield_amountは材料の総合計以下である必要があります。"
+- 保存がキャンセルされる
+
+=== 5. 確認ポイント ===
+1. each_gramsを手動入力できること
+2. バリデーションエラーが正しく表示されること
+3. 保存がキャンセルされること
+4. エラーメッセージに適切な値が表示されること
+
+========================================
+【テストケース9: Yield Unit = "each"でYield Amount = 1の場合】
+========================================
+
+目的: Yield Amount = 1の場合のeach_gramsの動作をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Egg
+   Name: Egg
+   Specific Weight: (不要)
+   Each Grams: 50
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier C
+   Name: Supplier C
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Egg from Supplier C
+   Base Item: Egg
+   Vendor: Supplier C
+   Purchase Unit: each
+   Purchase Quantity: 12
+   Purchase Cost: 3.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Boiled Egg（Yield Amount = 1, each_grams未入力）
+   Name: Boiled Egg
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: each
+   Each Grams: (未入力 - 自動計算される)
+   Notes: (1個の茹で卵)
+
+   Recipe Lines:
+   - Ingredient: Egg
+     Quantity: 1
+     Unit: each
+
+期待される結果:
+- 材料の総合計 = 1 × 50g = 50g
+- each_grams（自動計算）= 50g / 1 = 50g
+- 表示: 1 each (50g / each)
+- Egg cost per gram = 3.00 / (12 * 50) = 0.005 $/g
+- Ingredient cost = 50 * 0.005 = 0.25
+- yieldGrams = 50g × 1 = 50g
+- Cost per gram = 0.25 / 50 = 0.005 $/g
+
+=== 5. 確認ポイント ===
+1. Yield Amount = 1の場合も正常に動作すること
+2. each_grams = 材料の総合計になること（1で割るため）
+3. 表示が正しいこと
+
+========================================
+【テストケース10: Yield Unit = "each"で複数の材料とLaborを含む場合】
+========================================
+
+目的: Yield Unit = "each"で複数の材料とLaborを含む場合のコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Labor Roles（Settingsページ） ===
+1. Baker
+   Name: Baker
+   Hourly Wage: 20.00
+
+=== 5. Prepped Items（Costページ） ===
+1. Donut（Yield Amount = 12, each_grams = 80g手動入力）
+   Name: Donut
+   Type: Prepped
+   Yield Amount: 12
+   Yield Unit: each
+   Each Grams: 80g（手動入力）
+   Notes: (12個のドーナツ、調理で水分が失われる)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 1000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 20
+     Unit: g
+   - Labor: Baker
+     Minutes: 60
+
+期待される結果:
+- 材料の総合計 = 1000 + 20 = 1020g
+- each_grams（手動入力）= 80g
+- バリデーション: 80g × 12 = 960g ≤ 1020g ✓（正常）
+- 表示: 12 each (80g / each)
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Ingredient cost = (1000 * 0.0005) + (20 * 0.01) = 0.50 + 0.20 = 0.70
+- Labor cost = (60 / 60) * 20.00 = 20.00
+- Total batch cost = 0.70 + 20.00 = 20.70
+- yieldGrams = 80g × 12 = 960g
+- Cost per gram = 20.70 / 960 = 0.021563 $/g
+
+=== 6. 確認ポイント ===
+1. 複数の材料とLaborを含む場合も正常に動作すること
+2. バリデーションが正常に通過すること
+3. コスト計算が正しく行われること（Laborも含む）
+
+========================================
+【テストケース11: 中程度 - 複数の材料を含むPrepped Item】
+========================================
+
+目的: 複数の材料とlaborを含むPrepped Itemのコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+2. Supplier D
+   Name: Supplier D
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Product Name: (任意)
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Product Name: Sea Salt
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+3. Sugar from Supplier D
+   Base Item: Sugar
+   Vendor: Supplier D
+   Product Name: (任意)
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 8.00
+
+=== 4. Labor Roles（Settingsページ） ===
+1. Baker
+   Name: Baker
+   Hourly Wage: 20.00
+
+=== 5. Prepped Items（Costページ） ===
+1. Bread Dough
+   Name: Bread Dough
+   Type: Prepped
+   Yield Amount: 1580
+   Yield Unit: g
+   Notes: (任意 - 材料の合計1580g、水分が蒸発して減る場合を想定)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 1500
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 30
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 50
+     Unit: g
+   - Labor: Baker
+     Minutes: 30
+
+期待される結果:
+- Flour cost per gram = 12.50 / (25 * 1000) = 0.0005 $/g
+- Salt cost per gram = 200.00 / (20 * 1000) = 0.01 $/g
+- Sugar cost per gram = 8.00 / (10 * 1000) = 0.0008 $/g
+- Ingredient cost = (1500 * 0.0005) + (30 * 0.01) + (50 * 0.0008) = 0.75 + 0.30 + 0.04 = 1.09
+- Labor cost = (30 / 60) * 20.00 = 10.00
+- Total batch cost = 1.09 + 10.00 = 11.09
+- Cost per gram = 11.09 / 1580 ≈ 0.00702 $/g
+
+========================================
+【テストケース12: 複雑 - 複数のvendor_productsから最安値を選択】
+========================================
+
+目的: 同じbase_itemに対して複数のvendor_productsがある場合、最安値を選択することをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+2. Supplier E
+   Name: Supplier E
+
+3. Supplier F
+   Name: Supplier F
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Product Name: (任意)
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+   (Cost per gram = 200.00 / 20000 = 0.01 $/g)
+
+2. Salt from Supplier E
+   Base Item: Salt
+   Vendor: Supplier E
+   Product Name: (任意)
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 220.00
+   (Cost per gram = 220.00 / 25000 = 0.0088 $/g)
+
+3. Salt from Supplier F
+   Base Item: Salt
+   Vendor: Supplier F
+   Product Name: (任意)
+   Purchase Unit: kg
+   Purchase Quantity: 15
+   Purchase Cost: 180.00
+   (Cost per gram = 180.00 / 15000 = 0.012 $/g)
+
+期待される結果:
+- 最安値は Supplier E (0.0088 $/g)
+- Cost per gram = 0.0088 $/g
+- 計算方法: itemsテーブルのSaltレコード（item_kind='raw'）のbase_item_idを使って、
+  vendor_productsテーブルから同じbase_item_idを持つものを全て検索し、
+  各vendor_productのコストを計算して最安値を選択
+
+========================================
+【テストケース13: 複雑 - 再帰的な依存関係（Prepped → Prepped → Raw）】
+========================================
+
+目的: Prepped Itemが別のPrepped Itemを使用する場合の再帰的なコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Seasoned Flour
+   Name: Seasoned Flour
+   Type: Prepped
+   Yield Amount: 1000
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 950
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 50
+     Unit: g
+
+2. Bread Dough
+   Name: Bread Dough
+   Type: Prepped
+   Yield Amount: 1500
+   Yield Unit: g
+   Notes: (材料の合計1500g、水分が蒸発しない場合を想定)
+
+   Recipe Lines:
+   - Ingredient: Seasoned Flour
+     Quantity: 1500
+     Unit: g
+
+期待される結果:
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Seasoned Flour cost:
+  * Ingredient cost = (950 * 0.0005) + (50 * 0.01) = 0.475 + 0.5 = 0.975
+  * Cost per gram = 0.975 / 1000 = 0.000975 $/g
+- Bread Dough cost:
+  * Seasoned Flour grams = 1500 g
+  * Ingredient cost = 1500 * 0.000975 = 1.4625
+  * Cost per gram = 1.4625 / 1500 = 0.000975 $/g
+
+========================================
+【テストケース14: 複雑 - 非質量単位の組み合わせ】
+========================================
+
+目的: 複数の非質量単位（gallon, liter, floz）を使用する場合のコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Vegetable Oil
+   Name: Vegetable Oil
+   Specific Weight: 0.92 (g/ml) ← 必須
+   Each Grams: (不要)
+
+2. Soy Sauce
+   Name: Soy Sauce
+   Specific Weight: 1.15 (g/ml) ← 必須
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier B
+   Name: Supplier B
+
+2. Supplier G
+   Name: Supplier G
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Vegetable Oil from Supplier B
+   Base Item: Vegetable Oil
+   Vendor: Supplier B
+   Purchase Unit: gallon
+   Purchase Quantity: 1
+   Purchase Cost: 15.00
+
+2. Soy Sauce from Supplier G
+   Base Item: Soy Sauce
+   Vendor: Supplier G
+   Purchase Unit: liter
+   Purchase Quantity: 2
+   Purchase Cost: 8.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Teriyaki Sauce
+   Name: Teriyaki Sauce
+   Type: Prepped
+   Yield Amount: 1004
+   Yield Unit: g
+   Notes: (材料の合計1004g、水分が蒸発しない場合を想定)
+
+   Recipe Lines:
+   - Ingredient: Vegetable Oil
+     Quantity: 0.5
+     Unit: liter
+   - Ingredient: Soy Sauce
+     Quantity: 16
+     Unit: floz
+
+期待される結果:
+- Vegetable Oil cost per gram:
+  * 1 gallon = 3.78541 liters
+  * Grams per gallon = 0.92 * 1000 * 3.78541 = 3484.5772 g
+  * Cost per gram = 15.00 / 3484.5772 ≈ 0.0043 $/g
+- Soy Sauce cost per gram:
+  * 2 liters = 2 * 1000 = 2000 ml
+  * Grams = 1.15 * 2000 = 2300 g
+  * Cost per gram = 8.00 / 2300 ≈ 0.00348 $/g
+- Teriyaki Sauce:
+  * Vegetable Oil grams = 0.5 * 1000 * 0.92 = 460 g
+  * Soy Sauce grams = 16 * 0.0295735 * 1000 * 1.15 = 544.0 g
+  * Total ingredients grams = 460 + 544 = 1004 g
+  * Ingredient cost = (460 * 0.0043) + (544.0 * 0.00348) = 1.978 + 1.893 = 3.871
+  * Cost per gram = 3.871 / 1004 ≈ 0.00386 $/g
+
+========================================
+【テストケース15: 複雑 - Yieldが"each"で子アイテムも"each"を使用】
+========================================
+
+目的: Yieldが"each"で、子アイテムも"each"を使用する場合のコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Egg
+   Name: Egg
+   Specific Weight: (不要 - "each"のため)
+   Each Grams: 50 ← 必須（"each"を使用するため）
+
+2. Bread
+   Name: Bread
+   Specific Weight: (不要 - "each"のため)
+   Each Grams: 500 ← 必須（"each"を使用するため）
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier C
+   Name: Supplier C
+
+2. Supplier H
+   Name: Supplier H
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Egg from Supplier C
+   Base Item: Egg
+   Vendor: Supplier C
+   Purchase Unit: each
+   Purchase Quantity: 12
+   Purchase Cost: 3.00
+
+2. Bread from Supplier H
+   Base Item: Bread
+   Vendor: Supplier H
+   Purchase Unit: each
+   Purchase Quantity: 1
+   Purchase Cost: 2.50
+
+=== 4. Prepped Items（Costページ） ===
+1. Egg Sandwich
+   Name: Egg Sandwich
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: each
+
+   Recipe Lines:
+   - Ingredient: Egg
+     Quantity: 2
+     Unit: each
+   - Ingredient: Bread
+     Quantity: 2
+     Unit: each
+
+期待される結果:
+- Egg cost per gram = 3.00 / (12 * 50) = 0.005 $/g
+- Bread cost per gram = 2.50 / (1 * 500) = 0.005 $/g
+- Egg Sandwich:
+  * Egg grams = 2 * 50 = 100 g
+  * Bread grams = 2 * 500 = 1000 g
+  * Total ingredients grams = 1100 g
+  * Ingredient cost = (100 * 0.005) + (1000 * 0.005) = 0.5 + 5.0 = 5.5
+  * Yield = 1100 g (材料の総合計 - 自動的に計算・保存される)
+  * Cost per gram = 5.5 / 1100 = 0.005 $/g
+  * each_grams = 1100 (itemsテーブルに自動的に保存される)
+
+========================================
+【テストケース16: 複雑 - 複数のPrepped Itemsが相互に依存】
+========================================
+
+目的: 複数のPrepped Itemsが相互に依存する場合のコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+2. Supplier D
+   Name: Supplier D
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+
+3. Sugar from Supplier D
+   Base Item: Sugar
+   Vendor: Supplier D
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 8.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Seasoned Flour
+   Name: Seasoned Flour
+   Type: Prepped
+   Yield Amount: 1000
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 950
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 50
+     Unit: g
+
+2. Sweet Flour
+   Name: Sweet Flour
+   Type: Prepped
+   Yield Amount: 1000
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 900
+     Unit: g
+   - Ingredient: Sugar
+     Quantity: 100
+     Unit: g
+
+3. Complete Flour Mix
+   Name: Complete Flour Mix
+   Type: Prepped
+   Yield Amount: 2000
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Seasoned Flour
+     Quantity: 1000
+     Unit: g
+   - Ingredient: Sweet Flour
+     Quantity: 1000
+     Unit: g
+
+期待される結果:
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Salt cost per gram = 200.00 / 20000 = 0.01 $/g
+- Sugar cost per gram = 8.00 / 10000 = 0.0008 $/g
+- Seasoned Flour cost:
+  * Ingredient cost = (950 * 0.0005) + (50 * 0.01) = 0.475 + 0.5 = 0.975
+  * Cost per gram = 0.975 / 1000 = 0.000975 $/g
+- Sweet Flour cost:
+  * Ingredient cost = (900 * 0.0005) + (100 * 0.0008) = 0.45 + 0.08 = 0.53
+  * Cost per gram = 0.53 / 1000 = 0.00053 $/g
+- Complete Flour Mix cost:
+  * Ingredient cost = (1000 * 0.000975) + (1000 * 0.00053) = 0.975 + 0.53 = 1.505
+  * Cost per gram = 1.505 / 2000 = 0.0007525 $/g
+
+========================================
+【テストケース17: エッジケース - 非常に小さな数量】
+========================================
+
+目的: 非常に小さな数量での計算精度をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: g
+   Purchase Quantity: 1
+   Purchase Cost: 0.01
+
+=== 4. Prepped Items（Costページ） ===
+1. Tiny Seasoned Salt
+   Name: Tiny Seasoned Salt
+   Type: Prepped
+   Yield Amount: 0.5
+   Yield Unit: g
+   Notes: (材料の合計0.5g)
+
+   Recipe Lines:
+   - Ingredient: Salt
+     Quantity: 0.5
+     Unit: g
+
+期待される結果:
+- Salt cost per gram = 0.01 / 1 = 0.01 $/g
+- Ingredient cost = 0.5 * 0.01 = 0.005
+- Yield = 0.5 g
+- Cost per gram = 0.005 / 0.5 = 0.01 $/g
+
+========================================
+【テストケース18: エッジケース - 非常に大きな数量】
+========================================
+
+目的: 非常に大きな数量での計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 1000
+   Purchase Cost: 500.00
+
+=== 4. Prepped Items（Costページ） ===
+1. Large Batch Dough
+   Name: Large Batch Dough
+   Type: Prepped
+   Yield Amount: 50000
+   Yield Unit: g
+   Notes: (材料の合計50000g、水分が蒸発しない場合を想定)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 50000
+     Unit: g
+
+期待される結果:
+- Flour cost per gram = 500.00 / (1000 * 1000) = 0.0005 $/g
+- Ingredient cost = 50000 * 0.0005 = 25.00
+- Yield = 50000 g
+- Cost per gram = 25.00 / 50000 = 0.0005 $/g
+
+========================================
+【テストケース19: エッジケース - LaborのみのPrepped Item】
+========================================
+
+目的: Laborのみで材料がないPrepped Itemのコスト計算をテスト
+
+=== 1. Labor Roles（Settingsページ） ===
+1. Waiter
+   Name: Waiter
+   Hourly Wage: 15.00
+
+=== 2. Prepped Items（Costページ） ===
+1. Service Only
+   Name: Service Only
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: g
+
+   Recipe Lines:
+   - Labor: Waiter
+     Minutes: 10
+
+期待される結果:
+- Ingredient cost = 0
+- Labor cost = (10 / 60) * 15.00 = 2.50
+- Total batch cost = 2.50
+- Cost per gram = 2.50 / 1 = 2.50 $/g
+
+========================================
+【テストケース20: エッジケース - 複数のLabor Roles】
+========================================
+
+目的: 複数のLabor Rolesを含むPrepped Itemのコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+
+=== 4. Labor Roles（Settingsページ） ===
+1. Baker
+   Name: Baker
+   Hourly Wage: 25.00
+
+2. Assistant
+   Name: Assistant
+   Hourly Wage: 15.00
+
+=== 5. Prepped Items（Costページ） ===
+1. Professional Bread
+   Name: Professional Bread
+   Type: Prepped
+   Yield Amount: 1500
+   Yield Unit: g
+   Notes: (材料の合計1500g、水分が蒸発しない場合を想定)
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 1500
+     Unit: g
+   - Labor: Baker
+     Minutes: 30
+   - Labor: Assistant
+     Minutes: 20
+
+期待される結果:
+- Flour cost per gram = 12.50 / 25000 = 0.0005 $/g
+- Ingredient cost = 1500 * 0.0005 = 0.75
+- Labor cost = (30 / 60) * 25.00 + (20 / 60) * 15.00 = 12.50 + 5.00 = 17.50
+- Total batch cost = 0.75 + 17.50 = 18.25
+- Cost per gram = 18.25 / 1500 = 0.012167 $/g
+
+========================================
+【テストケース21: エッジケース - 循環参照の検出】
+========================================
+
+目的: 循環参照が正しく検出されることをテスト
+
+=== 1. Prepped Items（Costページ） ===
+1. Item A
+   Name: Item A
+   Type: Prepped
+   Yield Amount: 500
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Item B
+     Quantity: 500
+     Unit: g
+
+2. Item B
+   Name: Item B
+   Type: Prepped
+   Yield Amount: 500
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Item A
+     Quantity: 500
+     Unit: g
+
+期待される結果:
+- エラー: "Cycle detected in recipe dependency chain"
+- パス: "Item A → Item B → Item A"
+
+========================================
+【テスト実行の手順】
+========================================
+
+1. 各テストケースを順番に実行
+2. データ投入順序を守る:
+   a. Base Items（Itemsページ - Base Itemsタブ）
+   b. Vendors（Itemsページ - Vendorsタブ）
+   c. Vendor Products（Itemsページ - Itemsタブ）
+   d. Labor Roles（Settingsページ）
+   e. Prepped Items（Costページ）
+3. calculateCost APIを呼び出し
+4. 期待される結果と比較
+5. ログを確認して、正しく動作していることを確認
+
+========================================
+【テストケース22: 材料変更によるコストの自動更新】
+========================================
+
+目的: 子アイテムの材料を変更した場合、親アイテムのコストが自動的に更新されることをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+2. Supplier B
+   Name: Supplier B
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 12.50
+   (Cost per gram = 12.50 / 25000 = 0.0005 $/g)
+
+2. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+   (Cost per gram = 200.00 / 20000 = 0.01 $/g)
+
+3. Sugar from Supplier B
+   Base Item: Sugar
+   Vendor: Supplier B
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 8.00
+   (Cost per gram = 8.00 / 10000 = 0.0008 $/g)
+
+=== 4. Prepped Items（Costページ） ===
+1. Seasoned Flour（初期状態）
+   Name: Seasoned Flour
+   Type: Prepped
+   Yield Amount: 1000
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Flour
+     Quantity: 950
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 50
+     Unit: g
+
+2. Bread Dough
+   Name: Bread Dough
+   Type: Prepped
+   Yield Amount: 1500
+   Yield Unit: g
+
+   Recipe Lines:
+   - Ingredient: Seasoned Flour
+     Quantity: 1500
+     Unit: g
+
+=== 5. 初期状態のコスト計算 ===
+期待される結果（初期状態）:
+- Flour cost per gram = 0.0005 $/g
+- Salt cost per gram = 0.01 $/g
+- Seasoned Flour cost:
+  * Ingredient cost = (950 * 0.0005) + (50 * 0.01) = 0.475 + 0.5 = 0.975
+  * Cost per gram = 0.975 / 1000 = 0.000975 $/g
+- Bread Dough cost:
+  * Seasoned Flour grams = 1500 g
+  * Ingredient cost = 1500 * 0.000975 = 1.4625
+  * Cost per gram = 1.4625 / 1500 = 0.000975 $/g
+
+=== 6. 材料の変更 ===
+Seasoned Flourの材料を変更:
+- Salt（50g）を削除
+- Sugar（50g）を追加
+
+変更後のRecipe Lines:
+- Ingredient: Flour
+  Quantity: 950
+  Unit: g
+- Ingredient: Sugar
+  Quantity: 50
+  Unit: g
+
+=== 7. 変更後のコスト計算 ===
+期待される結果（変更後）:
+- Flour cost per gram = 0.0005 $/g（変更なし）
+- Sugar cost per gram = 0.0008 $/g（新規）
+- Seasoned Flour cost:
+  * Ingredient cost = (950 * 0.0005) + (50 * 0.0008) = 0.475 + 0.04 = 0.515
+  * Cost per gram = 0.515 / 1000 = 0.000515 $/g（変更あり）
+- Bread Dough cost:
+  * Seasoned Flour grams = 1500 g
+  * Ingredient cost = 1500 * 0.000515 = 0.7725（変更あり）
+  * Cost per gram = 0.7725 / 1500 = 0.000515 $/g（変更あり）
+
+=== 8. 確認ポイント ===
+1. Seasoned Flourのコストが変更されること
+   - 初期: 0.000975 $/g
+   - 変更後: 0.000515 $/g
+2. Bread Doughのコストが自動的に更新されること
+   - 初期: 0.000975 $/g
+   - 変更後: 0.000515 $/g
+3. キャッシュが適切にクリアされること（clear_cache=trueを使用するか、自動的にクリアされること）
+
+========================================
+【テストケース23: 複雑 - 深い階層構造と多様な単位・複数のLabor】
+========================================
+
+目的: 4階層の深い依存関係、多様な単位（g, kg, gallon, liter, floz, each）、複数のLabor Rolesを含む複雑なコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Vegetable Oil
+   Name: Vegetable Oil
+   Specific Weight: 0.92 (g/ml)
+   Each Grams: (不要)
+
+2. Soy Sauce
+   Name: Soy Sauce
+   Specific Weight: 1.15 (g/ml)
+   Each Grams: (不要)
+
+3. Vinegar
+   Name: Vinegar
+   Specific Weight: 1.01 (g/ml)
+   Each Grams: (不要)
+
+4. Meat
+   Name: Meat
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+5. Salt
+   Name: Salt
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+6. Rice
+   Name: Rice
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+7. Lettuce
+   Name: Lettuce
+   Specific Weight: (不要)
+   Each Grams: 200 (each用)
+
+8. Tomato
+   Name: Tomato
+   Specific Weight: (不要)
+   Each Grams: 150 (each用)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+2. Supplier B
+   Name: Supplier B
+
+3. Supplier C
+   Name: Supplier C
+
+4. Supplier D
+   Name: Supplier D
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Vegetable Oil from Supplier A
+   Base Item: Vegetable Oil
+   Vendor: Supplier A
+   Purchase Unit: gallon
+   Purchase Quantity: 1
+   Purchase Cost: 15.00
+   (Cost per gram ≈ 0.0043 $/g)
+
+2. Soy Sauce from Supplier B
+   Base Item: Soy Sauce
+   Vendor: Supplier B
+   Purchase Unit: liter
+   Purchase Quantity: 2
+   Purchase Cost: 8.00
+   (Cost per gram ≈ 0.00348 $/g)
+
+3. Vinegar from Supplier C
+   Base Item: Vinegar
+   Vendor: Supplier C
+   Purchase Unit: floz
+   Purchase Quantity: 32
+   Purchase Cost: 5.00
+   (Cost per gram ≈ 0.00515 $/g)
+
+4. Meat from Supplier A
+   Base Item: Meat
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+   (Cost per gram = 0.005 $/g)
+
+5. Salt from Supplier A
+   Base Item: Salt
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 20
+   Purchase Cost: 200.00
+   (Cost per gram = 0.01 $/g)
+
+6. Rice from Supplier D
+   Base Item: Rice
+   Vendor: Supplier D
+   Purchase Unit: kg
+   Purchase Quantity: 25
+   Purchase Cost: 30.00
+   (Cost per gram = 0.0012 $/g)
+
+7. Lettuce from Supplier C
+   Base Item: Lettuce
+   Vendor: Supplier C
+   Purchase Unit: each
+   Purchase Quantity: 12
+   Purchase Cost: 6.00
+   (Cost per gram = 6.00 / (12 * 200) = 0.0025 $/g)
+
+8. Tomato from Supplier C
+   Base Item: Tomato
+   Vendor: Supplier C
+   Purchase Unit: each
+   Purchase Quantity: 20
+   Purchase Cost: 10.00
+   (Cost per gram = 10.00 / (20 * 150) = 0.00333 $/g)
+
+=== 4. Labor Roles（Settingsページ） ===
+1. Head Chef
+   Name: Head Chef
+   Hourly Wage: 35.00
+
+2. Sous Chef
+   Name: Sous Chef
+   Hourly Wage: 25.00
+
+3. Prep Cook
+   Name: Prep Cook
+   Hourly Wage: 18.00
+
+4. Server
+   Name: Server
+   Hourly Wage: 15.00
+
+=== 5. Prepped Items（Costページ） - Level 3 ===
+
+1. Teriyaki Sauce（Level 3）
+   Name: Teriyaki Sauce
+   Type: Prepped
+   Yield Amount: 1004
+   Yield Unit: g
+   Notes: (材料の合計1004g)
+
+   Recipe Lines:
+   - Ingredient: Vegetable Oil
+     Quantity: 0.5
+     Unit: liter
+   - Ingredient: Soy Sauce
+     Quantity: 16
+     Unit: floz
+   - Labor: Prep Cook
+     Minutes: 10
+
+2. Seasoned Meat（Level 3）
+   Name: Seasoned Meat
+   Type: Prepped
+   Yield Amount: 1050
+   Yield Unit: g
+   Notes: (材料の合計1050g)
+
+   Recipe Lines:
+   - Ingredient: Meat
+     Quantity: 1000
+     Unit: g
+   - Ingredient: Salt
+     Quantity: 50
+     Unit: g
+   - Labor: Sous Chef
+     Minutes: 20
+   - Labor: Prep Cook
+     Minutes: 15
+
+3. Salad Dressing（Level 3）
+   Name: Salad Dressing
+   Type: Prepped
+   Yield Amount: 468.95
+   Yield Unit: g
+   Notes: (材料の合計468.95g)
+
+   Recipe Lines:
+   - Ingredient: Vegetable Oil
+     Quantity: 0.25
+     Unit: liter
+   - Ingredient: Vinegar
+     Quantity: 8
+     Unit: floz
+   - Labor: Prep Cook
+     Minutes: 5
+
+=== 6. Prepped Items（Costページ） - Level 2 ===
+
+1. Main Dish（Level 2）
+   Name: Main Dish
+   Type: Prepped
+   Yield Amount: 3000
+   Yield Unit: g
+   Notes: (材料の合計3054g、水分が蒸発する場合を想定)
+
+   Recipe Lines:
+   - Ingredient: Teriyaki Sauce
+     Quantity: 1004
+     Unit: g
+   - Ingredient: Seasoned Meat
+     Quantity: 1050
+     Unit: g
+   - Ingredient: Rice
+     Quantity: 1000
+     Unit: g
+   - Labor: Head Chef
+     Minutes: 30
+   - Labor: Sous Chef
+     Minutes: 25
+
+2. Side Salad（Level 2）
+   Name: Side Salad
+   Type: Prepped
+   Yield Amount: 1
+   Yield Unit: each
+   Notes: (材料の合計818.95g = 1 each)
+
+   Recipe Lines:
+   - Ingredient: Salad Dressing
+     Quantity: 468.95
+     Unit: g
+   - Ingredient: Lettuce
+     Quantity: 1
+     Unit: each
+   - Ingredient: Tomato
+     Quantity: 1
+     Unit: each
+   - Labor: Prep Cook
+     Minutes: 10
+
+=== 7. Prepped Items（Costページ） - Level 1（最終製品） ===
+
+1. Complete Meal（Level 1 - Menu Item）
+   Name: Complete Meal
+   Type: Prepped
+   Is Menu Item: true
+   Yield Amount: 1
+   Yield Unit: each
+   Notes: (材料の合計3818.95g = 1 each)
+
+   Recipe Lines:
+   - Ingredient: Main Dish
+     Quantity: 3000
+     Unit: g
+   - Ingredient: Side Salad
+     Quantity: 1
+     Unit: each
+   - Labor: Head Chef
+     Minutes: 15
+   - Labor: Server
+     Minutes: 5
+
+=== 8. 期待される結果 ===
+
+**Level 3 のコスト計算:**
+
+1. Teriyaki Sauce:
+   - Vegetable Oil: 0.5 liter = 0.5 * 1000 * 0.92 = 460 g
+   - Soy Sauce: 16 floz = 16 * 0.0295735 * 1000 * 1.15 ≈ 544 g
+   - Ingredient cost = (460 * 0.0043) + (544 * 0.00348) ≈ 1.978 + 1.893 = 3.871
+   - Labor cost = (10 / 60) * 18.00 = 3.00
+   - Total batch cost = 3.871 + 3.00 = 6.871
+   - Cost per gram = 6.871 / 1004 ≈ 0.00685 $/g
+
+2. Seasoned Meat:
+   - Meat: 1000 g
+   - Salt: 50 g
+   - Ingredient cost = (1000 * 0.005) + (50 * 0.01) = 5.00 + 0.50 = 5.50
+   - Labor cost = (20 / 60) * 25.00 + (15 / 60) * 18.00 = 8.33 + 4.50 = 12.83
+   - Total batch cost = 5.50 + 12.83 = 18.33
+   - Cost per gram = 18.33 / 1050 ≈ 0.01746 $/g
+
+3. Salad Dressing:
+   - Vegetable Oil: 0.25 liter = 0.25 * 1000 * 0.92 = 230 g
+   - Vinegar: 8 floz = 8 * 0.0295735 * 1000 * 1.01 ≈ 238.95 g
+   - Total ingredients grams = 230 + 238.95 = 468.95 g
+   - Ingredient cost = (230 * 0.0043) + (238.95 * 0.00515) ≈ 0.989 + 1.231 = 2.22
+   - Labor cost = (5 / 60) * 18.00 = 1.50
+   - Total batch cost = 2.22 + 1.50 = 3.72
+   - Cost per gram = 3.72 / 468.95 ≈ 0.00793 $/g
+
+**Level 2 のコスト計算:**
+
+1. Main Dish:
+   - Teriyaki Sauce: 1004 g
+   - Seasoned Meat: 1050 g
+   - Rice: 1000 g
+   - Total ingredients grams = 1004 + 1050 + 1000 = 3054 g
+   - Ingredient cost = (1004 * 0.00685) + (1050 * 0.01746) + (1000 * 0.0012) = 6.877 + 18.333 + 1.20 = 26.41
+   - Labor cost = (30 / 60) * 35.00 + (25 / 60) * 25.00 = 17.50 + 10.42 = 27.92
+   - Total batch cost = 26.41 + 27.92 = 54.33
+   - Yield = 3000 g (材料の総合計3054g、水分が蒸発して3000gになる)
+   - Cost per gram = 54.33 / 3000 = 0.01811 $/g
+
+2. Side Salad:
+   - Salad Dressing: 468.95 g
+   - Lettuce: 1 each = 200 g
+   - Tomato: 1 each = 150 g
+   - Total ingredients grams = 468.95 + 200 + 150 = 818.95 g
+   - Ingredient cost = (468.95 * 0.00793) + (200 * 0.0025) + (150 * 0.00333) ≈ 3.72 + 0.50 + 0.50 = 4.72
+   - Labor cost = (10 / 60) * 18.00 = 3.00
+   - Total batch cost = 4.72 + 3.00 = 7.72
+   - Yield = 818.95 g (材料の総合計)
+   - Cost per gram = 7.72 / 818.95 ≈ 0.00942 $/g
+   - each_grams = 818.95 (自動的に保存される)
+
+**Level 1 のコスト計算（最終製品）:**
+
+1. Complete Meal:
+   - Main Dish: 3000 g
+   - Side Salad: 1 each = 818.95 g
+   - Total ingredients grams = 3000 + 818.95 = 3818.95 g
+   - Ingredient cost = (3000 * 0.01811) + (818.95 * 0.00942) ≈ 54.33 + 7.72 = 62.05
+   - Labor cost = (15 / 60) * 35.00 + (5 / 60) * 15.00 = 8.75 + 1.25 = 10.00
+   - Total batch cost = 62.05 + 10.00 = 72.05
+   - Yield = 3818.95 g (材料の総合計)
+   - Cost per gram = 72.05 / 3818.95 ≈ 0.01887 $/g
+   - each_grams = 3818.95 (自動的に保存される)
+
+=== 9. 確認ポイント ===
+1. 4階層の依存関係が正しく計算されること
+2. 多様な単位（g, kg, gallon, liter, floz, each）が正しく変換されること
+3. 複数のLabor Rolesが正しく計算されること
+4. Yieldが"each"の場合、each_gramsが自動的に計算・保存されること
+5. 非質量単位の変換が正しく行われること
+6. 各階層でのコスト計算が正確であること
+
+========================================
+【テストケース24: 循環参照チェック - 単純な循環参照（A → B → A）】
+========================================
+
+目的: 循環参照チェック機能をテスト（保存前にエラーが発生することを確認）
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**ステップ1: Item Aを作成（正常）**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+
+**ステップ2: Item Bを作成（正常）**
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用
+
+**ステップ3: Item AにItem Bを追加（循環参照エラー）**
+3. Item Aを編集
+   Name: Item A
+   Proceed Yield Amount: 700
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Item B (200g) ← Item Bを材料として追加（循環参照！）
+
+=== 5. 期待される結果 ===
+
+**ステップ1と2: 正常に保存される**
+- Item AとItem Bは正常に保存される
+
+**ステップ3: エラーが発生する**
+- Item AにItem Bを追加しようとすると、保存前に循環参照エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item A' creates a circular dependency. Path: Item A → Item B → Item A"
+- 保存がキャンセルされ、データベースには保存されない
+
+=== 6. 確認ポイント ===
+1. 循環参照が検出されること
+2. エラーメッセージに循環参照のパスが表示されること
+3. データベースに保存されないこと
+4. 既存のItem AとItem Bのデータが変更されないこと
+
+========================================
+【テストケース25: 循環参照チェック - 複雑な循環参照（A → B → C → A）】
+========================================
+
+目的: 3つ以上のアイテムを含む循環参照をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Butter
+   Name: Butter
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+3. Butter from Supplier A
+   Base Item: Butter
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 2
+   Purchase Cost: 40.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**ステップ1: Item Aを作成（正常）**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+
+**ステップ2: Item Bを作成（正常）**
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用
+
+**ステップ3: Item Cを作成（正常）**
+3. Item C
+   Name: Item C
+   Proceed Yield Amount: 800
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Butter (400g)
+     - Ingredient: Item B (400g) ← Item Bを材料として使用
+
+**ステップ4: Item AにItem Cを追加（循環参照エラー）**
+4. Item Aを編集
+   Name: Item A
+   Proceed Yield Amount: 700
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Item C (200g) ← Item Cを材料として追加（循環参照！）
+       （Item C → Item B → Item A → Item C の循環）
+
+=== 5. 期待される結果 ===
+
+**ステップ1、2、3: 正常に保存される**
+- Item A、Item B、Item Cは正常に保存される
+
+**ステップ4: エラーが発生する**
+- Item AにItem Cを追加しようとすると、保存前に循環参照エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item A' creates a circular dependency. Path: Item A → Item C → Item B → Item A"
+- 保存がキャンセルされ、データベースには保存されない
+
+=== 6. 確認ポイント ===
+1. 3つ以上のアイテムを含む循環参照が検出されること
+2. エラーメッセージに完全な循環参照のパスが表示されること
+3. データベースに保存されないこと
+4. 既存のItem A、Item B、Item Cのデータが変更されないこと
+
+========================================
+【テストケース26: 循環参照チェック - 複数アイテムの同時保存】
+========================================
+
+目的: 複数のアイテムを同時に保存する場合の循環参照チェックをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**既存のアイテム:**
+- Item X（既に存在）
+  Name: Item X
+  Proceed Yield Amount: 500
+  Proceed Yield Unit: g
+  Recipe Lines:
+    - Ingredient: Flour (500g)
+
+**ステップ1: Item Yを作成して保存（正常）**
+1. Item Y（新規）
+   Name: Item Y
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item X (300g) ← 既存のItem Xを材料として使用
+   → 保存ボタンをクリックして保存（Item Yがデータベースに保存される）
+
+**ステップ2: Item Zを作成（正常）**
+2. Item Z（新規）
+   Name: Item Z
+   Proceed Yield Amount: 600
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Item Y (400g) ← 既に保存されたItem Yを材料として使用（選択可能）
+     - Ingredient: Item X (200g) ← 既存のItem Xを材料として使用
+
+**ステップ3: Item Xを編集（循環参照エラー）**
+3. Item Xを編集
+   Name: Item X
+   Proceed Yield Amount: 700
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Item Z (200g) ← 新規作成のItem Zを材料として追加（循環参照！）
+       （Item X → Item Z → Item Y → Item X の循環）
+
+**ステップ4: すべてを同時に保存:**
+- Item Z（新規）、Item X（更新）を同時に保存ボタンで保存
+  （Item Yは既に保存済みのため、保存対象に含めない）
+
+=== 5. 期待される結果 ===
+
+**ステップ1: 正常に保存される**
+- Item Yは正常に保存される
+- Item Yがデータベースに保存され、他のアイテムの材料として選択可能になる
+
+**ステップ4: 保存前に循環参照エラーが発生する**
+- 保存ボタンをクリックすると、保存前に循環参照チェックが実行される
+- 循環参照が検出され、エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item X' creates a circular dependency. Path: Item X → Item Z → Item Y → Item X"
+- 保存がキャンセルされ、データベースには保存されない
+- 既存のItem Xのデータが変更されない
+- 新規のItem Zも作成されない
+- 既に保存されたItem Yのデータは変更されない
+
+=== 6. 確認ポイント ===
+1. Item Yを先に保存することで、Item ZのレシピラインでItem Yを選択できること
+2. 複数のアイテムを同時に保存する場合でも循環参照が検出されること
+3. 新規作成と更新が混在する場合でも正しくチェックされること
+4. エラーメッセージに循環参照のパスが表示されること
+5. データベースに保存されないこと（Item ZとItem Xの更新）
+6. 既存のデータが変更されないこと（Item XとItem Y）
+
+========================================
+【テストケース27: 循環参照チェック - 正常なケース（循環参照なし）】
+========================================
+
+目的: 循環参照がない正常なケースで、保存が成功することを確認
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+3. Butter
+   Name: Butter
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+3. Butter from Supplier A
+   Base Item: Butter
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 2
+   Purchase Cost: 40.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**正常な依存関係（循環参照なし）:**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 800
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+     - Ingredient: Sugar (300g)
+
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Butter (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用（正常）
+
+3. Item C
+   Name: Item C
+   Proceed Yield Amount: 800
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Item A (400g) ← Item Aを材料として使用（正常）
+     - Ingredient: Item B (400g) ← Item Bを材料として使用（正常）
+
+**すべてを同時に保存:**
+- Item A、Item B、Item Cを同時に保存ボタンで保存
+
+=== 5. 期待される結果 ===
+
+**正常に保存される**
+- 循環参照がないため、エラーが発生しない
+- すべてのアイテムが正常に保存される
+- コスト計算が正しく実行される
+
+=== 6. 確認ポイント ===
+1. 循環参照がない場合、エラーが発生しないこと
+2. すべてのアイテムが正常に保存されること
+3. コスト計算が正しく実行されること
+4. 依存関係が正しく構築されること
+
+========================================
+【テストケース28: 循環参照チェック - レシピライン更新時のチェック】
+========================================
+
+目的: レシピラインを更新する際の循環参照チェックをテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Flour
+   Name: Flour
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+2. Sugar
+   Name: Sugar
+   Specific Weight: (不要)
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Flour from Supplier A
+   Base Item: Flour
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 10
+   Purchase Cost: 50.00
+
+2. Sugar from Supplier A
+   Base Item: Sugar
+   Vendor: Supplier A
+   Purchase Unit: kg
+   Purchase Quantity: 5
+   Purchase Cost: 30.00
+
+=== 4. Prepped Items（Costページ） ===
+
+**ステップ1: Item Aを作成（正常）**
+1. Item A
+   Name: Item A
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Flour (500g)
+
+**ステップ2: Item Bを作成（正常）**
+2. Item B
+   Name: Item B
+   Proceed Yield Amount: 500
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← Item Aを材料として使用
+   → 保存ボタンをクリックして保存（Item Bがデータベースに保存される）
+
+**ステップ3: Item Cを作成（正常）**
+3. Item C
+   Name: Item C
+   Proceed Yield Amount: 400
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Item B (400g) ← 既に保存されたItem Bを材料として使用（選択可能）
+   → 保存ボタンをクリックして保存（Item Cがデータベースに保存される）
+
+**ステップ4: Item Bを編集してItem Cを追加（循環参照エラー）**
+4. Item Bを編集
+   Name: Item B
+   Proceed Yield Amount: 600
+   Proceed Yield Unit: g
+   Recipe Lines:
+     - Ingredient: Sugar (200g)
+     - Ingredient: Item A (300g) ← 既存のレシピライン
+     - Ingredient: Item C (100g) ← 既に保存されたItem Cを材料として追加（循環参照！）
+       （Item B → Item C → Item B の循環）
+
+=== 5. 期待される結果 ===
+
+**ステップ1、2、3: 正常に保存される**
+- Item A、Item B、Item Cは正常に保存される
+- Item Cがデータベースに保存され、他のアイテムの材料として選択可能になる
+
+**ステップ4: エラーが発生する**
+- Item Bのレシピラインを更新しようとすると、保存前に循環参照エラーが発生する
+- エラーメッセージ例:
+  "Cycle detected in recipe dependency chain. Item 'Item B' creates a circular dependency. Path: Item B → Item C → Item B"
+- 保存がキャンセルされ、データベースには保存されない
+- 既存のItem Bのデータが変更されない
+- 既に保存されたItem AとItem Cのデータは変更されない
+
+=== 6. 確認ポイント ===
+1. Item BとItem Cを先に保存することで、それぞれが材料として選択可能になること
+2. レシピラインを更新する際にも循環参照が検出されること
+3. 既存のレシピラインと新規のレシピラインの両方が考慮されること
+4. エラーメッセージに循環参照のパスが表示されること
+5. データベースに保存されないこと（Item Bの更新）
+6. 既存のデータが変更されないこと（Item A、Item B、Item C）
+
+========================================
+【テストケース29: ml単位のテスト】
+========================================
+
+目的: ml単位を使用したRaw ItemとPrepped Itemのコスト計算をテスト
+
+=== 1. Base Items（Itemsページ - Base Itemsタブ） ===
+1. Milk
+   Name: Milk
+   Specific Weight: 1.03 (g/ml) ← mlを使用するため必須
+   Each Grams: (不要)
+
+2. Water
+   Name: Water
+   Specific Weight: 1.00 (g/ml) ← mlを使用するため必須
+   Each Grams: (不要)
+
+=== 2. Vendors（Itemsページ - Vendorsタブ） ===
+1. Supplier A
+   Name: Supplier A
+
+2. Supplier B
+   Name: Supplier B
+
+=== 3. Vendor Products（Itemsページ - Itemsタブ） ===
+1. Milk from Supplier A
+   Base Item: Milk
+   Vendor: Supplier A
+   Product Name: Whole Milk
+   Brand Name: (任意)
+   Purchase Unit: liter
+   Purchase Quantity: 1
+   Purchase Cost: 2.50
+   (Cost per gram ≈ 0.00243 $/g)
+
+2. Water from Supplier B
+   Base Item: Water
+   Vendor: Supplier B
+   Product Name: Spring Water
+   Brand Name: (任意)
+   Purchase Unit: ml
+   Purchase Quantity: 500
+   Purchase Cost: 0.50
+   (Cost per gram = 0.50 / (500 * 1.00) = 0.001 $/g)
+
+=== 4. Prepped Items（Costページ） ===
+1. Diluted Milk
+   Name: Diluted Milk
+   Type: Prepped
+   Yield Amount: 1500
+   Yield Unit: g
+   Notes: (材料の合計1530g、水分が蒸発する場合を想定)
+
+   Recipe Lines:
+   - Ingredient: Milk
+     Quantity: 1000
+     Unit: ml
+   - Ingredient: Water
+     Quantity: 500
+     Unit: ml
+
+期待される結果:
+- Milk cost per gram:
+  * 1 liter = 1000 ml
+  * Grams per liter = 1.03 * 1000 = 1030 g
+  * Cost per gram = 2.50 / 1030 ≈ 0.00243 $/g
+- Water cost per gram:
+  * 500 ml = 500 * 1.00 = 500 g
+  * Cost per gram = 0.50 / 500 = 0.001 $/g
+- Diluted Milk:
+  * Milk grams = 1000 * 1.03 = 1030 g
+  * Water grams = 500 * 1.00 = 500 g
+  * Total ingredients grams = 1030 + 500 = 1530 g
+  * Ingredient cost = (1030 * 0.00243) + (500 * 0.001) ≈ 2.503 + 0.50 = 3.003
+  * Yield = 1500 g (材料の総合計1530g、水分が蒸発して1500gになる)
+  * Cost per gram = 3.003 / 1500 ≈ 0.002 $/g
+
+=== 5. 確認ポイント ===
+1. ml単位が正しく変換されること（1 ml = specific_weightグラム）
+2. mlを使用する場合、specific_weightが必要であること
+3. ml単位のRaw Itemのコスト計算が正しいこと
+4. ml単位の材料を含むPrepped Itemのコスト計算が正しいこと
+5. Yieldが材料の総合計を超えないこと（1500g ≤ 1530g、水分が蒸発する場合を想定）
+
+========================================
+【注意事項】
+========================================
+
+1. テストケースは独立して実行できるように設計されています
+2. 各テストケースの前にデータベースをクリアすることを推奨します
+3. 計算結果は浮動小数点の精度により、わずかに異なる場合があります
+4. 循環参照のテストケース（15、16、17、19）は、エラーが発生することが期待されます
+5. 循環参照のテストケース（18）は、正常に保存されることが期待されます
+6. Yieldが"each"の場合、each_gramsが自動的に計算・保存されることを確認してください
+7. Base ItemsタブでBase Itemを作成すると、自動的にitemsテーブルにitem_kind='raw'のレコードが作成されます
+8. Itemsタブではvendor_productsテーブルにデータを保存します（itemsレコードは既に存在している必要があります）
+9. Costページではitemsテーブルにitem_kind='prepped'のレコードを作成し、recipe_linesテーブルにレシピを保存します
+10. 循環参照チェックは、保存前に実行されます（フロントエンドとバックエンドの両方で実装）
+11. 循環参照が検出された場合、エラーメッセージに循環参照のパスが表示されます
+12. 複数のアイテムを同時に保存する場合でも、循環参照チェックが正しく機能します
+
+========================================
