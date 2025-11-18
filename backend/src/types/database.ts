@@ -74,3 +74,12 @@ export interface NonMassUnit {
   created_at?: string;
   updated_at?: string;
 }
+
+export interface ItemUnitProfile {
+  id: string;
+  item_id: string; // FK to items
+  source_unit: string;
+  grams_per_source_unit: number;
+  created_at?: string;
+  updated_at?: string;
+}
