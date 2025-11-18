@@ -8,7 +8,7 @@ import { Calculator, Package, Settings } from "lucide-react";
 const navigationItems = [
   {
     id: "cost",
-    label: "Cost",
+    label: "Costing",
     icon: Calculator,
     href: "/cost",
   },

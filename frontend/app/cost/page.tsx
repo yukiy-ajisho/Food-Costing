@@ -90,6 +90,7 @@ export default function CostPage() {
   const [yieldMax, setYieldMax] = useState<number | "">("");
   const [costMin, setCostMin] = useState<number | "">("");
   const [costMax, setCostMax] = useState<number | "">("");
+  const [costUnit, setCostUnit] = useState<"g" | "kg">("g"); // Cost表示単位
   const [loading, setLoading] = useState(true);
 
   // データ取得
@@ -1238,8 +1239,40 @@ export default function CostPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Proceed
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Cost/g
+                <th
+                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  style={{ minWidth: "180px" }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="min-w-[70px]">Cost/{costUnit}</span>
+                    <div className="flex items-center gap-1">
+                      <span
+                        className={`text-xs ${
+                          costUnit === "g" ? "font-semibold" : "text-gray-400"
+                        }`}
+                      >
+                        g
+                      </span>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={costUnit === "kg"}
+                          onChange={(e) =>
+                            setCostUnit(e.target.checked ? "kg" : "g")
+                          }
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                      </label>
+                      <span
+                        className={`text-xs ${
+                          costUnit === "kg" ? "font-semibold" : "text-gray-400"
+                        }`}
+                      >
+                        kg
+                      </span>
+                    </div>
+                  </div>
                 </th>
                 {isEditMode && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
@@ -1435,11 +1468,16 @@ export default function CostPage() {
                       )}
                     </td>
 
-                    {/* Cost/g */}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    {/* Cost/g or Cost/kg */}
+                    <td
+                      className="px-6 py-4 whitespace-nowrap"
+                      style={{ minWidth: "180px" }}
+                    >
                       <div className="text-sm text-gray-900">
                         {item.cost_per_gram !== undefined
-                          ? `$${item.cost_per_gram.toFixed(6)}/g`
+                          ? costUnit === "g"
+                            ? `$${item.cost_per_gram.toFixed(6)}/g`
+                            : `$${(item.cost_per_gram * 1000).toFixed(2)}/kg`
                           : "-"}
                       </div>
                     </td>
