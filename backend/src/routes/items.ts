@@ -35,7 +35,6 @@ router.get("/", async (req, res) => {
     const message =
       error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
-    res.status(500).json({ error: error.message });
   }
 });
 
@@ -60,7 +59,6 @@ router.get("/:id", async (req, res) => {
     const message =
       error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
-    res.status(500).json({ error: error.message });
   }
 });
 
@@ -94,7 +92,6 @@ router.post("/", async (req, res) => {
     const message =
       error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
-    res.status(500).json({ error: error.message });
   }
 });
 
@@ -275,7 +272,6 @@ router.put("/:id", async (req, res) => {
     const message =
       error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
-    res.status(500).json({ error: error.message });
   }
 });
 
@@ -299,7 +295,6 @@ router.delete("/:id", async (req, res) => {
     const message =
       error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
-    res.status(500).json({ error: error.message });
   }
 });
 
