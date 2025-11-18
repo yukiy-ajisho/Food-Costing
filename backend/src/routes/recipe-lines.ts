@@ -83,9 +83,7 @@ router.post("/", async (req, res) => {
         );
       } catch (cycleError: unknown) {
         const message =
-          cycleError instanceof Error
-            ? cycleError.message
-            : String(cycleError);
+          cycleError instanceof Error ? cycleError.message : String(cycleError);
         return res.status(400).json({
           error: message,
         });
@@ -104,8 +102,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -176,9 +173,7 @@ router.put("/:id", async (req, res) => {
         );
       } catch (cycleError: unknown) {
         const message =
-          cycleError instanceof Error
-            ? cycleError.message
-            : String(cycleError);
+          cycleError instanceof Error ? cycleError.message : String(cycleError);
         return res.status(400).json({
           error: message,
         });
@@ -198,8 +193,7 @@ router.put("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -221,8 +215,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
