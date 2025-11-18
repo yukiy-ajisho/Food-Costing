@@ -17,8 +17,14 @@ import nonMassUnitsRouter from "./routes/non-mass-units";
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// CORS設定（本番環境ではVercelのドメインを許可）
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || "*", // 本番環境ではVercelのURLを設定
+  credentials: true,
+};
+
 // ミドルウェア
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // ルート
