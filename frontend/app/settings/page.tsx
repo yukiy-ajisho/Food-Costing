@@ -4,8 +4,6 @@ import { useState, useEffect } from "react";
 import { Edit, Save, Plus, Trash2, X } from "lucide-react";
 import { laborRolesAPI, type LaborRole } from "@/lib/api";
 
-type TabType = "labor";
-
 // UI用の型（isMarkedForDeletionを追加）
 interface LaborRoleUI extends LaborRole {
   isMarkedForDeletion?: boolean;
