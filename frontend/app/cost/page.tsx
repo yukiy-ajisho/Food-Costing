@@ -71,8 +71,8 @@ interface PreppedItem {
 // 単位のオプション（順番を制御）
 // const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED]; // 未使用のためコメントアウト
 
-// Yieldの単位オプション（gとeachのみ）
-const yieldUnitOptions = ["g", "each"];
+// Yieldの単位オプション（g、kg、each）
+const yieldUnitOptions = ["g", "kg", "each"];
 
 export default function CostPage() {
   const [items, setItems] = useState<PreppedItem[]>([]);
@@ -253,7 +253,7 @@ export default function CostPage() {
       return -1; // エラーを示す値
     }
 
-    // Yieldが"g"の場合
+    // Yieldが質量単位（"g"または"kg"など）の場合
     const multiplier = MASS_UNIT_CONVERSIONS[yieldUnit];
     if (!multiplier) {
       return -1; // エラーを示す値
@@ -332,7 +332,7 @@ export default function CostPage() {
             return;
           }
         } else {
-          // Yieldが"g"の場合
+          // Yieldが質量単位（"g"または"kg"など）の場合
           const yieldGrams = convertYieldToGrams(
             item.proceed_yield_amount,
             item.proceed_yield_unit
@@ -526,19 +526,7 @@ export default function CostPage() {
           }
         } else {
           // 更新
-          await itemsAPI.update(item.id, {
-            name: item.name,
-            is_menu_item: item.is_menu_item,
-            proceed_yield_amount: item.proceed_yield_amount,
-            proceed_yield_unit: item.proceed_yield_unit,
-            notes: item.notes || null,
-            each_grams:
-              item.proceed_yield_unit === "each"
-                ? item.each_grams || null
-                : null,
-          });
-
-          // レシピラインを更新
+          // レシピラインを先に更新（バックエンドのバリデーションで正しい値を使用するため）
           for (const line of item.recipe_lines) {
             if (line.isMarkedForDeletion && !line.isNew) {
               await recipeLinesAPI.delete(line.id);
@@ -579,6 +567,19 @@ export default function CostPage() {
               }
             }
           }
+
+          // アイテムを更新（レシピライン更新後に実行することで、バリデーションが正しい値を使用）
+          await itemsAPI.update(item.id, {
+            name: item.name,
+            is_menu_item: item.is_menu_item,
+            proceed_yield_amount: item.proceed_yield_amount,
+            proceed_yield_unit: item.proceed_yield_unit,
+            notes: item.notes || null,
+            each_grams:
+              item.proceed_yield_unit === "each"
+                ? item.each_grams || null
+                : null,
+          });
         }
       }
 

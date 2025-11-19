@@ -237,10 +237,14 @@ export async function getCost(
     }
 
     // Yieldをグラムに変換
-    // Yieldの単位は"g"または"each"のみ許可
-    if (item.proceed_yield_unit !== "g" && item.proceed_yield_unit !== "each") {
+    // Yieldの単位は"g", "kg", "each"を許可
+    if (
+      item.proceed_yield_unit !== "g" &&
+      item.proceed_yield_unit !== "kg" &&
+      item.proceed_yield_unit !== "each"
+    ) {
       throw new Error(
-        `Prepped item ${itemId} has invalid yield unit: ${item.proceed_yield_unit}. Only "g" and "each" are allowed.`
+        `Prepped item ${itemId} has invalid yield unit: ${item.proceed_yield_unit}. Only "g", "kg", and "each" are allowed.`
       );
     }
 
@@ -343,9 +347,14 @@ export async function getCost(
       // コスト計算用: 出来上がりの総重量（each_grams × Yield Amount）
       yieldGrams = eachGrams * yieldAmount;
     } else {
-      // Yieldが"g"の場合（問題6-4の修正）
-      // 171行目で既に"g"と"each"のみ許可されているため、ここでは必ず proceed_yield_unit === "g"
-      yieldGrams = item.proceed_yield_amount;
+      // Yieldが"g"または"kg"の場合（質量単位）
+      const multiplier = MASS_UNIT_CONVERSIONS[item.proceed_yield_unit];
+      if (!multiplier) {
+        throw new Error(
+          `Invalid yield unit: ${item.proceed_yield_unit} for item ${itemId}`
+        );
+      }
+      yieldGrams = item.proceed_yield_amount * multiplier;
     }
 
     if (yieldGrams === 0) {
