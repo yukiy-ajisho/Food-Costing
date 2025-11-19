@@ -618,3 +618,388 @@ export async function calculateCosts(
 
   return results;
 }
+
+/**
+ * 依存関係の逆方向追跡: 指定されたアイテムを材料として使っている親アイテムを特定
+ * @param itemId - 材料として使われているアイテムID
+ * @param recipeLinesMap - Recipe Linesのマップ（parent_item_idをキーとして）
+ * @param visited - 訪問済みアイテムのセット（循環検出用）
+ * @returns 影響を受けるアイテムIDのセット（指定されたアイテム自体も含む）
+ */
+function findDependentItems(
+  itemId: string,
+  recipeLinesMap: Map<string, any[]>,
+  visited: Set<string> = new Set()
+): Set<string> {
+  const dependentItems = new Set<string>([itemId]);
+
+  // 循環検出
+  if (visited.has(itemId)) {
+    return dependentItems;
+  }
+
+  visited.add(itemId);
+
+  // このアイテムを材料として使っている親アイテムを検索
+  for (const [parentItemId, recipeLines] of recipeLinesMap.entries()) {
+    const usesThisItem = recipeLines.some(
+      (line) => line.line_type === "ingredient" && line.child_item_id === itemId
+    );
+
+    if (usesThisItem) {
+      dependentItems.add(parentItemId);
+      // 再帰的に、その親アイテムを材料として使っているアイテムも検索
+      const nestedDependents = findDependentItems(
+        parentItemId,
+        recipeLinesMap,
+        visited
+      );
+      nestedDependents.forEach((id) => dependentItems.add(id));
+    }
+  }
+
+  visited.delete(itemId);
+  return dependentItems;
+}
+
+/**
+ * 変更されたアイテムとその依存関係のみコストを計算（差分更新版）
+ * @param changedItemIds - 変更されたアイテムIDの配列
+ * @param recipeLinesMap - Recipe Linesのマップ（オプション、指定しない場合は取得）
+ * @returns アイテムIDをキー、コスト（1グラムあたり）を値とするMap
+ */
+export async function calculateCostsForChangedItems(
+  changedItemIds: string[],
+  recipeLinesMap?: Map<string, any[]>
+): Promise<Map<string, number>> {
+  if (changedItemIds.length === 0) {
+    return new Map();
+  }
+
+  // Recipe Linesのマップを取得（指定されていない場合）
+  if (!recipeLinesMap) {
+    const { data: allRecipeLines } = await supabase
+      .from("recipe_lines")
+      .select("*")
+      .eq("line_type", "ingredient");
+
+    recipeLinesMap = new Map<string, any[]>();
+    allRecipeLines?.forEach((line) => {
+      const existing = recipeLinesMap!.get(line.parent_item_id) || [];
+      existing.push(line);
+      recipeLinesMap!.set(line.parent_item_id, existing);
+    });
+  }
+
+  // 影響を受けるすべてのアイテムを特定（依存関係の逆方向追跡）
+  const affectedItemIds = new Set<string>();
+  for (const itemId of changedItemIds) {
+    const dependents = findDependentItems(itemId, recipeLinesMap, new Set());
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 影響を受けるアイテムのキャッシュのみクリア
+  for (const itemId of affectedItemIds) {
+    // Raw Itemの場合、すべてのspecificVendorProductIdのキャッシュをクリア
+    // Prepped Itemの場合、itemIdのみのキャッシュをクリア
+    const keysToDelete: string[] = [];
+    for (const [key, _] of costCache.entries()) {
+      if (key === itemId || key.startsWith(`${itemId}:`)) {
+        keysToDelete.push(key);
+      }
+    }
+    keysToDelete.forEach((key) => costCache.delete(key));
+  }
+
+  // データを一度だけ取得
+  const baseItemsMap = await getBaseItemsMap();
+  const itemsMap = await getItemsMap();
+  const vendorProductsMap = await getVendorProductsMap();
+  const laborRoles = await getLaborRolesMap();
+
+  // 結果を保存するMap
+  const results = new Map<string, number>();
+
+  // 影響を受けるアイテムのみコストを計算
+  for (const itemId of affectedItemIds) {
+    try {
+      const costPerGram = await getCost(
+        itemId,
+        new Set(),
+        baseItemsMap,
+        itemsMap,
+        vendorProductsMap,
+        laborRoles
+      );
+      results.set(itemId, costPerGram);
+    } catch (error) {
+      console.error(`Failed to calculate cost for item ${itemId}:`, error);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * vendor_product変更の影響範囲を特定
+ * @param vendorProductIds - 変更されたvendor_productのIDの配列
+ * @param itemsMap - Itemsのマップ
+ * @param recipeLinesMap - Recipe Linesのマップ
+ * @returns 影響を受けるアイテムIDのセット
+ */
+async function findItemsAffectedByVendorProductChanges(
+  vendorProductIds: string[],
+  itemsMap: Map<string, Item>,
+  recipeLinesMap: Map<string, any[]>
+): Promise<Set<string>> {
+  const affectedItemIds = new Set<string>();
+
+  // すべてのvendor_productsを取得
+  const { data: allVendorProducts } = await supabase
+    .from("vendor_products")
+    .select("*");
+
+  if (!allVendorProducts) {
+    return affectedItemIds;
+  }
+
+  // 変更されたvendor_productのbase_item_idを取得
+  const changedBaseItemIds = new Set<string>();
+  for (const vpId of vendorProductIds) {
+    const vp = allVendorProducts.find((vp) => vp.id === vpId);
+    if (vp?.base_item_id) {
+      changedBaseItemIds.add(vp.base_item_id);
+    }
+  }
+
+  // そのbase_item_idを持つraw itemを特定
+  const affectedRawItemIds = new Set<string>();
+  for (const [itemId, item] of itemsMap.entries()) {
+    if (
+      item.item_kind === "raw" &&
+      item.base_item_id &&
+      changedBaseItemIds.has(item.base_item_id)
+    ) {
+      affectedRawItemIds.add(itemId);
+    }
+  }
+
+  // そのraw itemを材料として使っているprepped itemを特定（依存関係の逆方向追跡）
+  for (const rawItemId of affectedRawItemIds) {
+    const dependents = findDependentItems(rawItemId, recipeLinesMap, new Set());
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  return affectedItemIds;
+}
+
+/**
+ * base_item変更の影響範囲を特定
+ * @param baseItemIds - 変更されたbase_itemのIDの配列
+ * @param itemsMap - Itemsのマップ
+ * @param recipeLinesMap - Recipe Linesのマップ
+ * @returns 影響を受けるアイテムIDのセット
+ */
+function findItemsAffectedByBaseItemChanges(
+  baseItemIds: string[],
+  itemsMap: Map<string, Item>,
+  recipeLinesMap: Map<string, any[]>
+): Set<string> {
+  const affectedItemIds = new Set<string>();
+
+  // そのbase_item_idを持つraw itemを特定
+  const affectedRawItemIds = new Set<string>();
+  for (const [itemId, item] of itemsMap.entries()) {
+    if (
+      item.item_kind === "raw" &&
+      item.base_item_id &&
+      baseItemIds.includes(item.base_item_id)
+    ) {
+      affectedRawItemIds.add(itemId);
+    }
+  }
+
+  // そのraw itemを材料として使っているprepped itemを特定（依存関係の逆方向追跡）
+  for (const rawItemId of affectedRawItemIds) {
+    const dependents = findDependentItems(rawItemId, recipeLinesMap, new Set());
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  return affectedItemIds;
+}
+
+/**
+ * labor_role変更の影響範囲を特定
+ * @param laborRoleNames - 変更されたlabor_roleのnameの配列
+ * @param recipeLinesMap - Recipe Linesのマップ（すべてのレシピライン、ingredientとlaborの両方）
+ * @returns 影響を受けるアイテムIDのセット
+ */
+function findItemsAffectedByLaborRoleChanges(
+  laborRoleNames: string[],
+  recipeLinesMap: Map<string, any[]>
+): Set<string> {
+  const affectedItemIds = new Set<string>();
+
+  // そのlabor_roleを使っているrecipe lineを持つprepped itemを特定
+  const directlyAffectedItemIds = new Set<string>();
+  for (const [parentItemId, recipeLines] of recipeLinesMap.entries()) {
+    const usesChangedLaborRole = recipeLines.some(
+      (line) =>
+        line.line_type === "labor" &&
+        line.labor_role &&
+        laborRoleNames.includes(line.labor_role)
+    );
+
+    if (usesChangedLaborRole) {
+      directlyAffectedItemIds.add(parentItemId);
+    }
+  }
+
+  // そのprepped itemを材料として使っているprepped itemを特定（依存関係の逆方向追跡）
+  // labor lineのみのrecipeLinesMapを作成（ingredient lineのみ）
+  const ingredientRecipeLinesMap = new Map<string, any[]>();
+  for (const [parentItemId, recipeLines] of recipeLinesMap.entries()) {
+    const ingredientLines = recipeLines.filter(
+      (line) => line.line_type === "ingredient"
+    );
+    if (ingredientLines.length > 0) {
+      ingredientRecipeLinesMap.set(parentItemId, ingredientLines);
+    }
+  }
+
+  for (const itemId of directlyAffectedItemIds) {
+    affectedItemIds.add(itemId);
+    const dependents = findDependentItems(
+      itemId,
+      ingredientRecipeLinesMap,
+      new Set()
+    );
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  return affectedItemIds;
+}
+
+/**
+ * すべての変更を統合して、影響を受けるアイテムを特定し、差分更新でコストを計算
+ * @param changedItemIds - 変更されたアイテムIDの配列（recipe_linesの変更による）
+ * @param changedVendorProductIds - 変更されたvendor_productのIDの配列
+ * @param changedBaseItemIds - 変更されたbase_itemのIDの配列
+ * @param changedLaborRoleNames - 変更されたlabor_roleのnameの配列
+ * @returns アイテムIDをキー、コスト（1グラムあたり）を値とするMap
+ */
+export async function calculateCostsForAllChanges(
+  changedItemIds: string[] = [],
+  changedVendorProductIds: string[] = [],
+  changedBaseItemIds: string[] = [],
+  changedLaborRoleNames: string[] = []
+): Promise<Map<string, number>> {
+  // すべてのアイテムとレシピラインを取得
+  const itemsMap = await getItemsMap();
+  const { data: allRecipeLines } = await supabase
+    .from("recipe_lines")
+    .select("*");
+
+  // Recipe Linesのマップを作成（ingredientとlaborの両方）
+  const recipeLinesMap = new Map<string, any[]>();
+  allRecipeLines?.forEach((line) => {
+    const existing = recipeLinesMap.get(line.parent_item_id) || [];
+    existing.push(line);
+    recipeLinesMap.set(line.parent_item_id, existing);
+  });
+
+  // IngredientのみのRecipe Linesのマップ（依存関係追跡用）
+  const ingredientRecipeLinesMap = new Map<string, any[]>();
+  allRecipeLines?.forEach((line) => {
+    if (line.line_type === "ingredient") {
+      const existing = ingredientRecipeLinesMap.get(line.parent_item_id) || [];
+      existing.push(line);
+      ingredientRecipeLinesMap.set(line.parent_item_id, existing);
+    }
+  });
+
+  // 影響を受けるすべてのアイテムを特定
+  const affectedItemIds = new Set<string>();
+
+  // 1. 変更されたアイテム（recipe_linesの変更による）
+  for (const itemId of changedItemIds) {
+    const dependents = findDependentItems(
+      itemId,
+      ingredientRecipeLinesMap,
+      new Set()
+    );
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 2. vendor_product変更の影響
+  if (changedVendorProductIds.length > 0) {
+    const vendorProductAffected = await findItemsAffectedByVendorProductChanges(
+      changedVendorProductIds,
+      itemsMap,
+      ingredientRecipeLinesMap
+    );
+    vendorProductAffected.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 3. base_item変更の影響
+  if (changedBaseItemIds.length > 0) {
+    const baseItemAffected = findItemsAffectedByBaseItemChanges(
+      changedBaseItemIds,
+      itemsMap,
+      ingredientRecipeLinesMap
+    );
+    baseItemAffected.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 4. labor_role変更の影響
+  if (changedLaborRoleNames.length > 0) {
+    const laborRoleAffected = findItemsAffectedByLaborRoleChanges(
+      changedLaborRoleNames,
+      recipeLinesMap
+    );
+    laborRoleAffected.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 影響を受けるアイテムがなければ空のMapを返す
+  if (affectedItemIds.size === 0) {
+    return new Map();
+  }
+
+  // 影響を受けるアイテムのキャッシュのみクリア
+  for (const itemId of affectedItemIds) {
+    const keysToDelete: string[] = [];
+    for (const [key, _] of costCache.entries()) {
+      if (key === itemId || key.startsWith(`${itemId}:`)) {
+        keysToDelete.push(key);
+      }
+    }
+    keysToDelete.forEach((key) => costCache.delete(key));
+  }
+
+  // データを一度だけ取得
+  const baseItemsMap = await getBaseItemsMap();
+  const vendorProductsMap = await getVendorProductsMap();
+  const laborRoles = await getLaborRolesMap();
+
+  // 結果を保存するMap
+  const results = new Map<string, number>();
+
+  // 影響を受けるアイテムのみコストを計算
+  for (const itemId of affectedItemIds) {
+    try {
+      const costPerGram = await getCost(
+        itemId,
+        new Set(),
+        baseItemsMap,
+        itemsMap,
+        vendorProductsMap,
+        laborRoles
+      );
+      results.set(itemId, costPerGram);
+    } catch (error) {
+      console.error(`Failed to calculate cost for item ${itemId}:`, error);
+    }
+  }
+
+  return results;
+}

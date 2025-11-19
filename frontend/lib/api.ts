@@ -5,6 +5,71 @@
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
+/**
+ * 変更履歴をlocalStorageに保存（Costingページの差分更新用）
+ */
+export function saveChangeHistory(changes: {
+  changed_item_ids?: string[];
+  changed_vendor_product_ids?: string[];
+  changed_base_item_ids?: string[];
+  changed_labor_role_names?: string[];
+}) {
+  try {
+    // 既存の変更履歴を取得
+    const existingStr = localStorage.getItem("costing_change_history");
+    let existing: typeof changes = {};
+    if (existingStr) {
+      try {
+        existing = JSON.parse(existingStr);
+      } catch (e) {
+        console.error("Failed to parse existing change history:", e);
+      }
+    }
+
+    // 変更をマージ（重複を除去）
+    const merged: typeof changes = {
+      changed_item_ids: [
+        ...new Set([
+          ...(existing.changed_item_ids || []),
+          ...(changes.changed_item_ids || []),
+        ]),
+      ],
+      changed_vendor_product_ids: [
+        ...new Set([
+          ...(existing.changed_vendor_product_ids || []),
+          ...(changes.changed_vendor_product_ids || []),
+        ]),
+      ],
+      changed_base_item_ids: [
+        ...new Set([
+          ...(existing.changed_base_item_ids || []),
+          ...(changes.changed_base_item_ids || []),
+        ]),
+      ],
+      changed_labor_role_names: [
+        ...new Set([
+          ...(existing.changed_labor_role_names || []),
+          ...(changes.changed_labor_role_names || []),
+        ]),
+      ],
+    };
+
+    // 空の配列は削除
+    if (merged.changed_item_ids?.length === 0) delete merged.changed_item_ids;
+    if (merged.changed_vendor_product_ids?.length === 0)
+      delete merged.changed_vendor_product_ids;
+    if (merged.changed_base_item_ids?.length === 0)
+      delete merged.changed_base_item_ids;
+    if (merged.changed_labor_role_names?.length === 0)
+      delete merged.changed_labor_role_names;
+
+    // localStorageに保存
+    localStorage.setItem("costing_change_history", JSON.stringify(merged));
+  } catch (error) {
+    console.error("Failed to save change history:", error);
+  }
+}
+
 // 型定義
 export interface BaseItem {
   id: string;
@@ -147,6 +212,20 @@ export const recipeLinesAPI = {
     fetchAPI<void>(`/recipe-lines/${id}`, {
       method: "DELETE",
     }),
+  batch: (operations: {
+    creates: Partial<RecipeLine>[];
+    updates: (Partial<RecipeLine> & { id: string })[];
+    deletes: string[];
+  }) => {
+    return fetchAPI<{
+      created: RecipeLine[];
+      updated: RecipeLine[];
+      deleted: string[];
+    }>("/recipe-lines/batch", {
+      method: "POST",
+      body: JSON.stringify(operations),
+    });
+  },
 };
 
 // Cost API
@@ -162,6 +241,25 @@ export const costAPI = {
       method: "POST",
       body: JSON.stringify({ item_ids: itemIds }),
     });
+  },
+  getCostsDifferential: (params: {
+    changed_item_ids?: string[];
+    changed_vendor_product_ids?: string[];
+    changed_base_item_ids?: string[];
+    changed_labor_role_names?: string[];
+  }) => {
+    return fetchAPI<{ costs: Record<string, number> }>(
+      "/items/costs/differential",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          changed_item_ids: params.changed_item_ids || [],
+          changed_vendor_product_ids: params.changed_vendor_product_ids || [],
+          changed_base_item_ids: params.changed_base_item_ids || [],
+          changed_labor_role_names: params.changed_labor_role_names || [],
+        }),
+      }
+    );
   },
 };
 

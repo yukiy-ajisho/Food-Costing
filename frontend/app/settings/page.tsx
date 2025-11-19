@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Edit, Save, Plus, Trash2, X } from "lucide-react";
-import { laborRolesAPI, type LaborRole } from "@/lib/api";
+import { laborRolesAPI, saveChangeHistory, type LaborRole } from "@/lib/api";
 
 // UI用の型（isMarkedForDeletionを追加）
 interface LaborRoleUI extends LaborRole {
@@ -63,20 +63,25 @@ export default function SettingsPage() {
         return true;
       });
 
+      // 変更されたlabor_roleのnameを追跡
+      const changedLaborRoleNames: string[] = [];
+
       // API呼び出し
       for (const role of filteredRoles) {
         if (role.id.startsWith("new-")) {
           // 新規作成
-          await laborRolesAPI.create({
+          const newRole = await laborRolesAPI.create({
             name: role.name,
             hourly_wage: role.hourly_wage,
           });
+          changedLaborRoleNames.push(newRole.name);
         } else {
           // 更新
           await laborRolesAPI.update(role.id, {
             name: role.name,
             hourly_wage: role.hourly_wage,
           });
+          changedLaborRoleNames.push(role.name);
         }
       }
 
@@ -84,7 +89,19 @@ export default function SettingsPage() {
       for (const role of laborRoles) {
         if (role.isMarkedForDeletion && !role.id.startsWith("new-")) {
           await laborRolesAPI.delete(role.id);
+          // 削除されたroleのnameを取得（元のデータから）
+          const originalRole = originalLaborRoles.find((r) => r.id === role.id);
+          if (originalRole) {
+            changedLaborRoleNames.push(originalRole.name);
+          }
         }
+      }
+
+      // 変更履歴をlocalStorageに保存
+      if (changedLaborRoleNames.length > 0) {
+        saveChangeHistory({
+          changed_labor_role_names: changedLaborRoleNames,
+        });
       }
 
       // データを再取得
@@ -94,8 +111,7 @@ export default function SettingsPage() {
       setIsEditMode(false);
     } catch (error: unknown) {
       console.error("Failed to save:", error);
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoading(false);

@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   calculateCost,
   calculateCosts,
+  calculateCostsForAllChanges,
   clearCostCache,
 } from "../services/cost";
 
@@ -54,6 +55,58 @@ router.post("/items/costs", async (req, res) => {
 
     // 複数アイテムのコストを一度に計算
     const costsMap = await calculateCosts(item_ids);
+
+    // Mapをオブジェクトに変換
+    const costs: Record<string, number> = {};
+    costsMap.forEach((cost, itemId) => {
+      costs[itemId] = cost;
+    });
+
+    res.json({ costs });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /items/costs/differential
+ * 差分更新: 変更されたアイテムとその依存関係のみコストを計算
+ * Request body: {
+ *   changed_item_ids?: string[],
+ *   changed_vendor_product_ids?: string[],
+ *   changed_base_item_ids?: string[],
+ *   changed_labor_role_names?: string[]
+ * }
+ * Response: { costs: { [itemId: string]: number } }
+ */
+router.post("/items/costs/differential", async (req, res) => {
+  try {
+    const {
+      changed_item_ids = [],
+      changed_vendor_product_ids = [],
+      changed_base_item_ids = [],
+      changed_labor_role_names = [],
+    } = req.body;
+
+    if (
+      !Array.isArray(changed_item_ids) ||
+      !Array.isArray(changed_vendor_product_ids) ||
+      !Array.isArray(changed_base_item_ids) ||
+      !Array.isArray(changed_labor_role_names)
+    ) {
+      return res.status(400).json({
+        error: "All change arrays must be arrays",
+      });
+    }
+
+    // 差分更新でコストを計算
+    const costsMap = await calculateCostsForAllChanges(
+      changed_item_ids,
+      changed_vendor_product_ids,
+      changed_base_item_ids,
+      changed_labor_role_names
+    );
 
     // Mapをオブジェクトに変換
     const costs: Record<string, number> = {};

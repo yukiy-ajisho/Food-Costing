@@ -7,6 +7,7 @@ import {
   itemsAPI,
   baseItemsAPI,
   vendorsAPI,
+  saveChangeHistory,
   type Item,
   type BaseItem as APIBaseItem,
   type Vendor,
@@ -297,11 +298,14 @@ export default function ItemsPage() {
         return true;
       });
 
+      // 変更されたvendor_productのIDを追跡
+      const changedVendorProductIds: string[] = [];
+
       // API呼び出し
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
           // 新規作成: vendor_productsを作成（自動的にitemsも作成される）
-          await vendorProductsAPI.create({
+          const newVp = await vendorProductsAPI.create({
             base_item_id: vp.base_item_id,
             vendor_id: vp.vendor_id,
             product_name: vp.product_name || null,
@@ -310,6 +314,7 @@ export default function ItemsPage() {
             purchase_quantity: vp.purchase_quantity,
             purchase_cost: vp.purchase_cost,
           });
+          changedVendorProductIds.push(newVp.id);
 
           // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         } else {
@@ -323,6 +328,7 @@ export default function ItemsPage() {
             purchase_quantity: vp.purchase_quantity,
             purchase_cost: vp.purchase_cost,
           });
+          changedVendorProductIds.push(vp.id);
 
           // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         }
@@ -332,7 +338,15 @@ export default function ItemsPage() {
       for (const vp of vendorProducts) {
         if (vp.isMarkedForDeletion && !vp.isNew) {
           await vendorProductsAPI.delete(vp.id);
+          changedVendorProductIds.push(vp.id);
         }
+      }
+
+      // 変更履歴をlocalStorageに保存
+      if (changedVendorProductIds.length > 0) {
+        saveChangeHistory({
+          changed_vendor_product_ids: changedVendorProductIds,
+        });
       }
 
       // データを再取得
@@ -479,6 +493,10 @@ export default function ItemsPage() {
         return true;
       });
 
+      // 変更されたbase_item_idとitem_idを追跡
+      const changedBaseItemIds: string[] = [];
+      const changedItemIds: string[] = [];
+
       for (const item of filteredBaseItems) {
         let baseItemId: string;
 
@@ -489,6 +507,7 @@ export default function ItemsPage() {
             specific_weight: item.specific_weight || null,
           });
           baseItemId = newBaseItem.id;
+          changedBaseItemIds.push(baseItemId);
         } else {
           // Base Itemを更新
           await baseItemsAPI.update(item.id, {
@@ -496,6 +515,7 @@ export default function ItemsPage() {
             specific_weight: item.specific_weight || null,
           });
           baseItemId = item.id;
+          changedBaseItemIds.push(baseItemId);
         }
 
         // 対応するitemsレコードを取得または作成
@@ -514,12 +534,14 @@ export default function ItemsPage() {
             each_grams: item.each_grams || null,
           });
           correspondingItem = newItem;
+          changedItemIds.push(newItem.id);
         } else {
           // itemsレコードが存在する場合は、each_gramsを更新
           if (item.each_grams !== undefined) {
             await itemsAPI.update(correspondingItem.id, {
               each_grams: item.each_grams || null,
             });
+            changedItemIds.push(correspondingItem.id);
           }
         }
       }
@@ -527,7 +549,16 @@ export default function ItemsPage() {
       for (const item of baseItemsUI) {
         if (item.isMarkedForDeletion && !item.isNew) {
           await baseItemsAPI.delete(item.id);
+          changedBaseItemIds.push(item.id);
         }
+      }
+
+      // 変更履歴をlocalStorageに保存
+      if (changedBaseItemIds.length > 0 || changedItemIds.length > 0) {
+        saveChangeHistory({
+          changed_base_item_ids: changedBaseItemIds,
+          changed_item_ids: changedItemIds,
+        });
       }
 
       // データを再取得

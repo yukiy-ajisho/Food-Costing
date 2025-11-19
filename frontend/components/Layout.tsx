@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calculator, Package, Settings } from "lucide-react";
+import { Calculator, Package, Settings, Moon, Sun } from "lucide-react";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // ナビゲーション項目
 const navigationItems = [
@@ -29,6 +30,7 @@ const navigationItems = [
 // レイアウトコンテンツコンポーネント
 export function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { theme, toggleTheme } = useTheme();
 
   // 現在のページに応じたタイトルを取得
   const getPageTitle = () => {
@@ -38,14 +40,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
     return currentItem ? currentItem.label : "Food Costing";
   };
 
+  const isDark = theme === "dark";
+
   return (
-    <div className="h-screen flex bg-gray-50">
+    <div
+      className={`h-screen flex transition-colors duration-300 ${
+        isDark ? "bg-slate-900" : "bg-gray-50"
+      }`}
+    >
       {/* ナビゲーションバー（左側270px固定、スライドアウト効果） */}
-      <div className="w-0 xl:w-[270px] h-screen bg-white shadow-lg flex flex-col border-r border-gray-200 transition-[width,transform] duration-300 ease-in-out transform -translate-x-full xl:translate-x-0 overflow-hidden">
+      <div
+        className={`w-0 xl:w-[270px] h-screen shadow-lg flex flex-col border-r transition-[width,transform] duration-300 ease-in-out transform -translate-x-full xl:translate-x-0 overflow-hidden ${
+          isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"
+        }`}
+      >
         {/* ロゴ・アプリ名 */}
         <div className="p-6">
           <div className="flex items-center" style={{ gap: "8px" }}>
-            <h1 className="text-2xl font-bold text-gray-900">Food Costing</h1>
+            <h1
+              className={`text-2xl font-bold transition-colors ${
+                isDark ? "text-slate-100" : "text-gray-900"
+              }`}
+            >
+              Food Costing
+            </h1>
           </div>
         </div>
 
@@ -65,27 +83,28 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   href={item.href}
                   className={`w-full flex items-center space-x-8 px-12 py-8 text-left transition-colors border-0 no-underline ${
                     isActive
-                      ? "text-blue-700 font-semibold"
+                      ? "text-blue-600 font-semibold dark:text-blue-400"
+                      : isDark
+                      ? "text-slate-300 hover:text-blue-400"
                       : "text-gray-600 hover:text-blue-700"
                   }`}
                   style={{
-                    backgroundColor: "white",
+                    backgroundColor: isDark ? "#1e293b" : "white",
                     transition:
-                      "background-color 0.2s ease, border-radius 0.2s ease",
+                      "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
                     borderRadius: "8px",
-                    color: isActive ? "#1d4ed8" : "#6b7280",
                     padding: "8px 16px",
                     margin: "2px 0",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = "#dbeafe";
-                    e.currentTarget.style.color = "#1d4ed8";
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#334155"
+                      : "#dbeafe";
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = "white";
-                    e.currentTarget.style.color = isActive
-                      ? "#1d4ed8"
-                      : "#6b7280";
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#1e293b"
+                      : "white";
                   }}
                 >
                   <IconComponent
@@ -100,17 +119,50 @@ export function Layout({ children }: { children: React.ReactNode }) {
             })}
           </div>
         </nav>
+
+        {/* テーマ切り替えスイッチ（ナビゲーションバーの下の方） */}
+        <div className="px-4 pb-6">
+          <button
+            onClick={toggleTheme}
+            className={`w-full flex items-center justify-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
+              isDark
+                ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+            }`}
+            aria-label="Toggle theme"
+          >
+            {isDark ? (
+              <>
+                <Sun className="h-5 w-5" />
+                <span className="text-sm font-medium">Light Mode</span>
+              </>
+            ) : (
+              <>
+                <Moon className="h-5 w-5" />
+                <span className="text-sm font-medium">Dark Mode</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* コンテンツエリア（右側残り全スペース、スムーズ拡張） */}
       <div className="flex-1 flex flex-col transition-all duration-300 ease-in-out">
         {/* ヘッダー（上部90px） */}
         <header
-          className="h-[90px] bg-white shadow-sm border-b border-gray-200 px-8 flex items-center"
+          className={`h-[90px] shadow-sm border-b px-8 flex items-center transition-colors ${
+            isDark
+              ? "bg-slate-800 border-slate-700"
+              : "bg-white border-gray-200"
+          }`}
           style={{ paddingLeft: "30px" }}
         >
           <div className="flex items-center space-x-4">
-            <h1 className="text-2xl font-bold text-gray-900">
+            <h1
+              className={`text-2xl font-bold transition-colors ${
+                isDark ? "text-slate-100" : "text-gray-900"
+              }`}
+            >
               {getPageTitle()}
             </h1>
           </div>
@@ -118,7 +170,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         {/* メインコンテンツ（下部残りスペース） */}
         <main
-          className="flex-1 overflow-y-auto bg-gray-50"
+          className={`flex-1 overflow-y-auto transition-colors ${
+            isDark ? "bg-slate-900" : "bg-gray-50"
+          }`}
           style={{ scrollbarGutter: "stable" }}
         >
           {children}

@@ -36,6 +36,7 @@ import {
   isNonMassUnit,
   isMassUnit,
 } from "@/lib/constants";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // Recipe Lineの型定義（UI用）
 interface RecipeLine {
@@ -75,6 +76,8 @@ interface PreppedItem {
 const yieldUnitOptions = ["g", "kg", "each"];
 
 export default function CostPage() {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
   const [baseItems, setBaseItems] = useState<BaseItem[]>([]);
@@ -130,15 +133,66 @@ export default function CostPage() {
           console.error("Failed to fetch recipes:", error);
         }
 
-        // 全アイテムのコストを一度に計算（最適化）
+        // 変更履歴をlocalStorageから取得
+        const changeHistoryStr = localStorage.getItem("costing_change_history");
+        let changeHistory: {
+          changed_item_ids?: string[];
+          changed_vendor_product_ids?: string[];
+          changed_base_item_ids?: string[];
+          changed_labor_role_names?: string[];
+        } = {};
+
+        if (changeHistoryStr) {
+          try {
+            changeHistory = JSON.parse(changeHistoryStr);
+          } catch (e) {
+            console.error("Failed to parse change history:", e);
+          }
+        }
+
+        // 差分更新でコストを計算（変更があった場合のみ）
         let costsMap: Record<string, number> = {};
+        const hasChanges =
+          (changeHistory.changed_item_ids?.length ?? 0) > 0 ||
+          (changeHistory.changed_vendor_product_ids?.length ?? 0) > 0 ||
+          (changeHistory.changed_base_item_ids?.length ?? 0) > 0 ||
+          (changeHistory.changed_labor_role_names?.length ?? 0) > 0;
+
         try {
-          if (itemIds.length > 0) {
-            const costsData = await costAPI.getCosts(itemIds);
+          if (hasChanges) {
+            // 差分更新
+            const costsData = await costAPI.getCostsDifferential({
+              changed_item_ids: changeHistory.changed_item_ids || [],
+              changed_vendor_product_ids:
+                changeHistory.changed_vendor_product_ids || [],
+              changed_base_item_ids: changeHistory.changed_base_item_ids || [],
+              changed_labor_role_names:
+                changeHistory.changed_labor_role_names || [],
+            });
             costsMap = costsData.costs;
+            // 変更履歴をクリア
+            localStorage.removeItem("costing_change_history");
+          } else {
+            // 変更がない場合は全アイテムのコストを計算
+            if (itemIds.length > 0) {
+              const costsData = await costAPI.getCosts(itemIds);
+              costsMap = costsData.costs;
+            }
           }
         } catch (error) {
           console.error("Failed to calculate costs:", error);
+          // フォールバック: 全アイテムのコストを計算
+          try {
+            if (itemIds.length > 0) {
+              const costsData = await costAPI.getCosts(itemIds);
+              costsMap = costsData.costs;
+            }
+          } catch (fallbackError) {
+            console.error(
+              "Failed to calculate costs (fallback):",
+              fallbackError
+            );
+          }
         }
 
         // 各アイテムのデータを構築
@@ -375,141 +429,166 @@ export default function CostPage() {
       }
 
       // 循環参照チェック（保存前）
-      try {
-        // すべてのアイテムを取得
-        const allItems = await itemsAPI.getAll();
-        const itemsMap = new Map<string, Item>();
-        allItems.forEach((item) => itemsMap.set(item.id, item));
+      // フロントエンドのcycle detectionを停止 - バックエンドのcycle detectionに依存
+      // try {
+      //   // すべてのアイテムを取得
+      //   const allItems = await itemsAPI.getAll();
+      //   const itemsMap = new Map<string, Item>();
+      //   allItems.forEach((item) => itemsMap.set(item.id, item));
 
-        // すべてのレシピラインを一度に取得（最適化）
-        const preppedItemIds = allItems
-          .filter((item) => item.item_kind === "prepped")
-          .map((item) => item.id);
-        let recipesMap: Record<string, APIRecipeLine[]> = {};
-        try {
-          if (preppedItemIds.length > 0) {
-            const recipesData = await recipeLinesAPI.getByItemIds(
-              preppedItemIds
-            );
-            recipesMap = recipesData.recipes;
-          }
-        } catch (error) {
-          console.error("Failed to fetch recipes for cycle check:", error);
-        }
+      //   // すべてのレシピラインを一度に取得（最適化）
+      //   const preppedItemIds = allItems
+      //     .filter((item) => item.item_kind === "prepped")
+      //     .map((item) => item.id);
+      //   let recipesMap: Record<string, APIRecipeLine[]> = {};
+      //   try {
+      //     if (preppedItemIds.length > 0) {
+      //       const recipesData = await recipeLinesAPI.getByItemIds(
+      //         preppedItemIds
+      //       );
+      //       recipesMap = recipesData.recipes;
+      //     }
+      //   } catch (error) {
+      //     console.error("Failed to fetch recipes for cycle check:", error);
+      //   }
 
-        // すべてのレシピラインを配列に変換
-        const allRecipeLines: APIRecipeLine[] = [];
-        for (const itemId of preppedItemIds) {
-          const lines = recipesMap[itemId] || [];
-          allRecipeLines.push(...lines);
-        }
+      //   // すべてのレシピラインを配列に変換
+      //   const allRecipeLines: APIRecipeLine[] = [];
+      //   for (const itemId of preppedItemIds) {
+      //     const lines = recipesMap[itemId] || [];
+      //     allRecipeLines.push(...lines);
+      //   }
 
-        // レシピラインのマップを作成
-        const recipeLinesMap = new Map<string, APIRecipeLine[]>();
-        allRecipeLines.forEach((line) => {
-          if (line.line_type === "ingredient") {
-            const existing = recipeLinesMap.get(line.parent_item_id) || [];
-            existing.push(line);
-            recipeLinesMap.set(line.parent_item_id, existing);
-          }
-        });
+      //   // レシピラインのマップを作成
+      //   const recipeLinesMap = new Map<string, APIRecipeLine[]>();
+      //   allRecipeLines.forEach((line) => {
+      //     if (line.line_type === "ingredient") {
+      //       const existing = recipeLinesMap.get(line.parent_item_id) || [];
+      //       existing.push(line);
+      //       recipeLinesMap.set(line.parent_item_id, existing);
+      //     }
+      //   });
 
-        // 更新されるアイテムのレシピラインを反映
-        for (const item of filteredItems) {
-          if (!item.isNew) {
-            // 既存アイテムの更新の場合、新しいレシピラインを反映
-            const updatedLines: APIRecipeLine[] = [];
-            for (const line of item.recipe_lines) {
-              if (line.isMarkedForDeletion) continue;
-              if (line.line_type === "ingredient") {
-                if (!line.child_item_id || !line.quantity || !line.unit)
-                  continue;
-                if (line.isNew) {
-                  // 新規レシピライン（一時的なIDを使用）
-                  updatedLines.push({
-                    id: `temp-${item.id}-${line.id}`,
-                    parent_item_id: item.id,
-                    line_type: "ingredient",
-                    child_item_id: line.child_item_id,
-                    quantity: line.quantity,
-                    unit: line.unit,
-                    labor_role: null,
-                    minutes: null,
-                  } as APIRecipeLine);
-                } else {
-                  // 既存レシピラインの更新
-                  updatedLines.push({
-                    id: line.id,
-                    parent_item_id: item.id,
-                    line_type: "ingredient",
-                    child_item_id: line.child_item_id || null,
-                    quantity: line.quantity || null,
-                    unit: line.unit || null,
-                    labor_role: null,
-                    minutes: null,
-                  } as APIRecipeLine);
-                }
-              }
-            }
-            recipeLinesMap.set(item.id, updatedLines);
-          } else {
-            // 新規アイテムの場合、一時的なIDを使用（一意性を確保するため、インデックスを使用）
-            const itemIndex = filteredItems.findIndex((i) => i === item);
-            const tempId = `temp-new-${itemIndex}`;
-            itemsMap.set(tempId, {
-              id: tempId,
-              name: item.name,
-              item_kind: "prepped",
-              is_menu_item: item.is_menu_item,
-              proceed_yield_amount: item.proceed_yield_amount,
-              proceed_yield_unit: item.proceed_yield_unit,
-              notes: item.notes || null,
-              base_item_id: null,
-              each_grams: null,
-            } as Item);
+      //   // 更新されるアイテムのレシピラインを反映
+      //   for (const item of filteredItems) {
+      //     if (!item.isNew) {
+      //       // 既存アイテムの更新の場合、新しいレシピラインを反映
+      //       const updatedLines: APIRecipeLine[] = [];
+      //       for (const line of item.recipe_lines) {
+      //         if (line.isMarkedForDeletion) continue;
+      //         if (line.line_type === "ingredient") {
+      //           if (!line.child_item_id || !line.quantity || !line.unit)
+      //             continue;
+      //           if (line.isNew) {
+      //             // 新規レシピライン（一時的なIDを使用）
+      //             updatedLines.push({
+      //               id: `temp-${item.id}-${line.id}`,
+      //               parent_item_id: item.id,
+      //               line_type: "ingredient",
+      //               child_item_id: line.child_item_id,
+      //               quantity: line.quantity,
+      //               unit: line.unit,
+      //               labor_role: null,
+      //               minutes: null,
+      //             } as APIRecipeLine);
+      //           } else {
+      //             // 既存レシピラインの更新
+      //             updatedLines.push({
+      //               id: line.id,
+      //               parent_item_id: item.id,
+      //               line_type: "ingredient",
+      //               child_item_id: line.child_item_id || null,
+      //               quantity: line.quantity || null,
+      //               unit: line.unit || null,
+      //               labor_role: null,
+      //               minutes: null,
+      //             } as APIRecipeLine);
+      //           }
+      //         }
+      //       }
+      //       recipeLinesMap.set(item.id, updatedLines);
+      //     } else {
+      //       // 新規アイテムの場合、一時的なIDを使用（一意性を確保するため、インデックスを使用）
+      //       const itemIndex = filteredItems.findIndex((i) => i === item);
+      //       const tempId = `temp-new-${itemIndex}`;
+      //       itemsMap.set(tempId, {
+      //         id: tempId,
+      //         name: item.name,
+      //         item_kind: "prepped",
+      //         is_menu_item: item.is_menu_item,
+      //         proceed_yield_amount: item.proceed_yield_amount,
+      //         proceed_yield_unit: item.proceed_yield_unit,
+      //         notes: item.notes || null,
+      //         base_item_id: null,
+      //         each_grams: null,
+      //       } as Item);
 
-            const newLines: APIRecipeLine[] = [];
-            for (const line of item.recipe_lines) {
-              if (line.isMarkedForDeletion) continue;
-              if (line.line_type === "ingredient") {
-                if (!line.child_item_id || !line.quantity || !line.unit)
-                  continue;
-                newLines.push({
-                  id: `temp-${tempId}-${line.id}`,
-                  parent_item_id: tempId,
-                  line_type: "ingredient",
-                  child_item_id: line.child_item_id,
-                  quantity: line.quantity,
-                  unit: line.unit,
-                  labor_role: null,
-                  minutes: null,
-                } as APIRecipeLine);
-              }
-            }
-            recipeLinesMap.set(tempId, newLines);
-          }
-        }
+      //       const newLines: APIRecipeLine[] = [];
+      //       for (const line of item.recipe_lines) {
+      //         if (line.isMarkedForDeletion) continue;
+      //         if (line.line_type === "ingredient") {
+      //           if (!line.child_item_id || !line.quantity || !line.unit)
+      //             continue;
+      //           newLines.push({
+      //             id: `temp-${tempId}-${line.id}`,
+      //             parent_item_id: tempId,
+      //             line_type: "ingredient",
+      //             child_item_id: line.child_item_id,
+      //             quantity: line.quantity,
+      //             unit: line.unit,
+      //             labor_role: null,
+      //             minutes: null,
+      //           } as APIRecipeLine);
+      //         }
+      //       }
+      //       recipeLinesMap.set(tempId, newLines);
+      //     }
+      //   }
 
-        // チェックするアイテムIDのリストを作成
-        const itemIdsToCheck: string[] = [];
-        for (let i = 0; i < filteredItems.length; i++) {
-          const item = filteredItems[i];
-          if (item.isNew) {
-            itemIdsToCheck.push(`temp-new-${i}`);
-          } else {
-            itemIdsToCheck.push(item.id);
-          }
-        }
+      //   // チェックするアイテムIDのリストを作成
+      //   const itemIdsToCheck: string[] = [];
+      //   for (let i = 0; i < filteredItems.length; i++) {
+      //     const item = filteredItems[i];
+      //     if (item.isNew) {
+      //       itemIdsToCheck.push(`temp-new-${i}`);
+      //     } else {
+      //       itemIdsToCheck.push(item.id);
+      //     }
+      //   }
 
-        // 循環参照をチェック
-        checkCyclesForItems(itemIdsToCheck, itemsMap, recipeLinesMap);
-      } catch (cycleError: unknown) {
-        const message =
-          cycleError instanceof Error ? cycleError.message : String(cycleError);
-        alert(message);
-        setLoading(false);
-        return;
-      }
+      //   // 循環参照をチェック
+      //   checkCyclesForItems(itemIdsToCheck, itemsMap, recipeLinesMap);
+      // } catch (cycleError: unknown) {
+      //   const message =
+      //     cycleError instanceof Error ? cycleError.message : String(cycleError);
+      //   alert(message);
+      //   setLoading(false);
+      //   return;
+      // }
+
+      // バッチ処理用の配列を準備
+      const batchCreates: Partial<APIRecipeLine>[] = [];
+      const batchUpdates: (Partial<APIRecipeLine> & { id: string })[] = [];
+      const batchDeletes: string[] = [];
+
+      // 変更されたアイテムIDを追跡（差分更新用）
+      const changedItemIds = new Set<string>();
+
+      // 新規作成されたアイテムIDを記録（エラー時のロールバック用）
+      const newlyCreatedItemIds: string[] = [];
+
+      // アイテム更新用の配列（レシピライン更新後に実行）
+      const itemsToUpdate: Array<{
+        id: string;
+        data: {
+          name: string;
+          is_menu_item: boolean;
+          proceed_yield_amount: number;
+          proceed_yield_unit: string;
+          notes: string | null;
+          each_grams: number | null;
+        };
+      }> = [];
 
       // API呼び出し
       for (const item of filteredItems) {
@@ -528,12 +607,12 @@ export default function CostPage() {
                 : null,
           });
 
-          // レシピラインを作成
+          // レシピラインを作成用に追加
           for (const line of item.recipe_lines) {
             if (line.isMarkedForDeletion) continue;
             if (line.line_type === "ingredient") {
               if (!line.child_item_id || !line.quantity || !line.unit) continue;
-              await recipeLinesAPI.create({
+              batchCreates.push({
                 parent_item_id: newItem.id,
                 line_type: "ingredient",
                 child_item_id: line.child_item_id,
@@ -543,7 +622,7 @@ export default function CostPage() {
               });
             } else if (line.line_type === "labor") {
               if (!line.minutes) continue;
-              await recipeLinesAPI.create({
+              batchCreates.push({
                 parent_item_id: newItem.id,
                 line_type: "labor",
                 labor_role: line.labor_role || null,
@@ -551,17 +630,44 @@ export default function CostPage() {
               });
             }
           }
+          // 新規作成されたアイテムIDを記録
+          changedItemIds.add(newItem.id);
+          newlyCreatedItemIds.push(newItem.id);
         } else {
           // 更新
-          // レシピラインを先に更新（バックエンドのバリデーションで正しい値を使用するため）
+          // 元のアイテムを取得（変更検出用）
+          const originalItem = originalItems.find((oi) => oi.id === item.id);
+
+          // アイテムのフィールドが変更されたかチェック
+          const itemFieldsChanged =
+            !originalItem ||
+            originalItem.name !== item.name ||
+            originalItem.is_menu_item !== item.is_menu_item ||
+            originalItem.proceed_yield_amount !== item.proceed_yield_amount ||
+            originalItem.proceed_yield_unit !== item.proceed_yield_unit ||
+            (originalItem.notes || null) !== (item.notes || null) ||
+            (originalItem.proceed_yield_unit === "each"
+              ? (originalItem.each_grams || null) !==
+                (item.proceed_yield_unit === "each"
+                  ? item.each_grams || null
+                  : null)
+              : false);
+
+          // レシピラインの変更をバッチ配列に追加
+          let recipeLinesChanged = false;
           for (const line of item.recipe_lines) {
             if (line.isMarkedForDeletion && !line.isNew) {
-              await recipeLinesAPI.delete(line.id);
+              // IDが存在する場合のみ削除
+              if (line.id) {
+                batchDeletes.push(line.id);
+                recipeLinesChanged = true;
+              }
             } else if (line.isNew) {
+              recipeLinesChanged = true;
               if (line.line_type === "ingredient") {
                 if (!line.child_item_id || !line.quantity || !line.unit)
                   continue;
-                await recipeLinesAPI.create({
+                batchCreates.push({
                   parent_item_id: item.id,
                   line_type: "ingredient",
                   child_item_id: line.child_item_id,
@@ -571,7 +677,7 @@ export default function CostPage() {
                 });
               } else if (line.line_type === "labor") {
                 if (!line.minutes) continue;
-                await recipeLinesAPI.create({
+                batchCreates.push({
                   parent_item_id: item.id,
                   line_type: "labor",
                   labor_role: line.labor_role || null,
@@ -579,35 +685,191 @@ export default function CostPage() {
                 });
               }
             } else {
-              if (line.line_type === "ingredient") {
-                await recipeLinesAPI.update(line.id, {
-                  child_item_id: line.child_item_id || null,
-                  quantity: line.quantity || null,
-                  unit: line.unit || null,
-                  specific_child: line.specific_child || null,
-                });
-              } else if (line.line_type === "labor") {
-                await recipeLinesAPI.update(line.id, {
-                  labor_role: line.labor_role || null,
-                  minutes: line.minutes || null,
-                });
+              // 既存のレシピラインを更新（IDが存在する場合のみ）
+              if (!line.id) continue; // IDが存在しない場合はスキップ
+              // 元のレシピラインと比較して変更があるかチェック
+              const originalLine = originalItem?.recipe_lines.find(
+                (ol) => ol.id === line.id
+              );
+              if (originalLine) {
+                const lineChanged =
+                  originalLine.child_item_id !== line.child_item_id ||
+                  originalLine.quantity !== line.quantity ||
+                  originalLine.unit !== line.unit ||
+                  (originalLine.specific_child || null) !==
+                    (line.specific_child || null) ||
+                  originalLine.labor_role !== line.labor_role ||
+                  originalLine.minutes !== line.minutes;
+                if (lineChanged) {
+                  recipeLinesChanged = true;
+                  if (line.line_type === "ingredient") {
+                    batchUpdates.push({
+                      id: line.id,
+                      child_item_id: line.child_item_id || null,
+                      quantity: line.quantity || null,
+                      unit: line.unit || null,
+                      specific_child: line.specific_child || null,
+                    });
+                  } else if (line.line_type === "labor") {
+                    batchUpdates.push({
+                      id: line.id,
+                      labor_role: line.labor_role || null,
+                      minutes: line.minutes || null,
+                    });
+                  }
+                }
+              } else {
+                // 元のレシピラインが見つからない場合（新規追加された可能性があるが、isNewフラグがない場合）
+                recipeLinesChanged = true;
+                if (line.line_type === "ingredient") {
+                  batchUpdates.push({
+                    id: line.id,
+                    child_item_id: line.child_item_id || null,
+                    quantity: line.quantity || null,
+                    unit: line.unit || null,
+                    specific_child: line.specific_child || null,
+                  });
+                } else if (line.line_type === "labor") {
+                  batchUpdates.push({
+                    id: line.id,
+                    labor_role: line.labor_role || null,
+                    minutes: line.minutes || null,
+                  });
+                }
               }
             }
           }
+          // レシピラインが変更された場合、親アイテムIDを記録
+          if (recipeLinesChanged) {
+            changedItemIds.add(item.id);
+          }
 
-          // アイテムを更新（レシピライン更新後に実行することで、バリデーションが正しい値を使用）
-          await itemsAPI.update(item.id, {
-            name: item.name,
-            is_menu_item: item.is_menu_item,
-            proceed_yield_amount: item.proceed_yield_amount,
-            proceed_yield_unit: item.proceed_yield_unit,
-            notes: item.notes || null,
-            each_grams:
-              item.proceed_yield_unit === "each"
-                ? item.each_grams || null
-                : null,
+          // アイテムのフィールドが変更された、またはレシピラインが変更された場合のみ更新
+          // （レシピラインが変更された場合、cycle detectionを実行するために更新が必要）
+          if (itemFieldsChanged || recipeLinesChanged) {
+            // アイテム更新を配列に追加（レシピライン更新後に実行）
+            itemsToUpdate.push({
+              id: item.id,
+              data: {
+                name: item.name,
+                is_menu_item: item.is_menu_item,
+                proceed_yield_amount: item.proceed_yield_amount,
+                proceed_yield_unit: item.proceed_yield_unit,
+                notes: item.notes || null,
+                each_grams:
+                  item.proceed_yield_unit === "each"
+                    ? item.each_grams || null
+                    : null,
+              },
+            });
+            // 変更されたアイテムIDを記録
+            changedItemIds.add(item.id);
+          }
+        }
+      }
+
+      // レシピラインのバッチ処理を実行（アイテム更新の前に実行することで、バリデーションが正しい値を使用）
+      try {
+        if (
+          batchCreates.length > 0 ||
+          batchUpdates.length > 0 ||
+          batchDeletes.length > 0
+        ) {
+          await recipeLinesAPI.batch({
+            creates: batchCreates,
+            updates: batchUpdates,
+            deletes: batchDeletes,
           });
         }
+      } catch (error) {
+        // エラー時に新規作成されたアイテムを削除（ロールバック）
+        for (const itemId of newlyCreatedItemIds) {
+          try {
+            await itemsAPI.delete(itemId);
+          } catch (deleteError) {
+            console.error(
+              `Failed to delete newly created item ${itemId}:`,
+              deleteError
+            );
+            // 削除失敗はログに記録するが、エラーは再スローしない
+          }
+        }
+
+        // エラー時にデータを再取得してフロントエンドの状態を更新
+        try {
+          const preppedItems = await itemsAPI.getAll({ item_kind: "prepped" });
+          const allItems = await itemsAPI.getAll();
+          setAvailableItems(allItems);
+
+          // レシピを取得
+          const itemIds = preppedItems.map((item) => item.id);
+          let recipesMap: Record<string, APIRecipeLine[]> = {};
+          if (itemIds.length > 0) {
+            try {
+              const recipesData = await recipeLinesAPI.getByItemIds(itemIds);
+              recipesMap = recipesData.recipes;
+            } catch (recipeError) {
+              console.error(
+                "Failed to fetch recipes after error:",
+                recipeError
+              );
+            }
+          }
+
+          // コストを取得
+          let costsMap: Record<string, number> = {};
+          if (itemIds.length > 0) {
+            try {
+              const costsData = await costAPI.getCosts(itemIds);
+              costsMap = costsData.costs;
+            } catch (costError) {
+              console.error("Failed to fetch costs after error:", costError);
+            }
+          }
+
+          // アイテムデータを構築
+          const itemsWithRecipes: PreppedItem[] = preppedItems.map((item) => {
+            const recipeLines = recipesMap[item.id] || [];
+            const costPerGram = costsMap[item.id];
+
+            return {
+              id: item.id,
+              name: item.name,
+              item_kind: "prepped",
+              is_menu_item: item.is_menu_item,
+              proceed_yield_amount: item.proceed_yield_amount || 0,
+              proceed_yield_unit: item.proceed_yield_unit || "g",
+              recipe_lines: recipeLines.map((line) => ({
+                id: line.id,
+                line_type: line.line_type,
+                child_item_id: line.child_item_id || undefined,
+                quantity: line.quantity || undefined,
+                unit: line.unit || undefined,
+                specific_child: line.specific_child || null,
+                labor_role: line.labor_role || undefined,
+                minutes: line.minutes || undefined,
+              })),
+              notes: item.notes || "",
+              isExpanded: false,
+              cost_per_gram: costPerGram,
+              each_grams: item.each_grams || null,
+            };
+          });
+
+          setItems(itemsWithRecipes);
+          setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
+        } catch (refreshError) {
+          console.error("Failed to refresh data after error:", refreshError);
+          // データ再取得失敗はログに記録するが、エラーは再スローしない
+        }
+
+        // エラーを再スローして、既存のエラーハンドリングを維持
+        throw error;
+      }
+
+      // アイテムの更新を実行（レシピライン更新後）
+      for (const itemUpdate of itemsToUpdate) {
+        await itemsAPI.update(itemUpdate.id, itemUpdate.data);
       }
 
       // 削除処理
@@ -623,35 +885,88 @@ export default function CostPage() {
       const allItems = await itemsAPI.getAll();
       setAvailableItems(allItems);
 
-      // 全アイテムのIDを取得
-      const itemIds = preppedItems.map((item) => item.id);
+      // 差分更新でコストを計算（変更されたアイテムとその依存関係のみ）
+      let costsMap: Record<string, number> = {};
+      let affectedItemIds: string[] = [];
+      try {
+        if (changedItemIds.size > 0) {
+          const costsData = await costAPI.getCostsDifferential({
+            changed_item_ids: Array.from(changedItemIds),
+          });
+          costsMap = costsData.costs;
+          // 影響を受けるアイテムIDを取得（コストが計算されたアイテム = 変更されたアイテムとその依存関係）
+          affectedItemIds = Object.keys(costsData.costs);
+        }
+      } catch (error) {
+        console.error("Failed to calculate costs (differential):", error);
+        // フォールバック: 全アイテムのコストを計算
+        try {
+          const itemIds = preppedItems.map((item) => item.id);
+          if (itemIds.length > 0) {
+            const costsData = await costAPI.getCosts(itemIds);
+            costsMap = costsData.costs;
+            affectedItemIds = itemIds; // フォールバック時は全アイテム
+          }
+        } catch (fallbackError) {
+          console.error("Failed to calculate costs (fallback):", fallbackError);
+        }
+      }
 
-      // 全アイテムのレシピを一度に取得（最適化）
+      // 影響を受けるアイテムのレシピのみを取得（最適化）
       let recipesMap: Record<string, APIRecipeLine[]> = {};
       try {
-        if (itemIds.length > 0) {
-          const recipesData = await recipeLinesAPI.getByItemIds(itemIds);
+        if (affectedItemIds.length > 0) {
+          const recipesData = await recipeLinesAPI.getByItemIds(
+            affectedItemIds
+          );
           recipesMap = recipesData.recipes;
         }
       } catch (error) {
         console.error("Failed to fetch recipes:", error);
-      }
-
-      // 全アイテムのコストを一度に計算（最適化）
-      let costsMap: Record<string, number> = {};
-      try {
-        if (itemIds.length > 0) {
-          const costsData = await costAPI.getCosts(itemIds);
-          costsMap = costsData.costs;
+        // フォールバック: 全アイテムのレシピを取得
+        try {
+          const itemIds = preppedItems.map((item) => item.id);
+          if (itemIds.length > 0) {
+            const recipesData = await recipeLinesAPI.getByItemIds(itemIds);
+            recipesMap = recipesData.recipes;
+          }
+        } catch (fallbackError) {
+          console.error("Failed to fetch recipes (fallback):", fallbackError);
         }
-      } catch (error) {
-        console.error("Failed to calculate costs:", error);
       }
 
       // 各アイテムのデータを構築
       const itemsWithRecipes: PreppedItem[] = preppedItems.map((item) => {
-        const recipeLines = recipesMap[item.id] || [];
-        const costPerGram = costsMap[item.id];
+        // 影響を受けるアイテムのレシピは新しく取得したもの、影響を受けていないアイテムのレシピは既存のitemsステートから取得
+        let recipeLines: APIRecipeLine[] = [];
+        if (recipesMap[item.id]) {
+          // 新しく取得したレシピを使用
+          recipeLines = recipesMap[item.id];
+        } else {
+          // 既存のitemsステートから取得（影響を受けていないアイテムのレシピは変更されていない）
+          const existingItem = items.find((i) => i.id === item.id);
+          if (existingItem) {
+            recipeLines = existingItem.recipe_lines.map((line) => ({
+              id: line.id,
+              line_type: line.line_type,
+              child_item_id: line.child_item_id || undefined,
+              quantity: line.quantity || undefined,
+              unit: line.unit || undefined,
+              specific_child: line.specific_child || null,
+              labor_role: line.labor_role || undefined,
+              minutes: line.minutes || undefined,
+            })) as APIRecipeLine[];
+          }
+        }
+        // 影響を受けるアイテムのコストは新しく計算したもの、影響を受けていないアイテムのコストは既存のitemsステートから取得
+        let costPerGram: number | undefined = costsMap[item.id];
+        if (costPerGram === undefined) {
+          // 既存のitemsステートから取得（影響を受けていないアイテムのコストは変更されていない）
+          const existingItem = items.find((i) => i.id === item.id);
+          if (existingItem) {
+            costPerGram = existingItem.cost_per_gram;
+          }
+        }
 
         return {
           id: item.id,
@@ -964,7 +1279,7 @@ export default function CostPage() {
 
       const costPerGram = vendorProduct.purchase_cost / grams;
       return costPerGram * 1000; // kgあたりのコスト
-    } catch (error) {
+    } catch {
       return null;
     }
   };
@@ -1101,7 +1416,11 @@ export default function CostPage() {
             <>
               <button
                 onClick={handleCancelClick}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                  isDark
+                    ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
               >
                 <X className="w-5 h-5" />
                 Cancel
@@ -1126,11 +1445,23 @@ export default function CostPage() {
         </div>
 
         {/* 検索・フィルターセクション */}
-        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div
+          className={`mb-6 rounded-lg shadow-sm border p-4 transition-colors ${
+            isDark
+              ? "bg-slate-800 border-slate-700"
+              : "bg-white border-gray-200"
+          }`}
+        >
           <div className="flex flex-col md:flex-row gap-4 items-start md:items-end">
             {/* 検索 */}
             <div className="flex-1 w-full md:w-auto">
-              <label className="block text-xs text-gray-600 mb-1">Name:</label>
+              <label
+                className={`block text-xs mb-1 ${
+                  isDark ? "text-slate-300" : "text-gray-600"
+                }`}
+              >
+                Name:
+              </label>
               <div className="flex items-center gap-2">
                 <input
                   type="text"
@@ -1141,7 +1472,11 @@ export default function CostPage() {
                       handleSearch();
                     }
                   }}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={`flex-1 px-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                    isDark
+                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                      : "bg-white border-gray-300 text-gray-900"
+                  }`}
                   placeholder="Search by name..."
                 />
                 <button
@@ -1154,7 +1489,11 @@ export default function CostPage() {
                 {(searchTerm || appliedSearchTerm) && (
                   <button
                     onClick={handleClearSearch}
-                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+                    className={`px-4 py-2 rounded-md transition-colors ${
+                      isDark
+                        ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    }`}
                     title="Clear search"
                   >
                     <X className="w-5 h-5" />
@@ -1168,13 +1507,21 @@ export default function CostPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* Typeフィルター */}
                 <div>
-                  <label className="block text-xs text-gray-600 mb-1">
+                  <label
+                    className={`block text-xs mb-1 ${
+                      isDark ? "text-slate-300" : "text-gray-600"
+                    }`}
+                  >
                     Type:
                   </label>
                   <select
                     value={typeFilter}
                     onChange={(e) => setTypeFilter(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                      isDark
+                        ? "bg-slate-700 border-slate-600 text-slate-100"
+                        : "bg-white border-gray-300 text-gray-900"
+                    }`}
                   >
                     <option value="all">All</option>
                     <option value="prepped">Prepped</option>
@@ -1184,7 +1531,11 @@ export default function CostPage() {
 
                 {/* Proceed範囲フィルター */}
                 <div>
-                  <label className="block text-xs text-gray-600 mb-1">
+                  <label
+                    className={`block text-xs mb-1 ${
+                      isDark ? "text-slate-300" : "text-gray-600"
+                    }`}
+                  >
                     Proceed (g):
                   </label>
                   <div className="flex items-center gap-2">
@@ -1198,12 +1549,20 @@ export default function CostPage() {
                             : parseFloat(e.target.value)
                         )
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                        isDark
+                          ? "bg-slate-700 border-slate-600 text-slate-100"
+                          : "bg-white border-gray-300 text-gray-900"
+                      }`}
                       placeholder="Min"
                       min="0"
                       step="0.01"
                     />
-                    <span className="text-gray-500">to</span>
+                    <span
+                      className={isDark ? "text-slate-400" : "text-gray-500"}
+                    >
+                      to
+                    </span>
                     <input
                       type="number"
                       value={yieldMax}
@@ -1214,7 +1573,11 @@ export default function CostPage() {
                             : parseFloat(e.target.value)
                         )
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                        isDark
+                          ? "bg-slate-700 border-slate-600 text-slate-100"
+                          : "bg-white border-gray-300 text-gray-900"
+                      }`}
                       placeholder="Max"
                       min="0"
                       step="0.01"
@@ -1224,7 +1587,11 @@ export default function CostPage() {
 
                 {/* Cost/g範囲フィルター */}
                 <div>
-                  <label className="block text-xs text-gray-600 mb-1">
+                  <label
+                    className={`block text-xs mb-1 ${
+                      isDark ? "text-slate-300" : "text-gray-600"
+                    }`}
+                  >
                     Cost/g ($):
                   </label>
                   <div className="flex items-center gap-2">
@@ -1238,12 +1605,20 @@ export default function CostPage() {
                             : parseFloat(e.target.value)
                         )
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                        isDark
+                          ? "bg-slate-700 border-slate-600 text-slate-100"
+                          : "bg-white border-gray-300 text-gray-900"
+                      }`}
                       placeholder="Min"
                       min="0"
                       step="0.0001"
                     />
-                    <span className="text-gray-500">to</span>
+                    <span
+                      className={isDark ? "text-slate-400" : "text-gray-500"}
+                    >
+                      to
+                    </span>
                     <input
                       type="number"
                       value={costMax}
@@ -1254,7 +1629,11 @@ export default function CostPage() {
                             : parseFloat(e.target.value)
                         )
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                        isDark
+                          ? "bg-slate-700 border-slate-600 text-slate-100"
+                          : "bg-white border-gray-300 text-gray-900"
+                      }`}
                       placeholder="Max"
                       min="0"
                       step="0.0001"
@@ -1267,24 +1646,54 @@ export default function CostPage() {
         </div>
 
         {/* アイテムリスト */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div
+          className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+            isDark
+              ? "bg-slate-800 border-slate-700"
+              : "bg-white border-gray-200"
+          }`}
+        >
           <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-200">
+            <thead
+              className={`border-b transition-colors ${
+                isDark
+                  ? "bg-slate-700 border-slate-600"
+                  : "bg-gray-50 border-gray-200"
+              }`}
+            >
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-12 ${
+                    isDark ? "text-slate-300" : "text-gray-500"
+                  }`}
+                >
                   {/* 展開アイコン用 */}
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    isDark ? "text-slate-300" : "text-gray-500"
+                  }`}
+                >
                   Name
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    isDark ? "text-slate-300" : "text-gray-500"
+                  }`}
+                >
                   Type
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th
+                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    isDark ? "text-slate-300" : "text-gray-500"
+                  }`}
+                >
                   Proceed
                 </th>
                 <th
-                  className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    isDark ? "text-slate-300" : "text-gray-500"
+                  }`}
                   style={{ minWidth: "180px" }}
                 >
                   <div className="flex items-center gap-3">
@@ -1292,7 +1701,11 @@ export default function CostPage() {
                     <div className="flex items-center gap-1">
                       <span
                         className={`text-xs ${
-                          costUnit === "g" ? "font-semibold" : "text-gray-400"
+                          costUnit === "g"
+                            ? "font-semibold"
+                            : isDark
+                            ? "text-slate-500"
+                            : "text-gray-400"
                         }`}
                       >
                         g
@@ -1319,19 +1732,35 @@ export default function CostPage() {
                   </div>
                 </th>
                 {isEditMode && (
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                  >
                     {/* ゴミ箱列のヘッダー */}
                   </th>
                 )}
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody
+              className={`divide-y transition-colors ${
+                isDark
+                  ? "bg-slate-800 divide-slate-700"
+                  : "bg-white divide-gray-200"
+              }`}
+            >
               {filteredItems.map((item) => (
                 <Fragment key={item.id}>
                   <tr
                     className={`${
-                      item.isMarkedForDeletion ? "bg-red-50" : ""
-                    } hover:bg-gray-50 cursor-pointer`}
+                      item.isMarkedForDeletion
+                        ? isDark
+                          ? "bg-red-900/30"
+                          : "bg-red-50"
+                        : ""
+                    } ${
+                      isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
+                    } cursor-pointer transition-colors`}
                     onClick={() => !isEditMode && toggleExpand(item.id)}
                   >
                     {/* 展開アイコン */}
@@ -1341,7 +1770,11 @@ export default function CostPage() {
                           e.stopPropagation();
                           toggleExpand(item.id);
                         }}
-                        className="text-gray-400 hover:text-gray-600"
+                        className={`transition-colors ${
+                          isDark
+                            ? "text-slate-500 hover:text-slate-300"
+                            : "text-gray-400 hover:text-gray-600"
+                        }`}
                       >
                         {item.isExpanded ? (
                           <ChevronDown className="w-5 h-5" />
@@ -1360,11 +1793,21 @@ export default function CostPage() {
                           onChange={(e) =>
                             handleItemChange(item.id, "name", e.target.value)
                           }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                            isDark
+                              ? "bg-slate-700 border-slate-600 text-slate-100"
+                              : "bg-white border-gray-300 text-gray-900"
+                          }`}
                           placeholder="Item name"
                         />
                       ) : (
-                        <div className="text-sm text-gray-900">{item.name}</div>
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          {item.name}
+                        </div>
                       )}
                     </td>
 
@@ -1380,13 +1823,21 @@ export default function CostPage() {
                               e.target.value === "menu"
                             )
                           }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                            isDark
+                              ? "bg-slate-700 border-slate-600 text-slate-100"
+                              : "bg-white border-gray-300 text-gray-900"
+                          }`}
                         >
                           <option value="prepped">Prepped</option>
                           <option value="menu">Menu Item</option>
                         </select>
                       ) : (
-                        <div className="text-sm text-gray-900">
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
                           {item.is_menu_item ? "Menu Item" : "Prepped"}
                         </div>
                       )}
@@ -1477,7 +1928,11 @@ export default function CostPage() {
                                 min="0"
                                 step="0.01"
                               />
-                              <span className="text-sm text-gray-600">
+                              <span
+                                className={`text-sm ${
+                                  isDark ? "text-slate-300" : "text-gray-600"
+                                }`}
+                              >
                                 g/each
                               </span>
                             </>
@@ -1621,7 +2076,13 @@ export default function CostPage() {
                                             placeholder="Select item..."
                                           />
                                         ) : (
-                                          <div className="text-sm text-gray-900">
+                                          <div
+                                            className={`text-sm ${
+                                              isDark
+                                                ? "text-slate-100"
+                                                : "text-gray-900"
+                                            }`}
+                                          >
                                             {availableItems.find(
                                               (i) => i.id === line.child_item_id
                                             )?.name || "-"}
@@ -1724,7 +2185,11 @@ export default function CostPage() {
                                                           e.target.value
                                                         )
                                                       }
-                                                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                                        isDark
+                                                          ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                          : "bg-white border-gray-300 text-gray-900"
+                                                      }`}
                                                     >
                                                       {availableVendorProducts.map(
                                                         (vp) => {
@@ -1782,7 +2247,13 @@ export default function CostPage() {
                                               line.specific_child === "lowest"
                                             ) {
                                               return (
-                                                <div className="text-sm text-gray-900">
+                                                <div
+                                                  className={`text-sm ${
+                                                    isDark
+                                                      ? "text-slate-100"
+                                                      : "text-gray-900"
+                                                  }`}
+                                                >
                                                   Lowest
                                                 </div>
                                               );
@@ -1827,7 +2298,13 @@ export default function CostPage() {
                                                     )}/kg`
                                                   : "";
                                               return (
-                                                <div className="text-sm text-gray-900">
+                                                <div
+                                                  className={`text-sm ${
+                                                    isDark
+                                                      ? "text-slate-100"
+                                                      : "text-gray-900"
+                                                  }`}
+                                                >
                                                   {vendorName} - {productName}
                                                   {costDisplay}
                                                 </div>
@@ -1860,13 +2337,23 @@ export default function CostPage() {
                                                 numValue
                                               );
                                             }}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                              isDark
+                                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                : "bg-white border-gray-300 text-gray-900"
+                                            }`}
                                             placeholder="0"
                                             min="0"
                                             step="0.01"
                                           />
                                         ) : (
-                                          <div className="text-sm text-gray-900">
+                                          <div
+                                            className={`text-sm ${
+                                              isDark
+                                                ? "text-slate-100"
+                                                : "text-gray-900"
+                                            }`}
+                                          >
                                             {line.quantity || 0}
                                           </div>
                                         )}
@@ -1883,7 +2370,11 @@ export default function CostPage() {
                                                 e.target.value
                                               )
                                             }
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                              isDark
+                                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                : "bg-white border-gray-300 text-gray-900"
+                                            }`}
                                             disabled={!line.child_item_id}
                                           >
                                             {(() => {
@@ -1940,7 +2431,13 @@ export default function CostPage() {
                                             })()}
                                           </select>
                                         ) : (
-                                          <div className="text-sm text-gray-900">
+                                          <div
+                                            className={`text-sm ${
+                                              isDark
+                                                ? "text-slate-100"
+                                                : "text-gray-900"
+                                            }`}
+                                          >
                                             {line.unit || "-"}
                                           </div>
                                         )}
@@ -2035,7 +2532,11 @@ export default function CostPage() {
                                                 e.target.value
                                               )
                                             }
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                              isDark
+                                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                : "bg-white border-gray-300 text-gray-900"
+                                            }`}
                                           >
                                             <option value="">
                                               Select role...
@@ -2050,7 +2551,13 @@ export default function CostPage() {
                                             ))}
                                           </select>
                                         ) : (
-                                          <div className="text-sm text-gray-900">
+                                          <div
+                                            className={`text-sm ${
+                                              isDark
+                                                ? "text-slate-100"
+                                                : "text-gray-900"
+                                            }`}
+                                          >
                                             {laborRoles.find(
                                               (r) => r.name === line.labor_role
                                             )?.name || "-"}
@@ -2080,13 +2587,23 @@ export default function CostPage() {
                                                 numValue
                                               );
                                             }}
-                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                              isDark
+                                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                : "bg-white border-gray-300 text-gray-900"
+                                            }`}
                                             placeholder="0"
                                             min="0"
                                             step="0.01"
                                           />
                                         ) : (
-                                          <div className="text-sm text-gray-900">
+                                          <div
+                                            className={`text-sm ${
+                                              isDark
+                                                ? "text-slate-100"
+                                                : "text-gray-900"
+                                            }`}
+                                          >
                                             {line.minutes || 0} minutes
                                           </div>
                                         )}

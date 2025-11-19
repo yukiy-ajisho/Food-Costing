@@ -22,24 +22,37 @@ export async function checkCycle(
   recipeLinesMap: Map<string, RecipeLine[]> = new Map(),
   currentPath: string[] = []
 ): Promise<void> {
+  // デバッグログ: チェック開始
+  let item = itemsMap.get(itemId);
+  const itemName = item?.name || itemId;
+  const currentPathNames = currentPath.map((id) => {
+    const pathItem = itemsMap.get(id);
+    return pathItem?.name || id;
+  });
+  console.log(
+    `[CYCLE DETECTION] Checking item: ${itemName} (${itemId}), Current path: [${currentPathNames.join(
+      " → "
+    )}]`
+  );
+
   // 循環検出
   if (visited.has(itemId)) {
     const cyclePath = [...currentPath, itemId];
     // アイテム名を取得してパスを表示
-    const item = itemsMap.get(itemId);
-    const itemName = item?.name || itemId;
     const pathNames = cyclePath.map((id) => {
       const pathItem = itemsMap.get(id);
       return pathItem?.name || id;
     });
     const pathString = pathNames.join(" → ");
+    console.error(
+      `[CYCLE DETECTION] ❌ CYCLE DETECTED! Item: ${itemName} (${itemId}), Cycle path: ${pathString}`
+    );
     throw new Error(
       `Cycle detected in recipe dependency chain. Item "${itemName}" creates a circular dependency. Path: ${pathString}`
     );
   }
 
   // アイテムを取得（itemsMapから取得を試みる、存在しない場合のみデータベースから取得）
-  let item = itemsMap.get(itemId);
   if (!item) {
     const { data: fetchedItem, error: itemError } = await supabase
       .from("items")
@@ -49,6 +62,7 @@ export async function checkCycle(
 
     if (itemError || !fetchedItem) {
       // アイテムが存在しない場合はスキップ（新規作成の場合など）
+      console.log(`[CYCLE DETECTION] Item not found: ${itemId}, skipping...`);
       return;
     }
     item = fetchedItem;
@@ -57,6 +71,9 @@ export async function checkCycle(
 
   // Raw Itemの場合は循環参照の可能性がない（材料を持たないため）
   if (item.item_kind === "raw") {
+    console.log(
+      `[CYCLE DETECTION] Item is raw: ${itemName} (${itemId}), no cycle possible, skipping...`
+    );
     return;
   }
 
@@ -71,11 +88,18 @@ export async function checkCycle(
 
     if (linesError) {
       // エラーが発生した場合はスキップ
+      console.log(
+        `[CYCLE DETECTION] Error fetching recipe lines for ${itemName} (${itemId}): ${linesError.message}, skipping...`
+      );
       return;
     }
     recipeLines = fetchedLines || [];
     recipeLinesMap.set(itemId, recipeLines);
   }
+
+  console.log(
+    `[CYCLE DETECTION] Item ${itemName} (${itemId}) has ${recipeLines.length} ingredient lines`
+  );
 
   // 訪問済みマーク
   visited.add(itemId);
@@ -87,6 +111,12 @@ export async function checkCycle(
       if (line.line_type !== "ingredient") continue;
       if (!line.child_item_id) continue;
 
+      const childItem = itemsMap.get(line.child_item_id);
+      const childItemName = childItem?.name || line.child_item_id;
+      console.log(
+        `[CYCLE DETECTION] Checking child item: ${childItemName} (${line.child_item_id}) of ${itemName} (${itemId})`
+      );
+
       // 子アイテムの循環参照を再帰的にチェック
       await checkCycle(
         line.child_item_id,
@@ -96,6 +126,9 @@ export async function checkCycle(
         newPath
       );
     }
+    console.log(
+      `[CYCLE DETECTION] ✅ No cycle detected for item: ${itemName} (${itemId})`
+    );
   } finally {
     // 訪問済みマークを削除（他の経路での探索を許可）
     visited.delete(itemId);
