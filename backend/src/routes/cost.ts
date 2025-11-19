@@ -1,5 +1,9 @@
 import { Router } from "express";
-import { calculateCost, clearCostCache } from "../services/cost";
+import {
+  calculateCost,
+  calculateCosts,
+  clearCostCache,
+} from "../services/cost";
 
 const router = Router();
 
@@ -23,8 +27,43 @@ router.get("/items/:id/cost", async (req, res) => {
       cost_per_gram: costPerGram,
     });
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /items/costs
+ * 複数アイテムのコストを一度に計算（最適化版）
+ * Request body: { item_ids: string[] }
+ * Response: { costs: { [itemId: string]: number } }
+ */
+router.post("/items/costs", async (req, res) => {
+  try {
+    const { item_ids } = req.body;
+
+    if (!Array.isArray(item_ids)) {
+      return res.status(400).json({
+        error: "item_ids must be an array of strings",
+      });
+    }
+
+    if (item_ids.length === 0) {
+      return res.json({ costs: {} });
+    }
+
+    // 複数アイテムのコストを一度に計算
+    const costsMap = await calculateCosts(item_ids);
+
+    // Mapをオブジェクトに変換
+    const costs: Record<string, number> = {};
+    costsMap.forEach((cost, itemId) => {
+      costs[itemId] = cost;
+    });
+
+    res.json({ costs });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

@@ -116,46 +116,59 @@ export default function CostPage() {
         const roles = await laborRolesAPI.getAll();
         setLaborRoles(roles);
 
-        // 各アイテムのレシピを取得
-        const itemsWithRecipes: PreppedItem[] = await Promise.all(
-          preppedItems.map(async (item) => {
-            const recipeLines = await recipeLinesAPI.getByItemId(item.id);
-            // コストを計算
-            let costPerGram: number | undefined;
-            try {
-              const costData = await costAPI.getCost(item.id);
-              costPerGram = costData.cost_per_gram;
-            } catch (error) {
-              console.error(
-                `Failed to calculate cost for item ${item.id}:`,
-                error
-              );
-            }
+        // 全アイテムのIDを取得
+        const itemIds = preppedItems.map((item) => item.id);
 
-            return {
-              id: item.id,
-              name: item.name,
-              item_kind: "prepped",
-              is_menu_item: item.is_menu_item,
-              proceed_yield_amount: item.proceed_yield_amount || 0,
-              proceed_yield_unit: item.proceed_yield_unit || "g",
-              recipe_lines: recipeLines.map((line) => ({
-                id: line.id,
-                line_type: line.line_type,
-                child_item_id: line.child_item_id || undefined,
-                quantity: line.quantity || undefined,
-                unit: line.unit || undefined,
-                specific_child: line.specific_child || null,
-                labor_role: line.labor_role || undefined,
-                minutes: line.minutes || undefined,
-              })),
-              notes: item.notes || "",
-              isExpanded: false,
-              cost_per_gram: costPerGram,
-              each_grams: item.each_grams || null,
-            };
-          })
-        );
+        // 全アイテムのレシピを一度に取得（最適化）
+        let recipesMap: Record<string, APIRecipeLine[]> = {};
+        try {
+          if (itemIds.length > 0) {
+            const recipesData = await recipeLinesAPI.getByItemIds(itemIds);
+            recipesMap = recipesData.recipes;
+          }
+        } catch (error) {
+          console.error("Failed to fetch recipes:", error);
+        }
+
+        // 全アイテムのコストを一度に計算（最適化）
+        let costsMap: Record<string, number> = {};
+        try {
+          if (itemIds.length > 0) {
+            const costsData = await costAPI.getCosts(itemIds);
+            costsMap = costsData.costs;
+          }
+        } catch (error) {
+          console.error("Failed to calculate costs:", error);
+        }
+
+        // 各アイテムのデータを構築
+        const itemsWithRecipes: PreppedItem[] = preppedItems.map((item) => {
+          const recipeLines = recipesMap[item.id] || [];
+          const costPerGram = costsMap[item.id];
+
+          return {
+            id: item.id,
+            name: item.name,
+            item_kind: "prepped",
+            is_menu_item: item.is_menu_item,
+            proceed_yield_amount: item.proceed_yield_amount || 0,
+            proceed_yield_unit: item.proceed_yield_unit || "g",
+            recipe_lines: recipeLines.map((line) => ({
+              id: line.id,
+              line_type: line.line_type,
+              child_item_id: line.child_item_id || undefined,
+              quantity: line.quantity || undefined,
+              unit: line.unit || undefined,
+              specific_child: line.specific_child || null,
+              labor_role: line.labor_role || undefined,
+              minutes: line.minutes || undefined,
+            })),
+            notes: item.notes || "",
+            isExpanded: false,
+            cost_per_gram: costPerGram,
+            each_grams: item.each_grams || null,
+          };
+        });
 
         setItems(itemsWithRecipes);
         setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
@@ -368,13 +381,27 @@ export default function CostPage() {
         const itemsMap = new Map<string, Item>();
         allItems.forEach((item) => itemsMap.set(item.id, item));
 
-        // すべてのレシピラインを取得
-        const allRecipeLines: APIRecipeLine[] = [];
-        for (const item of allItems) {
-          if (item.item_kind === "prepped") {
-            const lines = await recipeLinesAPI.getByItemId(item.id);
-            allRecipeLines.push(...lines);
+        // すべてのレシピラインを一度に取得（最適化）
+        const preppedItemIds = allItems
+          .filter((item) => item.item_kind === "prepped")
+          .map((item) => item.id);
+        let recipesMap: Record<string, APIRecipeLine[]> = {};
+        try {
+          if (preppedItemIds.length > 0) {
+            const recipesData = await recipeLinesAPI.getByItemIds(
+              preppedItemIds
+            );
+            recipesMap = recipesData.recipes;
           }
+        } catch (error) {
+          console.error("Failed to fetch recipes for cycle check:", error);
+        }
+
+        // すべてのレシピラインを配列に変換
+        const allRecipeLines: APIRecipeLine[] = [];
+        for (const itemId of preppedItemIds) {
+          const lines = recipesMap[itemId] || [];
+          allRecipeLines.push(...lines);
         }
 
         // レシピラインのマップを作成
@@ -595,44 +622,60 @@ export default function CostPage() {
       // 全アイテムを再取得（ingredient選択用）
       const allItems = await itemsAPI.getAll();
       setAvailableItems(allItems);
-      const itemsWithRecipes: PreppedItem[] = await Promise.all(
-        preppedItems.map(async (item) => {
-          const recipeLines = await recipeLinesAPI.getByItemId(item.id);
-          let costPerGram: number | undefined;
-          try {
-            const costData = await costAPI.getCost(item.id);
-            costPerGram = costData.cost_per_gram;
-          } catch (error) {
-            console.error(
-              `Failed to calculate cost for item ${item.id}:`,
-              error
-            );
-          }
 
-          return {
-            id: item.id,
-            name: item.name,
-            item_kind: "prepped",
-            is_menu_item: item.is_menu_item,
-            proceed_yield_amount: item.proceed_yield_amount || 0,
-            proceed_yield_unit: item.proceed_yield_unit || "g",
-            recipe_lines: recipeLines.map((line) => ({
-              id: line.id,
-              line_type: line.line_type,
-              child_item_id: line.child_item_id || undefined,
-              quantity: line.quantity || undefined,
-              unit: line.unit || undefined,
-              specific_child: line.specific_child || null,
-              labor_role: line.labor_role || undefined,
-              minutes: line.minutes || undefined,
-            })),
-            notes: item.notes || "",
-            isExpanded: false,
-            cost_per_gram: costPerGram,
-            each_grams: item.each_grams || null,
-          };
-        })
-      );
+      // 全アイテムのIDを取得
+      const itemIds = preppedItems.map((item) => item.id);
+
+      // 全アイテムのレシピを一度に取得（最適化）
+      let recipesMap: Record<string, APIRecipeLine[]> = {};
+      try {
+        if (itemIds.length > 0) {
+          const recipesData = await recipeLinesAPI.getByItemIds(itemIds);
+          recipesMap = recipesData.recipes;
+        }
+      } catch (error) {
+        console.error("Failed to fetch recipes:", error);
+      }
+
+      // 全アイテムのコストを一度に計算（最適化）
+      let costsMap: Record<string, number> = {};
+      try {
+        if (itemIds.length > 0) {
+          const costsData = await costAPI.getCosts(itemIds);
+          costsMap = costsData.costs;
+        }
+      } catch (error) {
+        console.error("Failed to calculate costs:", error);
+      }
+
+      // 各アイテムのデータを構築
+      const itemsWithRecipes: PreppedItem[] = preppedItems.map((item) => {
+        const recipeLines = recipesMap[item.id] || [];
+        const costPerGram = costsMap[item.id];
+
+        return {
+          id: item.id,
+          name: item.name,
+          item_kind: "prepped",
+          is_menu_item: item.is_menu_item,
+          proceed_yield_amount: item.proceed_yield_amount || 0,
+          proceed_yield_unit: item.proceed_yield_unit || "g",
+          recipe_lines: recipeLines.map((line) => ({
+            id: line.id,
+            line_type: line.line_type,
+            child_item_id: line.child_item_id || undefined,
+            quantity: line.quantity || undefined,
+            unit: line.unit || undefined,
+            specific_child: line.specific_child || null,
+            labor_role: line.labor_role || undefined,
+            minutes: line.minutes || undefined,
+          })),
+          notes: item.notes || "",
+          isExpanded: false,
+          cost_per_gram: costPerGram,
+          each_grams: item.each_grams || null,
+        };
+      });
 
       setItems(itemsWithRecipes);
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));

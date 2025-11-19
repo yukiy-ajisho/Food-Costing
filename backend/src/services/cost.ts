@@ -94,6 +94,26 @@ function computeRawCost(
  * @param specificVendorProductId - 特定のvendor_productを指定（"lowest" | vendor_product.id | null）
  * @returns 1グラムあたりのコスト
  */
+/**
+ * キャッシュキーを生成
+ * Raw Itemの場合: itemId + specificVendorProductId
+ * Prepped Itemの場合: itemIdのみ（子アイテムのコストは再帰的に計算されるため）
+ */
+function getCacheKey(
+  itemId: string,
+  itemKind: "raw" | "prepped",
+  specificVendorProductId: string | "lowest" | null
+): string {
+  if (itemKind === "raw" && specificVendorProductId) {
+    // Raw Itemの場合、specificVendorProductIdを含める
+    const vpId =
+      specificVendorProductId === "lowest" ? "lowest" : specificVendorProductId;
+    return `${itemId}:${vpId}`;
+  }
+  // Prepped Itemの場合、itemIdのみ
+  return itemId;
+}
+
 export async function getCost(
   itemId: string,
   visited: Set<string> = new Set(),
@@ -103,9 +123,26 @@ export async function getCost(
   laborRoles: Map<string, LaborRole> = new Map(),
   specificVendorProductId: string | "lowest" | null = null
 ): Promise<number> {
+  // アイテムを取得してitemKindを確認（キャッシュキー生成のため）
+  let item = itemsMap.get(itemId);
+  if (!item) {
+    const { data: fetchedItem, error: itemError } = await supabase
+      .from("items")
+      .select("*")
+      .eq("id", itemId)
+      .single();
+
+    if (itemError || !fetchedItem) {
+      throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
+    }
+    item = fetchedItem;
+    itemsMap.set(itemId, item);
+  }
+
   // 1. キャッシュチェック
-  if (costCache.has(itemId)) {
-    return costCache.get(itemId)!;
+  const cacheKey = getCacheKey(itemId, item.item_kind, specificVendorProductId);
+  if (costCache.has(cacheKey)) {
+    return costCache.get(cacheKey)!;
   }
 
   // 2. 循環検出
@@ -120,22 +157,7 @@ export async function getCost(
   visited.add(itemId);
 
   try {
-    // アイテムを取得（itemsMapから取得を試みる、存在しない場合のみデータベースから取得）
-    let item = itemsMap.get(itemId);
-    if (!item) {
-      const { data: fetchedItem, error: itemError } = await supabase
-        .from("items")
-        .select("*")
-        .eq("id", itemId)
-        .single();
-
-      if (itemError || !fetchedItem) {
-        throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
-      }
-      item = fetchedItem;
-      // itemsMapに保存（次回以降はitemsMapから取得できる）
-      itemsMap.set(itemId, item);
-    }
+    // アイテムは既に取得済み（キャッシュキー生成のため）
 
     /**
      * 子アイテムがitemsMapに存在することを保証するヘルパー関数
@@ -227,7 +249,9 @@ export async function getCost(
         costPerGram = computeRawCost(item, selectedVendorProduct, baseItemsMap);
       }
 
-      costCache.set(itemId, costPerGram);
+      // キャッシュに保存（Raw Itemの場合、specificVendorProductIdを含むキーを使用）
+      const cacheKey = getCacheKey(itemId, "raw", specificVendorProductId);
+      costCache.set(cacheKey, costPerGram);
       return costPerGram;
     }
 
@@ -432,8 +456,9 @@ export async function getCost(
     const totalBatchCost = ingredientCost + laborCost;
     const costPerGram = totalBatchCost / yieldGrams;
 
-    // キャッシュに保存
-    costCache.set(itemId, costPerGram);
+    // キャッシュに保存（Prepped Itemの場合、itemIdのみ）
+    const cacheKey = getCacheKey(itemId, "prepped", null);
+    costCache.set(cacheKey, costPerGram);
     return costPerGram;
   } finally {
     // 訪問済みマークを削除
@@ -549,4 +574,47 @@ export async function calculateCost(itemId: string): Promise<number> {
   // 計算終了時のクリアは削除
   // 理由: 計算開始時にクリアするため、不要
   // 次の計算開始時に自動的にクリアされる
+}
+
+/**
+ * 複数アイテムのコストを一度に計算（最適化版）
+ * データを一度だけ取得し、キャッシュを一度だけクリアして複数アイテムを計算
+ * @param itemIds - コストを計算するアイテムIDの配列
+ * @returns アイテムIDをキー、コスト（1グラムあたり）を値とするMap
+ */
+export async function calculateCosts(
+  itemIds: string[]
+): Promise<Map<string, number>> {
+  // 計算開始時に全てのキャッシュを一度だけクリア
+  costCache.clear();
+
+  // データを一度だけ取得
+  const baseItemsMap = await getBaseItemsMap();
+  const itemsMap = await getItemsMap();
+  const vendorProductsMap = await getVendorProductsMap();
+  const laborRoles = await getLaborRolesMap();
+
+  // 結果を保存するMap
+  const results = new Map<string, number>();
+
+  // 各アイテムのコストを順次計算（同じデータとキャッシュを使用）
+  for (const itemId of itemIds) {
+    try {
+      const costPerGram = await getCost(
+        itemId,
+        new Set(),
+        baseItemsMap,
+        itemsMap,
+        vendorProductsMap,
+        laborRoles
+      );
+      results.set(itemId, costPerGram);
+    } catch (error) {
+      // エラーが発生したアイテムはスキップ（エラーログを出力）
+      console.error(`Failed to calculate cost for item ${itemId}:`, error);
+      // エラーが発生したアイテムは結果に含めない
+    }
+  }
+
+  return results;
 }

@@ -124,6 +124,15 @@ export const itemsAPI = {
 export const recipeLinesAPI = {
   getByItemId: (itemId: string) =>
     fetchAPI<RecipeLine[]>(`/items/${itemId}/recipe`),
+  getByItemIds: (itemIds: string[]) => {
+    return fetchAPI<{ recipes: Record<string, RecipeLine[]> }>(
+      "/items/recipes",
+      {
+        method: "POST",
+        body: JSON.stringify({ item_ids: itemIds }),
+      }
+    );
+  },
   create: (line: Partial<RecipeLine>) =>
     fetchAPI<RecipeLine>("/recipe-lines", {
       method: "POST",
@@ -147,6 +156,12 @@ export const costAPI = {
     return fetchAPI<{ item_id: string; cost_per_gram: number }>(
       `/items/${itemId}/cost${query}`
     );
+  },
+  getCosts: (itemIds: string[]) => {
+    return fetchAPI<{ costs: Record<string, number> }>("/items/costs", {
+      method: "POST",
+      body: JSON.stringify({ item_ids: itemIds }),
+    });
   },
 };
 
