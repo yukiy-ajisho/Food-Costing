@@ -64,9 +64,72 @@ export function saveChangeHistory(changes: {
       delete merged.changed_labor_role_names;
 
     // localStorageに保存
-    localStorage.setItem("costing_change_history", JSON.stringify(merged));
+    try {
+      localStorage.setItem("costing_change_history", JSON.stringify(merged));
+    } catch (storageError: unknown) {
+      // QuotaExceededError → 古い履歴の半分を削除して再試行
+      if (
+        (storageError as Error).name === "QuotaExceededError" ||
+        (storageError as { code?: number }).code === 22
+      ) {
+        console.warn(
+          "LocalStorage quota exceeded. Clearing old history and retrying..."
+        );
+
+        // 各配列の古い半分を削除
+        const halfLength = (arr: string[] | undefined) =>
+          arr ? Math.floor(arr.length / 2) : 0;
+
+        const reduced: typeof changes = {
+          changed_item_ids: merged.changed_item_ids?.slice(
+            halfLength(merged.changed_item_ids)
+          ),
+          changed_vendor_product_ids: merged.changed_vendor_product_ids?.slice(
+            halfLength(merged.changed_vendor_product_ids)
+          ),
+          changed_base_item_ids: merged.changed_base_item_ids?.slice(
+            halfLength(merged.changed_base_item_ids)
+          ),
+          changed_labor_role_names: merged.changed_labor_role_names?.slice(
+            halfLength(merged.changed_labor_role_names)
+          ),
+        };
+
+        try {
+          localStorage.setItem(
+            "costing_change_history",
+            JSON.stringify(reduced)
+          );
+          console.log("Successfully saved reduced change history.");
+        } catch (retryError) {
+          console.error(
+            "Failed to save even after reducing history:",
+            retryError
+          );
+        }
+      } else {
+        throw storageError;
+      }
+    }
   } catch (error) {
     console.error("Failed to save change history:", error);
+  }
+}
+
+/**
+ * 変更履歴を取得してクリア（Cost Pageで使用）
+ */
+export function getAndClearChangeHistory() {
+  try {
+    const historyStr = localStorage.getItem("costing_change_history");
+    if (historyStr) {
+      localStorage.removeItem("costing_change_history");
+      return JSON.parse(historyStr);
+    }
+    return null;
+  } catch (error) {
+    console.error("Failed to get and clear change history:", error);
+    return null;
   }
 }
 
@@ -75,6 +138,7 @@ export interface BaseItem {
   id: string;
   name: string;
   specific_weight?: number | null; // g/ml for non-mass units (gallon, liter, floz)
+  deprecated?: string | null; // timestamp when deprecated
 }
 
 export interface Vendor {
@@ -91,6 +155,7 @@ export interface VendorProduct {
   purchase_unit: string;
   purchase_quantity: number;
   purchase_cost: number;
+  deprecated?: string | null; // timestamp when deprecated
 }
 
 export interface Item {
@@ -106,6 +171,8 @@ export interface Item {
   // Common fields
   each_grams?: number | null; // grams for 'each' unit (used for both raw and prepped items)
   notes?: string | null;
+  deprecated?: string | null; // timestamp when deprecated
+  deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
 }
 
 export interface RecipeLine {
@@ -118,6 +185,7 @@ export interface RecipeLine {
   specific_child?: string | null; // "lowest" or vendor_product.id (only for raw items)
   labor_role?: string | null;
   minutes?: number | null;
+  last_change?: string | null; // vendor product change history
 }
 
 export interface LaborRole {
@@ -183,6 +251,13 @@ export const itemsAPI = {
     fetchAPI<void>(`/items/${id}`, {
       method: "DELETE",
     }),
+  deprecate: (id: string) =>
+    fetchAPI<{ message: string; affectedItems?: string[] }>(
+      `/items/${id}/deprecate`,
+      {
+        method: "PATCH",
+      }
+    ),
 };
 
 // Recipe Lines API
@@ -281,6 +356,10 @@ export const baseItemsAPI = {
     fetchAPI<void>(`/base-items/${id}`, {
       method: "DELETE",
     }),
+  deprecate: (id: string) =>
+    fetchAPI<{ message: string }>(`/base-items/${id}/deprecate`, {
+      method: "PATCH",
+    }),
 };
 
 // Vendors API
@@ -321,6 +400,13 @@ export const vendorProductsAPI = {
     fetchAPI<void>(`/vendor-products/${id}`, {
       method: "DELETE",
     }),
+  deprecate: (id: string) =>
+    fetchAPI<{ message: string; affectedItems?: string[] }>(
+      `/vendor-products/${id}/deprecate`,
+      {
+        method: "PATCH",
+      }
+    ),
 };
 
 // Labor Roles API

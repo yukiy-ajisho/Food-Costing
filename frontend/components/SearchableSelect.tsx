@@ -4,7 +4,12 @@ import { useState, useRef, useEffect } from "react";
 import { Search, ChevronDown } from "lucide-react";
 
 interface SearchableSelectProps {
-  options: { id: string; name: string }[];
+  options: {
+    id: string;
+    name: string;
+    disabled?: boolean;
+    deprecated?: boolean;
+  }[];
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -128,11 +133,15 @@ export function SearchableSelect({
                 <button
                   key={option.id}
                   type="button"
-                  onClick={() => handleSelect(option.id)}
-                  className={`block w-full px-4 py-2 text-left hover:bg-blue-50 transition-colors ${
-                    value === option.id ? "bg-blue-100 font-semibold" : ""
-                  }`}
+                  onClick={() => !option.disabled && handleSelect(option.id)}
+                  disabled={option.disabled}
+                  className={`block w-full px-4 py-2 text-left transition-colors ${
+                    option.disabled || option.deprecated
+                      ? "opacity-50 cursor-not-allowed text-gray-400"
+                      : "hover:bg-blue-50"
+                  } ${value === option.id ? "bg-blue-100 font-semibold" : ""}`}
                 >
+                  {option.deprecated && "[Deprecated] "}
                   {option.name}
                 </button>
               ))

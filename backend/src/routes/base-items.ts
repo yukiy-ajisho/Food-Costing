@@ -21,8 +21,7 @@ router.get("/", async (req, res) => {
 
     res.json(data || []);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -45,8 +44,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -76,8 +74,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -104,15 +101,34 @@ router.put("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PATCH /base-items/:id/deprecate
+ * Base Itemをdeprecatedにする
+ */
+router.patch("/:id/deprecate", async (req, res) => {
+  try {
+    const { deprecateBaseItem } = await import("../services/deprecation");
+    const result = await deprecateBaseItem(req.params.id);
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({ message: "Base item deprecated successfully" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
 
 /**
  * DELETE /base-items/:id
- * Base Itemを削除
+ * Base Itemを削除（物理削除は危険なので非推奨、deprecateを使用してください）
  */
 router.delete("/:id", async (req, res) => {
   try {
@@ -127,8 +143,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

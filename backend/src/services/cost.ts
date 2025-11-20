@@ -208,10 +208,15 @@ export async function getCost(
         specificVendorProductId === "lowest" ||
         specificVendorProductId === null
       ) {
-        // 最安のものを選択
+        // 最安のものを選択（activeなvendor productsのみ）
         let cheapestCostPerGram = Infinity;
 
         for (const vp of matchingVendorProducts) {
+          // Lowestの場合、deprecatedなvendor productsは除外
+          if (vp.deprecated) {
+            continue;
+          }
+
           try {
             const vpCostPerGram = computeRawCost(item, vp, baseItemsMap);
             if (vpCostPerGram < cheapestCostPerGram) {

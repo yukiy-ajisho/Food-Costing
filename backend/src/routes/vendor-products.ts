@@ -83,6 +83,20 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: vpError.message });
     }
 
+    // 自動undeprecateをチェック
+    const { autoUndeprecateAfterVendorProductCreation } = await import(
+      "../services/deprecation"
+    );
+    const undeprecateResult = await autoUndeprecateAfterVendorProductCreation(
+      newVendorProduct.id
+    );
+
+    if (undeprecateResult.undeprecatedItems?.length) {
+      console.log(
+        `[AUTO UNDEPRECATE] ${undeprecateResult.undeprecatedItems.length} items undeprecated after vendor product creation`
+      );
+    }
+
     res.status(201).json(newVendorProduct);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -118,8 +132,31 @@ router.put("/:id", async (req, res) => {
 });
 
 /**
+ * PATCH /vendor-products/:id/deprecate
+ * Vendor Productをdeprecatedにする
+ */
+router.patch("/:id/deprecate", async (req, res) => {
+  try {
+    const { deprecateVendorProduct } = await import("../services/deprecation");
+    const result = await deprecateVendorProduct(req.params.id);
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({
+      message: "Vendor product deprecated successfully",
+      affectedItems: result.affectedItems,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * DELETE /vendor-products/:id
- * vendor productを削除（CASCADEでitemsも削除される）
+ * vendor productを削除（物理削除は危険なので非推奨、deprecateを使用してください）
  */
 router.delete("/:id", async (req, res) => {
   try {

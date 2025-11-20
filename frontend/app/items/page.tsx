@@ -120,9 +120,10 @@ export default function ItemsPage() {
         setVendors(vendorsData);
         setItems(itemsData);
 
-        // VendorProductUI形式に変換
-        const vendorProductsUI: VendorProductUI[] = vendorProductsData.map(
-          (vp) => {
+        // VendorProductUI形式に変換（deprecatedを除外）
+        const vendorProductsUI: VendorProductUI[] = vendorProductsData
+          .filter((vp) => !vp.deprecated)
+          .map((vp) => {
             // 対応するitemを取得（each_gramsを取得するため）
             const item = itemsData.find(
               (i) => i.base_item_id === vp.base_item_id
@@ -156,8 +157,7 @@ export default function ItemsPage() {
               each_grams: item?.each_grams || null,
               needsWarning,
             };
-          }
-        );
+          });
 
         setVendorProducts(vendorProductsUI);
         setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
@@ -199,18 +199,22 @@ export default function ItemsPage() {
           itemsAPI.getAll({ item_kind: "raw" }),
         ]);
 
-        // Base Itemに対応するItemsレコードからeach_gramsを取得
-        const baseItemsUI: BaseItemUI[] = baseItemsData.map((baseItem) => {
-          const correspondingItem = itemsData.find(
-            (item) => item.base_item_id === baseItem.id
-          );
-          return {
-            id: baseItem.id,
-            name: baseItem.name,
-            specific_weight: baseItem.specific_weight,
-            each_grams: correspondingItem?.each_grams || null,
-          };
-        });
+        // Base Itemに対応するItemsレコードからeach_gramsを取得（deprecatedを除外）
+        const baseItemsUI: BaseItemUI[] = baseItemsData
+          .filter((baseItem) => !baseItem.deprecated)
+          .map((baseItem) => {
+            const correspondingItem = itemsData.find(
+              (item) => item.base_item_id === baseItem.id
+            );
+            return {
+              id: baseItem.id,
+              name: baseItem.name,
+              specific_weight: baseItem.specific_weight || null,
+              each_grams: correspondingItem?.each_grams || null,
+              isNew: false,
+              isMarkedForDeletion: false,
+            };
+          });
         setBaseItemsUI(baseItemsUI);
         setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUI)));
         setHasLoadedBaseItemsOnce(true);
@@ -334,10 +338,11 @@ export default function ItemsPage() {
         }
       }
 
-      // 削除処理
+      // Deprecate処理
       for (const vp of vendorProducts) {
         if (vp.isMarkedForDeletion && !vp.isNew) {
-          await vendorProductsAPI.delete(vp.id);
+          // 削除ではなくdeprecateを使用
+          await vendorProductsAPI.deprecate(vp.id);
           changedVendorProductIds.push(vp.id);
         }
       }
@@ -362,8 +367,9 @@ export default function ItemsPage() {
       setVendors(vendorsData);
       setItems(itemsData);
 
-      const vendorProductsUI: VendorProductUI[] = vendorProductsData.map(
-        (vp) => {
+      const vendorProductsUI: VendorProductUI[] = vendorProductsData
+        .filter((vp) => !vp.deprecated)
+        .map((vp) => {
           const item = itemsData.find(
             (i) => i.base_item_id === vp.base_item_id
           );
@@ -390,8 +396,7 @@ export default function ItemsPage() {
             each_grams: item?.each_grams || null,
             needsWarning,
           };
-        }
-      );
+        });
 
       setVendorProducts(vendorProductsUI);
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
@@ -548,7 +553,8 @@ export default function ItemsPage() {
 
       for (const item of baseItemsUI) {
         if (item.isMarkedForDeletion && !item.isNew) {
-          await baseItemsAPI.delete(item.id);
+          // 削除ではなくdeprecateを使用
+          await baseItemsAPI.deprecate(item.id);
           changedBaseItemIds.push(item.id);
         }
       }
@@ -567,17 +573,20 @@ export default function ItemsPage() {
         itemsAPI.getAll({ item_kind: "raw" }),
       ]);
 
-      const baseItemsUIUpdated: BaseItemUI[] = baseItemsData.map((baseItem) => {
-        const correspondingItem = itemsData.find(
-          (item) => item.base_item_id === baseItem.id
-        );
-        return {
-          id: baseItem.id,
-          name: baseItem.name,
-          specific_weight: baseItem.specific_weight,
-          each_grams: correspondingItem?.each_grams || null,
-        };
-      });
+      // deprecatedされていないアイテムのみ表示
+      const baseItemsUIUpdated: BaseItemUI[] = baseItemsData
+        .filter((baseItem) => !baseItem.deprecated)
+        .map((baseItem) => {
+          const correspondingItem = itemsData.find(
+            (item) => item.base_item_id === baseItem.id
+          );
+          return {
+            id: baseItem.id,
+            name: baseItem.name,
+            specific_weight: baseItem.specific_weight,
+            each_grams: correspondingItem?.each_grams || null,
+          };
+        });
 
       setBaseItemsUI(baseItemsUIUpdated);
       setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUIUpdated)));

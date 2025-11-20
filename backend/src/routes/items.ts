@@ -32,8 +32,7 @@ router.get("/", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -56,8 +55,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -89,8 +87,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -269,15 +266,37 @@ router.put("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PATCH /items/:id/deprecate
+ * Prepped Itemをdeprecatedにする
+ */
+router.patch("/:id/deprecate", async (req, res) => {
+  try {
+    const { deprecatePreppedItem } = await import("../services/deprecation");
+    const result = await deprecatePreppedItem(req.params.id);
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({
+      message: "Item deprecated successfully",
+      affectedItems: result.affectedItems,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
 
 /**
  * DELETE /items/:id
- * アイテムを削除（CASCADEでrecipe_linesも削除される）
+ * アイテムを削除（物理削除は危険なので非推奨、deprecateを使用してください）
  */
 router.delete("/:id", async (req, res) => {
   try {
@@ -292,8 +311,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

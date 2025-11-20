@@ -20,6 +20,8 @@ import {
   baseItemsAPI,
   vendorProductsAPI,
   vendorsAPI,
+  saveChangeHistory,
+  getAndClearChangeHistory,
   type Item,
   type RecipeLine as APIRecipeLine,
   type LaborRole,
@@ -27,7 +29,6 @@ import {
   type VendorProduct,
   type Vendor,
 } from "@/lib/api";
-import { checkCyclesForItems } from "@/lib/cycle-detection";
 import {
   MASS_UNIT_CONVERSIONS,
   MASS_UNITS_ORDERED,
@@ -48,6 +49,7 @@ interface RecipeLine {
   specific_child?: string | null; // "lowest" or vendor_product.id (only for raw items)
   labor_role?: string; // labor only
   minutes?: number; // labor only
+  last_change?: string | null; // vendor product change history
   isMarkedForDeletion?: boolean;
   isNew?: boolean; // 新規作成フラグ
 }
@@ -67,6 +69,8 @@ interface PreppedItem {
   isNew?: boolean; // 新規作成フラグ
   cost_per_gram?: number; // コスト計算結果
   each_grams?: number | null; // 1個あたりの重量（g）（Yield Unit = "each"の場合）
+  deprecated?: string | null; // timestamp when deprecated
+  deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
 }
 
 // 単位のオプション（順番を制御）
@@ -133,33 +137,20 @@ export default function CostPage() {
           console.error("Failed to fetch recipes:", error);
         }
 
-        // 変更履歴をlocalStorageから取得
-        const changeHistoryStr = localStorage.getItem("costing_change_history");
-        let changeHistory: {
-          changed_item_ids?: string[];
-          changed_vendor_product_ids?: string[];
-          changed_base_item_ids?: string[];
-          changed_labor_role_names?: string[];
-        } = {};
-
-        if (changeHistoryStr) {
-          try {
-            changeHistory = JSON.parse(changeHistoryStr);
-          } catch (e) {
-            console.error("Failed to parse change history:", e);
-          }
-        }
+        // 変更履歴をlocalStorageから取得してクリア
+        const changeHistory = getAndClearChangeHistory();
 
         // 差分更新でコストを計算（変更があった場合のみ）
         let costsMap: Record<string, number> = {};
-        const hasChanges =
-          (changeHistory.changed_item_ids?.length ?? 0) > 0 ||
-          (changeHistory.changed_vendor_product_ids?.length ?? 0) > 0 ||
-          (changeHistory.changed_base_item_ids?.length ?? 0) > 0 ||
-          (changeHistory.changed_labor_role_names?.length ?? 0) > 0;
+        const hasChanges = changeHistory
+          ? (changeHistory.changed_item_ids?.length ?? 0) > 0 ||
+            (changeHistory.changed_vendor_product_ids?.length ?? 0) > 0 ||
+            (changeHistory.changed_base_item_ids?.length ?? 0) > 0 ||
+            (changeHistory.changed_labor_role_names?.length ?? 0) > 0
+          : false;
 
         try {
-          if (hasChanges) {
+          if (hasChanges && changeHistory) {
             // 差分更新
             const costsData = await costAPI.getCostsDifferential({
               changed_item_ids: changeHistory.changed_item_ids || [],
@@ -170,8 +161,6 @@ export default function CostPage() {
                 changeHistory.changed_labor_role_names || [],
             });
             costsMap = costsData.costs;
-            // 変更履歴をクリア
-            localStorage.removeItem("costing_change_history");
           } else {
             // 変更がない場合は全アイテムのコストを計算
             if (itemIds.length > 0) {
@@ -196,33 +185,54 @@ export default function CostPage() {
         }
 
         // 各アイテムのデータを構築
-        const itemsWithRecipes: PreppedItem[] = preppedItems.map((item) => {
-          const recipeLines = recipesMap[item.id] || [];
-          const costPerGram = costsMap[item.id];
+        const itemsWithRecipes: PreppedItem[] = preppedItems
+          .filter((item) => {
+            // 直接deprecatedアイテムは除外
+            return item.deprecation_reason !== "direct";
+          })
+          .map((item) => {
+            const recipeLines = recipesMap[item.id] || [];
+            const costPerGram = costsMap[item.id];
 
-          return {
-            id: item.id,
-            name: item.name,
-            item_kind: "prepped",
-            is_menu_item: item.is_menu_item,
-            proceed_yield_amount: item.proceed_yield_amount || 0,
-            proceed_yield_unit: item.proceed_yield_unit || "g",
-            recipe_lines: recipeLines.map((line) => ({
-              id: line.id,
-              line_type: line.line_type,
-              child_item_id: line.child_item_id || undefined,
-              quantity: line.quantity || undefined,
-              unit: line.unit || undefined,
-              specific_child: line.specific_child || null,
-              labor_role: line.labor_role || undefined,
-              minutes: line.minutes || undefined,
-            })),
-            notes: item.notes || "",
-            isExpanded: false,
-            cost_per_gram: costPerGram,
-            each_grams: item.each_grams || null,
-          };
-        });
+            return {
+              id: item.id,
+              name: item.name,
+              item_kind: "prepped",
+              is_menu_item: item.is_menu_item,
+              proceed_yield_amount: item.proceed_yield_amount || 0,
+              proceed_yield_unit: item.proceed_yield_unit || "g",
+              recipe_lines: recipeLines.map((line) => {
+                // specific_childの処理: Raw Itemの場合、nullを"lowest"に変換
+                let specificChild = line.specific_child || null;
+                if (line.line_type === "ingredient" && line.child_item_id) {
+                  const childItem = allItems.find(
+                    (i) => i.id === line.child_item_id
+                  );
+                  if (childItem?.item_kind === "raw" && !specificChild) {
+                    specificChild = "lowest";
+                  }
+                }
+
+                return {
+                  id: line.id,
+                  line_type: line.line_type,
+                  child_item_id: line.child_item_id || undefined,
+                  quantity: line.quantity || undefined,
+                  unit: line.unit || undefined,
+                  specific_child: specificChild,
+                  labor_role: line.labor_role || undefined,
+                  minutes: line.minutes || undefined,
+                  last_change: line.last_change || null,
+                };
+              }),
+              notes: item.notes || "",
+              isExpanded: false,
+              cost_per_gram: costPerGram,
+              each_grams: item.each_grams || null,
+              deprecated: item.deprecated || null,
+              deprecation_reason: item.deprecation_reason || null,
+            };
+          });
 
         setItems(itemsWithRecipes);
         setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
@@ -828,33 +838,38 @@ export default function CostPage() {
           }
 
           // アイテムデータを構築
-          const itemsWithRecipes: PreppedItem[] = preppedItems.map((item) => {
-            const recipeLines = recipesMap[item.id] || [];
-            const costPerGram = costsMap[item.id];
+          const itemsWithRecipes: PreppedItem[] = preppedItems
+            .filter((item) => {
+              // 直接deprecatedアイテムは除外
+              return item.deprecation_reason !== "direct";
+            })
+            .map((item) => {
+              const recipeLines = recipesMap[item.id] || [];
+              const costPerGram = costsMap[item.id];
 
-            return {
-              id: item.id,
-              name: item.name,
-              item_kind: "prepped",
-              is_menu_item: item.is_menu_item,
-              proceed_yield_amount: item.proceed_yield_amount || 0,
-              proceed_yield_unit: item.proceed_yield_unit || "g",
-              recipe_lines: recipeLines.map((line) => ({
-                id: line.id,
-                line_type: line.line_type,
-                child_item_id: line.child_item_id || undefined,
-                quantity: line.quantity || undefined,
-                unit: line.unit || undefined,
-                specific_child: line.specific_child || null,
-                labor_role: line.labor_role || undefined,
-                minutes: line.minutes || undefined,
-              })),
-              notes: item.notes || "",
-              isExpanded: false,
-              cost_per_gram: costPerGram,
-              each_grams: item.each_grams || null,
-            };
-          });
+              return {
+                id: item.id,
+                name: item.name,
+                item_kind: "prepped",
+                is_menu_item: item.is_menu_item,
+                proceed_yield_amount: item.proceed_yield_amount || 0,
+                proceed_yield_unit: item.proceed_yield_unit || "g",
+                recipe_lines: recipeLines.map((line) => ({
+                  id: line.id,
+                  line_type: line.line_type,
+                  child_item_id: line.child_item_id || undefined,
+                  quantity: line.quantity || undefined,
+                  unit: line.unit || undefined,
+                  specific_child: line.specific_child || null,
+                  labor_role: line.labor_role || undefined,
+                  minutes: line.minutes || undefined,
+                })),
+                notes: item.notes || "",
+                isExpanded: false,
+                cost_per_gram: costPerGram,
+                each_grams: item.each_grams || null,
+              };
+            });
 
           setItems(itemsWithRecipes);
           setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
@@ -872,11 +887,19 @@ export default function CostPage() {
         await itemsAPI.update(itemUpdate.id, itemUpdate.data);
       }
 
-      // 削除処理
+      // Deprecate処理
+      const deprecatedItemIds: string[] = [];
       for (const item of items) {
         if (item.isMarkedForDeletion && !item.isNew) {
-          await itemsAPI.delete(item.id);
+          // 削除ではなくdeprecateを使用
+          await itemsAPI.deprecate(item.id);
+          deprecatedItemIds.push(item.id);
         }
+      }
+
+      // 変更履歴をlocalStorageに保存（Itemsがdeprecateされた場合）
+      if (deprecatedItemIds.length > 0) {
+        saveChangeHistory({ changed_item_ids: deprecatedItemIds });
       }
 
       // データを再取得
@@ -936,17 +959,51 @@ export default function CostPage() {
       }
 
       // 各アイテムのデータを構築
-      const itemsWithRecipes: PreppedItem[] = preppedItems.map((item) => {
-        // 影響を受けるアイテムのレシピは新しく取得したもの、影響を受けていないアイテムのレシピは既存のitemsステートから取得
-        let recipeLines: APIRecipeLine[] = [];
-        if (recipesMap[item.id]) {
-          // 新しく取得したレシピを使用
-          recipeLines = recipesMap[item.id];
-        } else {
-          // 既存のitemsステートから取得（影響を受けていないアイテムのレシピは変更されていない）
-          const existingItem = items.find((i) => i.id === item.id);
-          if (existingItem) {
-            recipeLines = existingItem.recipe_lines.map((line) => ({
+      const itemsWithRecipes: PreppedItem[] = preppedItems
+        .filter((item) => {
+          // 直接deprecatedアイテムは除外
+          return item.deprecation_reason !== "direct";
+        })
+        .map((item) => {
+          // 影響を受けるアイテムのレシピは新しく取得したもの、影響を受けていないアイテムのレシピは既存のitemsステートから取得
+          let recipeLines: APIRecipeLine[] = [];
+          if (recipesMap[item.id]) {
+            // 新しく取得したレシピを使用
+            recipeLines = recipesMap[item.id];
+          } else {
+            // 既存のitemsステートから取得（影響を受けていないアイテムのレシピは変更されていない）
+            const existingItem = items.find((i) => i.id === item.id);
+            if (existingItem) {
+              recipeLines = existingItem.recipe_lines.map((line) => ({
+                id: line.id,
+                line_type: line.line_type,
+                child_item_id: line.child_item_id || undefined,
+                quantity: line.quantity || undefined,
+                unit: line.unit || undefined,
+                specific_child: line.specific_child || null,
+                labor_role: line.labor_role || undefined,
+                minutes: line.minutes || undefined,
+              })) as APIRecipeLine[];
+            }
+          }
+          // 影響を受けるアイテムのコストは新しく計算したもの、影響を受けていないアイテムのコストは既存のitemsステートから取得
+          let costPerGram: number | undefined = costsMap[item.id];
+          if (costPerGram === undefined) {
+            // 既存のitemsステートから取得（影響を受けていないアイテムのコストは変更されていない）
+            const existingItem = items.find((i) => i.id === item.id);
+            if (existingItem) {
+              costPerGram = existingItem.cost_per_gram;
+            }
+          }
+
+          return {
+            id: item.id,
+            name: item.name,
+            item_kind: "prepped",
+            is_menu_item: item.is_menu_item,
+            proceed_yield_amount: item.proceed_yield_amount || 0,
+            proceed_yield_unit: item.proceed_yield_unit || "g",
+            recipe_lines: recipeLines.map((line) => ({
               id: line.id,
               line_type: line.line_type,
               child_item_id: line.child_item_id || undefined,
@@ -955,42 +1012,15 @@ export default function CostPage() {
               specific_child: line.specific_child || null,
               labor_role: line.labor_role || undefined,
               minutes: line.minutes || undefined,
-            })) as APIRecipeLine[];
-          }
-        }
-        // 影響を受けるアイテムのコストは新しく計算したもの、影響を受けていないアイテムのコストは既存のitemsステートから取得
-        let costPerGram: number | undefined = costsMap[item.id];
-        if (costPerGram === undefined) {
-          // 既存のitemsステートから取得（影響を受けていないアイテムのコストは変更されていない）
-          const existingItem = items.find((i) => i.id === item.id);
-          if (existingItem) {
-            costPerGram = existingItem.cost_per_gram;
-          }
-        }
-
-        return {
-          id: item.id,
-          name: item.name,
-          item_kind: "prepped",
-          is_menu_item: item.is_menu_item,
-          proceed_yield_amount: item.proceed_yield_amount || 0,
-          proceed_yield_unit: item.proceed_yield_unit || "g",
-          recipe_lines: recipeLines.map((line) => ({
-            id: line.id,
-            line_type: line.line_type,
-            child_item_id: line.child_item_id || undefined,
-            quantity: line.quantity || undefined,
-            unit: line.unit || undefined,
-            specific_child: line.specific_child || null,
-            labor_role: line.labor_role || undefined,
-            minutes: line.minutes || undefined,
-          })),
-          notes: item.notes || "",
-          isExpanded: false,
-          cost_per_gram: costPerGram,
-          each_grams: item.each_grams || null,
-        };
-      });
+            })),
+            notes: item.notes || "",
+            isExpanded: false,
+            cost_per_gram: costPerGram,
+            each_grams: item.each_grams || null,
+            deprecated: item.deprecated || null,
+            deprecation_reason: item.deprecation_reason || null,
+          };
+        });
 
       setItems(itemsWithRecipes);
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
@@ -1130,8 +1160,12 @@ export default function CostPage() {
                     // 利用可能な単位の最初のものをデフォルトとして設定
                     updatedLine.unit =
                       availableUnits.length > 0 ? availableUnits[0] : "g";
-                    // specific_childをリセット（新しいitemに応じて再設定する必要がある）
-                    updatedLine.specific_child = null;
+                    // specific_childを設定: Raw Itemなら"lowest"、Prepped Itemならnull
+                    const selectedItem = availableItems.find(
+                      (i) => i.id === value
+                    );
+                    updatedLine.specific_child =
+                      selectedItem?.item_kind === "raw" ? "lowest" : null;
                   }
 
                   return updatedLine;
@@ -1184,7 +1218,10 @@ export default function CostPage() {
   };
 
   // 利用可能なvendor_productsを取得（child_item_idがrawの場合）
-  const getAvailableVendorProducts = (childItemId: string): VendorProduct[] => {
+  const getAvailableVendorProducts = (
+    childItemId: string,
+    currentSpecificChild?: string | null
+  ): VendorProduct[] => {
     if (!childItemId) return [];
 
     const childItem = availableItems.find((i) => i.id === childItemId);
@@ -1196,9 +1233,30 @@ export default function CostPage() {
       return [];
     }
 
-    const matchingVendorProducts = vendorProducts.filter(
-      (vp) => vp.base_item_id === childItem.base_item_id
-    );
+    const matchingVendorProducts = vendorProducts.filter((vp) => {
+      // Base itemが一致するものだけ
+      if (vp.base_item_id !== childItem.base_item_id) {
+        return false;
+      }
+
+      // Deprecatedでないものは常に表示
+      if (!vp.deprecated) {
+        return true;
+      }
+
+      // Deprecatedだが、現在選択されているものは表示
+      if (
+        currentSpecificChild &&
+        currentSpecificChild !== "lowest" &&
+        currentSpecificChild !== null &&
+        vp.id === currentSpecificChild
+      ) {
+        return true;
+      }
+
+      // その他のdeprecatedは表示しない
+      return false;
+    });
 
     // vendor名（アルファベット順）→ product_name（アルファベット順）でソート
     return matchingVendorProducts.sort((a, b) => {
@@ -1338,10 +1396,49 @@ export default function CostPage() {
   };
 
   // availableItemsをSearchableSelect用の形式に変換
-  const availableItemsForSelect = availableItems.map((item) => ({
-    id: item.id,
-    name: item.name,
-  }));
+  // Ingredient選択用のフィルタリング関数
+  const getAvailableItemsForSelect = (currentChildItemId?: string) => {
+    return availableItems
+      .filter((item) => {
+        // Raw itemの場合、vendor productが存在するかチェック
+        if (item.item_kind === "raw" && item.base_item_id) {
+          const hasActiveVendorProduct = vendorProducts.some(
+            (vp) => vp.base_item_id === item.base_item_id && !vp.deprecated
+          );
+
+          // アクティブなvendor productがない場合
+          if (!hasActiveVendorProduct) {
+            // 現在選択中のitemの場合のみ表示
+            return item.id === currentChildItemId;
+          }
+        }
+
+        // Deprecatedなitemのフィルタリング
+        if (item.deprecated) {
+          // 直接deprecatedは表示しない（現在選択中でも）
+          if (item.deprecation_reason === "direct") {
+            return item.id === currentChildItemId;
+          }
+          // 間接deprecatedは常に表示
+          if (item.deprecation_reason === "indirect") {
+            return true;
+          }
+        }
+
+        // それ以外は表示
+        return true;
+      })
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        disabled: !!(
+          item.deprecated &&
+          item.deprecation_reason === "direct" &&
+          item.id === currentChildItemId
+        ),
+        deprecated: !!item.deprecated,
+      }));
+  };
 
   // laborRolesをSearchableSelect用の形式に変換
   // const laborRolesForSelect = laborRoles.map((role) => ({
@@ -1801,12 +1898,29 @@ export default function CostPage() {
                           placeholder="Item name"
                         />
                       ) : (
-                        <div
-                          className={`text-sm ${
-                            isDark ? "text-slate-100" : "text-gray-900"
-                          }`}
-                        >
-                          {item.name}
+                        <div className="flex items-center gap-2">
+                          <div
+                            className={`text-sm ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                          >
+                            {item.name}
+                          </div>
+                          {/* Deprecated marker (間接deprecatedのみ) */}
+                          {item.deprecation_reason === "indirect" && (
+                            <span
+                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-300"
+                              title={`Affected by deprecated ingredient${
+                                item.deprecated
+                                  ? ` (since ${new Date(
+                                      item.deprecated
+                                    ).toLocaleDateString()})`
+                                  : ""
+                              }`}
+                            >
+                              ⚠ Affected
+                            </span>
+                          )}
                         </div>
                       )}
                     </td>
@@ -2063,7 +2177,9 @@ export default function CostPage() {
                                       <td className="px-4 py-2">
                                         {isEditMode ? (
                                           <SearchableSelect
-                                            options={availableItemsForSelect}
+                                            options={getAvailableItemsForSelect(
+                                              line.child_item_id
+                                            )}
                                             value={line.child_item_id || ""}
                                             onChange={(value) =>
                                               handleRecipeLineChange(
@@ -2099,7 +2215,8 @@ export default function CostPage() {
                                             childItem?.item_kind === "raw";
                                           const availableVendorProducts =
                                             getAvailableVendorProducts(
-                                              line.child_item_id || ""
+                                              line.child_item_id || "",
+                                              line.specific_child
                                             );
 
                                           if (!isRawItem) {
@@ -2224,11 +2341,29 @@ export default function CostPage() {
                                                                   2
                                                                 )}/kg`
                                                               : "";
+                                                          const isDeprecated =
+                                                            !!vp.deprecated;
                                                           return (
                                                             <option
                                                               key={vp.id}
                                                               value={vp.id}
+                                                              disabled={
+                                                                isDeprecated
+                                                              }
+                                                              style={{
+                                                                opacity:
+                                                                  isDeprecated
+                                                                    ? 0.5
+                                                                    : 1,
+                                                                color:
+                                                                  isDeprecated
+                                                                    ? "#9ca3af"
+                                                                    : undefined,
+                                                              }}
                                                             >
+                                                              {isDeprecated
+                                                                ? "[Deprecated] "
+                                                                : ""}
                                                               {vendorName} -{" "}
                                                               {productName}
                                                               {costDisplay}
@@ -2298,15 +2433,39 @@ export default function CostPage() {
                                                     )}/kg`
                                                   : "";
                                               return (
-                                                <div
-                                                  className={`text-sm ${
-                                                    isDark
-                                                      ? "text-slate-100"
-                                                      : "text-gray-900"
-                                                  }`}
-                                                >
-                                                  {vendorName} - {productName}
-                                                  {costDisplay}
+                                                <div className="space-y-1">
+                                                  <div
+                                                    className={`text-sm ${
+                                                      isDark
+                                                        ? "text-slate-100"
+                                                        : "text-gray-900"
+                                                    }`}
+                                                  >
+                                                    {vendorName} - {productName}
+                                                    {costDisplay}
+                                                  </div>
+                                                  {/* last_change history */}
+                                                  {(() => {
+                                                    const apiLine =
+                                                      item.recipe_lines.find(
+                                                        (rl) =>
+                                                          rl.id === line.id
+                                                      );
+                                                    if (
+                                                      apiLine &&
+                                                      "last_change" in
+                                                        apiLine &&
+                                                      apiLine.last_change
+                                                    ) {
+                                                      return (
+                                                        <div className="text-xs text-blue-600 dark:text-blue-400 italic">
+                                                          History:{" "}
+                                                          {apiLine.last_change}
+                                                        </div>
+                                                      );
+                                                    }
+                                                    return null;
+                                                  })()}
                                                 </div>
                                               );
                                             }

@@ -3,6 +3,70 @@ import { supabase } from "../config/supabase";
 import { RecipeLine, Item } from "../types/database";
 import { checkCycle } from "../services/cycle-detection";
 
+/**
+ * Recipe Lineのバリデーション: deprecatedな材料やvendor_productを使おうとしていないかチェック
+ */
+async function validateRecipeLineNotDeprecated(
+  line: Partial<RecipeLine>
+): Promise<{ valid: boolean; error?: string }> {
+  // ingredientのみチェック（laborはチェック不要）
+  if (line.line_type !== "ingredient" || !line.child_item_id) {
+    return { valid: true };
+  }
+
+  // child_itemがdeprecatedかチェック
+  const { data: childItem, error: itemError } = await supabase
+    .from("items")
+    .select("*")
+    .eq("id", line.child_item_id)
+    .single();
+
+  if (itemError || !childItem) {
+    return {
+      valid: false,
+      error: `Ingredient item not found: ${line.child_item_id}`,
+    };
+  }
+
+  if (childItem.deprecated) {
+    const itemType =
+      childItem.item_kind === "raw" ? "Raw item" : "Prepped item";
+    return {
+      valid: false,
+      error: `Cannot add deprecated ingredient: ${itemType} "${childItem.name}" is no longer available. Please select an active item.`,
+    };
+  }
+
+  // Raw itemの場合、specific_childのvendor_productをチェック
+  if (childItem.item_kind === "raw" && line.specific_child) {
+    // "lowest"は許可（最安を自動選択）
+    if (line.specific_child !== "lowest" && line.specific_child !== null) {
+      const { data: vendorProduct, error: vpError } = await supabase
+        .from("vendor_products")
+        .select("*")
+        .eq("id", line.specific_child)
+        .single();
+
+      if (vpError || !vendorProduct) {
+        return {
+          valid: false,
+          error: `Vendor product not found: ${line.specific_child}`,
+        };
+      }
+
+      if (vendorProduct.deprecated) {
+        const productName = vendorProduct.product_name || "Unknown product";
+        return {
+          valid: false,
+          error: `Cannot select deprecated vendor product: "${productName}" is no longer available. Please select an active vendor product or use "lowest cost" option.`,
+        };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 const router = Router();
 
 /**
@@ -90,6 +154,12 @@ router.post("/", async (req, res) => {
       }
     }
 
+    // Deprecatedバリデーション
+    const validation = await validateRecipeLineNotDeprecated(line);
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.error });
+    }
+
     const { data, error } = await supabase
       .from("recipe_lines")
       .insert([line])
@@ -98,6 +168,14 @@ router.post("/", async (req, res) => {
 
     if (error) {
       return res.status(400).json({ error: error.message });
+    }
+
+    // 自動undeprecateをチェック（ingredient lineの場合）
+    if (line.line_type === "ingredient" && line.parent_item_id) {
+      const { autoUndeprecateAfterRecipeLineUpdate } = await import(
+        "../services/deprecation"
+      );
+      await autoUndeprecateAfterRecipeLineUpdate(line.parent_item_id);
     }
 
     res.status(201).json(data);
@@ -189,6 +267,17 @@ router.put("/:id", async (req, res) => {
 
     if (error) {
       return res.status(400).json({ error: error.message });
+    }
+
+    // 自動undeprecateをチェック（ingredient lineの場合）
+    if (
+      existingLine.line_type === "ingredient" &&
+      existingLine.parent_item_id
+    ) {
+      const { autoUndeprecateAfterRecipeLineUpdate } = await import(
+        "../services/deprecation"
+      );
+      await autoUndeprecateAfterRecipeLineUpdate(existingLine.parent_item_id);
     }
 
     res.json(data);
@@ -308,7 +397,7 @@ router.post("/batch", async (req, res) => {
         child_item_id: create.child_item_id || null,
         quantity: create.quantity || null,
         unit: create.unit || null,
-        specific_child: create.specific_child || null,
+        specific_child: create.specific_child ?? null, // nullish coalescing: null/undefinedのみnullに
         labor_role: create.labor_role || null,
         minutes: create.minutes || null,
         created_at: undefined,
@@ -333,6 +422,11 @@ router.post("/batch", async (req, res) => {
             error: "ingredient line requires child_item_id, quantity, and unit",
           });
         }
+        // Deprecatedバリデーション
+        const validation = await validateRecipeLineNotDeprecated(create);
+        if (!validation.valid) {
+          return res.status(400).json({ error: validation.error });
+        }
       } else if (create.line_type === "labor") {
         if (!create.minutes || create.minutes <= 0) {
           return res.status(400).json({
@@ -348,6 +442,11 @@ router.post("/batch", async (req, res) => {
           return res.status(400).json({
             error: "ingredient line requires child_item_id, quantity, and unit",
           });
+        }
+        // Deprecatedバリデーション
+        const validation = await validateRecipeLineNotDeprecated(update);
+        if (!validation.valid) {
+          return res.status(400).json({ error: validation.error });
         }
       } else if (update.line_type === "labor") {
         if (!update.minutes || update.minutes <= 0) {
@@ -432,6 +531,14 @@ router.post("/batch", async (req, res) => {
         return res.status(400).json({ error: deleteError.message });
       }
       results.deleted = deletes;
+
+      // 削除された行の親itemsもaffectedParentIdsに追加
+      for (const deleteId of deletes) {
+        const deletedLine = allRecipeLines?.find((rl) => rl.id === deleteId);
+        if (deletedLine && deletedLine.line_type === "ingredient") {
+          affectedParentIds.add(deletedLine.parent_item_id);
+        }
+      }
     }
 
     // 更新
@@ -467,6 +574,50 @@ router.post("/batch", async (req, res) => {
       if (createdData) {
         results.created = createdData;
       }
+    }
+
+    // 材料0個チェック: 影響を受けた各prepped itemが最低1つのingredient lineを持つことを確認
+    for (const parentId of affectedParentIds) {
+      // 親itemを取得
+      const { data: parentItem, error: parentError } = await supabase
+        .from("items")
+        .select("*")
+        .eq("id", parentId)
+        .single();
+
+      if (parentError || !parentItem) {
+        continue; // エラー時はスキップ
+      }
+
+      // Prepped itemのみチェック
+      if (parentItem.item_kind === "prepped") {
+        // ingredient lineの数を確認
+        const { data: ingredientLines, error: ilError } = await supabase
+          .from("recipe_lines")
+          .select("id")
+          .eq("parent_item_id", parentId)
+          .eq("line_type", "ingredient");
+
+        if (ilError) {
+          return res.status(500).json({ error: ilError.message });
+        }
+
+        if (!ingredientLines || ingredientLines.length === 0) {
+          return res.status(400).json({
+            error: `Cannot save: Prepped item "${parentItem.name}" must have at least one ingredient. Please add an ingredient before saving.`,
+          });
+        }
+      }
+    }
+
+    // 自動undeprecateをチェック（影響を受けた親items）
+    const { autoUndeprecateAfterRecipeLineUpdate } = await import(
+      "../services/deprecation"
+    );
+
+    // 作成、更新、削除の影響を受けた親itemsをすべてチェック
+    for (const parentId of affectedParentIds) {
+      await autoUndeprecateAfterRecipeLineUpdate(parentId);
     }
 
     res.json(results);

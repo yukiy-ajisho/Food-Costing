@@ -4,6 +4,7 @@ export interface BaseItem {
   id: string;
   name: string;
   specific_weight?: number | null; // g/ml for non-mass units (gallon, liter, floz)
+  deprecated?: string | null; // timestamp when deprecated
   created_at?: string;
   updated_at?: string;
 }
@@ -24,6 +25,7 @@ export interface VendorProduct {
   purchase_unit: string;
   purchase_quantity: number;
   purchase_cost: number;
+  deprecated?: string | null; // timestamp when deprecated
   created_at?: string;
   updated_at?: string;
 }
@@ -41,6 +43,8 @@ export interface Item {
   // Common fields
   each_grams?: number | null; // grams for 'each' unit (used for both raw and prepped items)
   notes?: string | null;
+  deprecated?: string | null; // timestamp when deprecated
+  deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   created_at?: string;
   updated_at?: string;
 }
@@ -57,6 +61,7 @@ export interface RecipeLine {
   // Labor line fields
   labor_role?: string | null;
   minutes?: number | null;
+  last_change?: string | null; // vendor product change history (e.g., "Vendor A → Vendor B → Vendor C")
   created_at?: string;
   updated_at?: string;
 }
