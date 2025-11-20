@@ -71,6 +71,8 @@ interface PreppedItem {
   each_grams?: number | null; // 1個あたりの重量（g）（Yield Unit = "each"の場合）
   deprecated?: string | null; // timestamp when deprecated
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
+  wholesale?: number | null; // wholesale price
+  retail?: number | null; // retail price
 }
 
 // 単位のオプション（順番を制御）
@@ -99,6 +101,17 @@ export default function CostPage() {
   const [costMax, setCostMax] = useState<number | "">("");
   const [costUnit, setCostUnit] = useState<"g" | "kg">("g"); // Cost表示単位
   const [loading, setLoading] = useState(true);
+  // コスト内訳データ（Food Cost / Labor Cost）
+  const [costBreakdown, setCostBreakdown] = useState<
+    Record<
+      string,
+      {
+        food_cost_per_gram: number;
+        labor_cost_per_gram: number;
+        total_cost_per_gram: number;
+      }
+    >
+  >({});
 
   // データ取得
   useEffect(() => {
@@ -184,6 +197,14 @@ export default function CostPage() {
           }
         }
 
+        // コスト内訳データを取得（Food Cost / Labor Cost）
+        try {
+          const breakdownData = await costAPI.getCostsBreakdown();
+          setCostBreakdown(breakdownData.costs);
+        } catch (error) {
+          console.error("Failed to fetch cost breakdown:", error);
+        }
+
         // 各アイテムのデータを構築
         const itemsWithRecipes: PreppedItem[] = preppedItems
           .filter((item) => {
@@ -231,6 +252,8 @@ export default function CostPage() {
               each_grams: item.each_grams || null,
               deprecated: item.deprecated || null,
               deprecation_reason: item.deprecation_reason || null,
+              wholesale: item.wholesale || null,
+              retail: item.retail || null,
             };
           });
 
@@ -339,6 +362,40 @@ export default function CostPage() {
   };
 
   // 材料の総合計をグラムで計算
+  // リアルタイム計算: パーセンテージを計算
+  const calculatePercentages = (
+    price: number | null | undefined,
+    item: PreppedItem
+  ) => {
+    if (!price || price <= 0) {
+      return { laborPercent: null, cogPercent: null, lcogPercent: null };
+    }
+
+    const breakdown = costBreakdown[item.id];
+    if (!breakdown) {
+      return { laborPercent: null, cogPercent: null, lcogPercent: null };
+    }
+
+    // Wholesale/Retailは1kgあたりの価格として入力されるため、1グラムあたりに変換
+    const pricePerGram = price / 1000;
+    const laborPercent =
+      pricePerGram > 0
+        ? (breakdown.labor_cost_per_gram / pricePerGram) * 100
+        : null;
+    const cogPercent =
+      pricePerGram > 0
+        ? (breakdown.food_cost_per_gram / pricePerGram) * 100
+        : null;
+    const lcogPercent =
+      pricePerGram > 0
+        ? ((breakdown.food_cost_per_gram + breakdown.labor_cost_per_gram) /
+            pricePerGram) *
+          100
+        : null;
+
+    return { laborPercent, cogPercent, lcogPercent };
+  };
+
   const calculateTotalIngredientsGrams = (
     recipeLines: RecipeLine[]
   ): number => {
@@ -597,6 +654,8 @@ export default function CostPage() {
           proceed_yield_unit: string;
           notes: string | null;
           each_grams: number | null;
+          wholesale: number | null;
+          retail: number | null;
         };
       }> = [];
 
@@ -615,6 +674,8 @@ export default function CostPage() {
               item.proceed_yield_unit === "each"
                 ? item.each_grams || null
                 : null,
+            wholesale: item.wholesale || null,
+            retail: item.retail || null,
           });
 
           // レシピラインを作成用に追加
@@ -655,6 +716,8 @@ export default function CostPage() {
             originalItem.is_menu_item !== item.is_menu_item ||
             originalItem.proceed_yield_amount !== item.proceed_yield_amount ||
             originalItem.proceed_yield_unit !== item.proceed_yield_unit ||
+            originalItem.wholesale !== item.wholesale ||
+            originalItem.retail !== item.retail ||
             (originalItem.notes || null) !== (item.notes || null) ||
             (originalItem.proceed_yield_unit === "each"
               ? (originalItem.each_grams || null) !==
@@ -770,6 +833,8 @@ export default function CostPage() {
                   item.proceed_yield_unit === "each"
                     ? item.each_grams || null
                     : null,
+                wholesale: item.wholesale || null,
+                retail: item.retail || null,
               },
             });
             // 変更されたアイテムIDを記録
@@ -1750,690 +1815,942 @@ export default function CostPage() {
               : "bg-white border-gray-200"
           }`}
         >
-          <table className="w-full">
-            <thead
-              className={`border-b transition-colors ${
-                isDark
-                  ? "bg-slate-700 border-slate-600"
-                  : "bg-gray-50 border-gray-200"
-              }`}
-            >
-              <tr>
-                <th
-                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-12 ${
-                    isDark ? "text-slate-300" : "text-gray-500"
-                  }`}
-                >
-                  {/* 展開アイコン用 */}
-                </th>
-                <th
-                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                    isDark ? "text-slate-300" : "text-gray-500"
-                  }`}
-                >
-                  Name
-                </th>
-                <th
-                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                    isDark ? "text-slate-300" : "text-gray-500"
-                  }`}
-                >
-                  Type
-                </th>
-                <th
-                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                    isDark ? "text-slate-300" : "text-gray-500"
-                  }`}
-                >
-                  Proceed
-                </th>
-                <th
-                  className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                    isDark ? "text-slate-300" : "text-gray-500"
-                  }`}
-                  style={{ minWidth: "180px" }}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="min-w-[70px]">Cost/{costUnit}</span>
-                    <div className="flex items-center gap-1">
-                      <span
-                        className={`text-xs ${
-                          costUnit === "g"
-                            ? "font-semibold"
-                            : isDark
-                            ? "text-slate-500"
-                            : "text-gray-400"
-                        }`}
-                      >
-                        g
-                      </span>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={costUnit === "kg"}
-                          onChange={(e) =>
-                            setCostUnit(e.target.checked ? "kg" : "g")
-                          }
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                      </label>
-                      <span
-                        className={`text-xs ${
-                          costUnit === "kg" ? "font-semibold" : "text-gray-400"
-                        }`}
-                      >
-                        kg
-                      </span>
-                    </div>
-                  </div>
-                </th>
-                {isEditMode && (
+          <div className="overflow-x-auto max-w-full">
+            <table className="w-full min-w-max">
+              <thead
+                className={`border-b transition-colors ${
+                  isDark
+                    ? "bg-slate-700 border-slate-600"
+                    : "bg-gray-50 border-gray-200"
+                }`}
+              >
+                <tr>
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-12 ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                   >
-                    {/* ゴミ箱列のヘッダー */}
+                    {/* 展開アイコン用 */}
                   </th>
-                )}
-              </tr>
-            </thead>
-            <tbody
-              className={`divide-y transition-colors ${
-                isDark
-                  ? "bg-slate-800 divide-slate-700"
-                  : "bg-white divide-gray-200"
-              }`}
-            >
-              {filteredItems.map((item) => (
-                <Fragment key={item.id}>
-                  <tr
-                    className={`${
-                      item.isMarkedForDeletion
-                        ? isDark
-                          ? "bg-red-900/30"
-                          : "bg-red-50"
-                        : ""
-                    } ${
-                      isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
-                    } cursor-pointer transition-colors`}
-                    onClick={() => !isEditMode && toggleExpand(item.id)}
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider sticky left-0 z-10 ${
+                      isDark
+                        ? "bg-slate-700 text-slate-300"
+                        : "bg-gray-50 text-gray-500"
+                    }`}
                   >
-                    {/* 展開アイコン */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleExpand(item.id);
-                        }}
-                        className={`transition-colors ${
-                          isDark
-                            ? "text-slate-500 hover:text-slate-300"
-                            : "text-gray-400 hover:text-gray-600"
-                        }`}
-                      >
-                        {item.isExpanded ? (
-                          <ChevronDown className="w-5 h-5" />
-                        ) : (
-                          <ChevronRight className="w-5 h-5" />
-                        )}
-                      </button>
-                    </td>
-
-                    {/* Name */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditMode ? (
-                        <input
-                          type="text"
-                          value={item.name}
-                          onChange={(e) =>
-                            handleItemChange(item.id, "name", e.target.value)
-                          }
-                          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                            isDark
-                              ? "bg-slate-700 border-slate-600 text-slate-100"
-                              : "bg-white border-gray-300 text-gray-900"
+                    Name
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                  >
+                    Type
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                  >
+                    Proceed
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "180px" }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="min-w-[70px]">Cost/{costUnit}</span>
+                      <div className="flex items-center gap-1">
+                        <span
+                          className={`text-xs ${
+                            costUnit === "g"
+                              ? "font-semibold"
+                              : isDark
+                              ? "text-slate-500"
+                              : "text-gray-400"
                           }`}
-                          placeholder="Item name"
-                        />
-                      ) : (
-                        <div className="flex items-center gap-2">
+                        >
+                          g
+                        </span>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={costUnit === "kg"}
+                            onChange={(e) =>
+                              setCostUnit(e.target.checked ? "kg" : "g")
+                            }
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                        <span
+                          className={`text-xs ${
+                            costUnit === "kg"
+                              ? "font-semibold"
+                              : "text-gray-400"
+                          }`}
+                        >
+                          kg
+                        </span>
+                      </div>
+                    </div>
+                  </th>
+                  {/* Wholesale */}
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "120px" }}
+                  >
+                    Wholesale ($/kg)
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "100px" }}
+                  >
+                    Labor%
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "100px" }}
+                  >
+                    COG%
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "100px" }}
+                  >
+                    LCOG%
+                  </th>
+                  {/* Retail */}
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "120px" }}
+                  >
+                    Retail ($/kg)
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "100px" }}
+                  >
+                    Labor%
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "100px" }}
+                  >
+                    COG%
+                  </th>
+                  <th
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                      isDark ? "text-slate-300" : "text-gray-500"
+                    }`}
+                    style={{ minWidth: "100px" }}
+                  >
+                    LCOG%
+                  </th>
+                  {isEditMode && (
+                    <th
+                      className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
+                        isDark ? "text-slate-300" : "text-gray-500"
+                      }`}
+                    >
+                      {/* ゴミ箱列のヘッダー */}
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody
+                className={`divide-y transition-colors ${
+                  isDark
+                    ? "bg-slate-800 divide-slate-700"
+                    : "bg-white divide-gray-200"
+                }`}
+              >
+                {filteredItems.map((item) => (
+                  <Fragment key={item.id}>
+                    <tr
+                      className={`${
+                        item.isMarkedForDeletion
+                          ? isDark
+                            ? "bg-red-900/30"
+                            : "bg-red-50"
+                          : ""
+                      } ${
+                        isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
+                      } cursor-pointer transition-colors group`}
+                      onClick={() => !isEditMode && toggleExpand(item.id)}
+                    >
+                      {/* 展開アイコン */}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpand(item.id);
+                          }}
+                          className={`transition-colors ${
+                            isDark
+                              ? "text-slate-500 hover:text-slate-300"
+                              : "text-gray-400 hover:text-gray-600"
+                          }`}
+                        >
+                          {item.isExpanded ? (
+                            <ChevronDown className="w-5 h-5" />
+                          ) : (
+                            <ChevronRight className="w-5 h-5" />
+                          )}
+                        </button>
+                      </td>
+
+                      {/* Name */}
+                      <td
+                        className={`px-6 py-4 whitespace-nowrap sticky left-0 z-10 ${
+                          item.isMarkedForDeletion
+                            ? isDark
+                              ? "bg-red-900/30"
+                              : "bg-red-50"
+                            : isDark
+                            ? "bg-slate-800 group-hover:bg-slate-700"
+                            : "bg-white group-hover:bg-gray-50"
+                        } ${isDark ? "text-slate-100" : "text-gray-900"}`}
+                      >
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={item.name}
+                            onChange={(e) =>
+                              handleItemChange(item.id, "name", e.target.value)
+                            }
+                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                              isDark
+                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                : "bg-white border-gray-300 text-gray-900"
+                            }`}
+                            placeholder="Item name"
+                          />
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`text-sm ${
+                                isDark ? "text-slate-100" : "text-gray-900"
+                              }`}
+                            >
+                              {item.name}
+                            </div>
+                            {/* Deprecated marker (間接deprecatedのみ) */}
+                            {item.deprecation_reason === "indirect" && (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-300"
+                                title={`Affected by deprecated ingredient${
+                                  item.deprecated
+                                    ? ` (since ${new Date(
+                                        item.deprecated
+                                      ).toLocaleDateString()})`
+                                    : ""
+                                }`}
+                              >
+                                ⚠ Affected
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Type */}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isEditMode ? (
+                          <select
+                            value={item.is_menu_item ? "menu" : "prepped"}
+                            onChange={(e) =>
+                              handleItemChange(
+                                item.id,
+                                "is_menu_item",
+                                e.target.value === "menu"
+                              )
+                            }
+                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                              isDark
+                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                : "bg-white border-gray-300 text-gray-900"
+                            }`}
+                          >
+                            <option value="prepped">Prepped</option>
+                            <option value="menu">Menu Item</option>
+                          </select>
+                        ) : (
                           <div
                             className={`text-sm ${
                               isDark ? "text-slate-100" : "text-gray-900"
                             }`}
                           >
-                            {item.name}
+                            {item.is_menu_item ? "Menu Item" : "Prepped"}
                           </div>
-                          {/* Deprecated marker (間接deprecatedのみ) */}
-                          {item.deprecation_reason === "indirect" && (
-                            <span
-                              className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-300"
-                              title={`Affected by deprecated ingredient${
-                                item.deprecated
-                                  ? ` (since ${new Date(
-                                      item.deprecated
-                                    ).toLocaleDateString()})`
-                                  : ""
-                              }`}
+                        )}
+                      </td>
+
+                      {/* Proceed */}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {isEditMode ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              value={
+                                item.proceed_yield_amount === 0
+                                  ? ""
+                                  : String(item.proceed_yield_amount)
+                              }
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                // 空文字列の場合は0、それ以外は数値に変換
+                                const numValue =
+                                  value === "" ? 0 : parseFloat(value) || 0;
+                                handleItemChange(
+                                  item.id,
+                                  "proceed_yield_amount",
+                                  numValue
+                                );
+                              }}
+                              className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="0"
+                              min="0"
+                              step="0.01"
+                            />
+                            <select
+                              value={item.proceed_yield_unit}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  item.id,
+                                  "proceed_yield_unit",
+                                  e.target.value
+                                )
+                              }
+                              className="w-20 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                             >
-                              ⚠ Affected
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Type */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditMode ? (
-                        <select
-                          value={item.is_menu_item ? "menu" : "prepped"}
-                          onChange={(e) =>
-                            handleItemChange(
-                              item.id,
-                              "is_menu_item",
-                              e.target.value === "menu"
-                            )
-                          }
-                          className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                            isDark
-                              ? "bg-slate-700 border-slate-600 text-slate-100"
-                              : "bg-white border-gray-300 text-gray-900"
-                          }`}
-                        >
-                          <option value="prepped">Prepped</option>
-                          <option value="menu">Menu Item</option>
-                        </select>
-                      ) : (
-                        <div
-                          className={`text-sm ${
-                            isDark ? "text-slate-100" : "text-gray-900"
-                          }`}
-                        >
-                          {item.is_menu_item ? "Menu Item" : "Prepped"}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Proceed */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditMode ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            value={
-                              item.proceed_yield_amount === 0
-                                ? ""
-                                : String(item.proceed_yield_amount)
-                            }
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              // 空文字列の場合は0、それ以外は数値に変換
-                              const numValue =
-                                value === "" ? 0 : parseFloat(value) || 0;
-                              handleItemChange(
-                                item.id,
-                                "proceed_yield_amount",
-                                numValue
-                              );
-                            }}
-                            className="w-24 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="0"
-                            min="0"
-                            step="0.01"
-                          />
-                          <select
-                            value={item.proceed_yield_unit}
-                            onChange={(e) =>
-                              handleItemChange(
-                                item.id,
-                                "proceed_yield_unit",
-                                e.target.value
-                              )
-                            }
-                            className="w-20 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          >
-                            {yieldUnitOptions.map((unit) => (
-                              <option key={unit} value={unit}>
-                                {unit}
-                              </option>
-                            ))}
-                          </select>
-                          {/* Yield Unitが"each"の場合、右側に入力ボックスを表示 */}
-                          {item.proceed_yield_unit === "each" && (
-                            <>
-                              <input
-                                type="number"
-                                value={
-                                  item.each_grams === null ||
-                                  item.each_grams === undefined ||
-                                  item.each_grams === 0
-                                    ? ""
-                                    : String(item.each_grams)
-                                }
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  const numValue =
-                                    value === ""
-                                      ? null
-                                      : parseFloat(value) || null;
-                                  handleItemChange(
-                                    item.id,
-                                    "each_grams",
-                                    numValue
-                                  );
-                                }}
-                                placeholder={(() => {
-                                  const totalIngredientsGrams =
-                                    calculateTotalIngredientsGrams(
-                                      item.recipe_lines
+                              {yieldUnitOptions.map((unit) => (
+                                <option key={unit} value={unit}>
+                                  {unit}
+                                </option>
+                              ))}
+                            </select>
+                            {/* Yield Unitが"each"の場合、右側に入力ボックスを表示 */}
+                            {item.proceed_yield_unit === "each" && (
+                              <>
+                                <input
+                                  type="number"
+                                  value={
+                                    item.each_grams === null ||
+                                    item.each_grams === undefined ||
+                                    item.each_grams === 0
+                                      ? ""
+                                      : String(item.each_grams)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    const numValue =
+                                      value === ""
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    handleItemChange(
+                                      item.id,
+                                      "each_grams",
+                                      numValue
                                     );
-                                  const yieldAmount =
-                                    item.proceed_yield_amount || 1;
-                                  const defaultEachGrams =
-                                    totalIngredientsGrams / yieldAmount;
-                                  return `Auto (${defaultEachGrams.toFixed(
-                                    2
-                                  )}g)`;
-                                })()}
-                                className="w-20 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                min="0"
-                                step="0.01"
-                              />
-                              <span
-                                className={`text-sm ${
-                                  isDark ? "text-slate-300" : "text-gray-600"
-                                }`}
-                              >
-                                g/each
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-gray-900">
-                            {item.proceed_yield_amount}{" "}
-                            {item.proceed_yield_unit}
-                          </span>
-                          {/* Yield Unitが"each"の場合、each_gramsを表示 */}
-                          {item.proceed_yield_unit === "each" && (
-                            <span className="text-xs text-gray-500">
-                              {(() => {
-                                const eachGrams =
-                                  item.each_grams ||
-                                  (() => {
+                                  }}
+                                  placeholder={(() => {
                                     const totalIngredientsGrams =
                                       calculateTotalIngredientsGrams(
                                         item.recipe_lines
                                       );
                                     const yieldAmount =
                                       item.proceed_yield_amount || 1;
-                                    return totalIngredientsGrams / yieldAmount;
-                                  })();
-                                return `(${eachGrams.toFixed(2)}g / each)`;
-                              })()}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Cost/g or Cost/kg */}
-                    <td
-                      className="px-6 py-4 whitespace-nowrap"
-                      style={{ minWidth: "180px" }}
-                    >
-                      <div className="text-sm text-gray-900">
-                        {item.cost_per_gram !== undefined
-                          ? costUnit === "g"
-                            ? `$${item.cost_per_gram.toFixed(6)}/g`
-                            : `$${(item.cost_per_gram * 1000).toFixed(2)}/kg`
-                          : "-"}
-                      </div>
-                    </td>
-
-                    {/* ゴミ箱（Editモード時のみ） */}
-                    {isEditMode && (
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleItemDeleteClick(item.id);
-                          }}
-                          className={`p-2 rounded-md transition-colors ${
-                            item.isMarkedForDeletion
-                              ? "bg-red-500 text-white hover:bg-red-600"
-                              : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                          }`}
-                          title="Mark for deletion"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-
-                  {/* 展開されたレシピとLaborセクション */}
-                  {item.isExpanded && (
-                    <tr>
-                      <td
-                        colSpan={isEditMode ? 6 : 5}
-                        className="px-6 py-4 bg-gray-50"
-                      >
-                        <div className="space-y-6">
-                          {/* Recipeセクション */}
-                          <div>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                              Recipe:
-                              {isEditMode && (
-                                <span className="ml-4 text-sm font-normal text-gray-600">
-                                  Total:{" "}
-                                  {calculateTotalIngredientsGrams(
-                                    item.recipe_lines
-                                  ).toFixed(2)}{" "}
-                                  g
+                                    const defaultEachGrams =
+                                      totalIngredientsGrams / yieldAmount;
+                                    return `Auto (${defaultEachGrams.toFixed(
+                                      2
+                                    )}g)`;
+                                  })()}
+                                  className="w-20 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  min="0"
+                                  step="0.01"
+                                />
+                                <span
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-300" : "text-gray-600"
+                                  }`}
+                                >
+                                  g/each
                                 </span>
-                              )}
-                            </h3>
-                            <table className="w-full">
-                              <thead className="bg-gray-100">
-                                <tr>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
-                                    Item
-                                  </th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
-                                    Vendor Selection
-                                  </th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
-                                    Quantity
-                                  </th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
-                                    Unit
-                                  </th>
-                                  {isEditMode && (
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 w-16">
-                                      {/* ゴミ箱列 */}
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-900">
+                              {item.proceed_yield_amount}{" "}
+                              {item.proceed_yield_unit}
+                            </span>
+                            {/* Yield Unitが"each"の場合、each_gramsを表示 */}
+                            {item.proceed_yield_unit === "each" && (
+                              <span className="text-xs text-gray-500">
+                                {(() => {
+                                  const eachGrams =
+                                    item.each_grams ||
+                                    (() => {
+                                      const totalIngredientsGrams =
+                                        calculateTotalIngredientsGrams(
+                                          item.recipe_lines
+                                        );
+                                      const yieldAmount =
+                                        item.proceed_yield_amount || 1;
+                                      return (
+                                        totalIngredientsGrams / yieldAmount
+                                      );
+                                    })();
+                                  return `(${eachGrams.toFixed(2)}g / each)`;
+                                })()}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Cost/g or Cost/kg */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "180px" }}
+                      >
+                        <div className="text-sm text-gray-900">
+                          {item.cost_per_gram !== undefined
+                            ? costUnit === "g"
+                              ? `$${item.cost_per_gram.toFixed(6)}/g`
+                              : `$${(item.cost_per_gram * 1000).toFixed(2)}/kg`
+                            : "-"}
+                        </div>
+                      </td>
+
+                      {/* Wholesale */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "120px" }}
+                      >
+                        {isEditMode ? (
+                          <input
+                            type="number"
+                            value={
+                              item.wholesale === null ||
+                              item.wholesale === undefined
+                                ? ""
+                                : String(item.wholesale)
+                            }
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              const numValue =
+                                value === "" ? null : parseFloat(value) || null;
+                              handleItemChange(item.id, "wholesale", numValue);
+                            }}
+                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                              isDark
+                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                : "bg-white border-gray-300 text-gray-900"
+                            }`}
+                            placeholder="0.00"
+                            min="0"
+                            step="0.01"
+                          />
+                        ) : (
+                          <div
+                            className={`text-sm ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                          >
+                            {item.wholesale !== null &&
+                            item.wholesale !== undefined
+                              ? `$${item.wholesale.toFixed(2)}/kg`
+                              : "-"}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Wholesale Labor% */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "100px" }}
+                      >
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          {(() => {
+                            const { laborPercent } = calculatePercentages(
+                              item.wholesale,
+                              item
+                            );
+                            return laborPercent !== null
+                              ? `${laborPercent.toFixed(2)}%`
+                              : "-";
+                          })()}
+                        </div>
+                      </td>
+
+                      {/* Wholesale COG% */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "100px" }}
+                      >
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          {(() => {
+                            const { cogPercent } = calculatePercentages(
+                              item.wholesale,
+                              item
+                            );
+                            return cogPercent !== null
+                              ? `${cogPercent.toFixed(2)}%`
+                              : "-";
+                          })()}
+                        </div>
+                      </td>
+
+                      {/* Wholesale LCOG% */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "100px" }}
+                      >
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          {(() => {
+                            const { lcogPercent } = calculatePercentages(
+                              item.wholesale,
+                              item
+                            );
+                            return lcogPercent !== null
+                              ? `${lcogPercent.toFixed(2)}%`
+                              : "-";
+                          })()}
+                        </div>
+                      </td>
+
+                      {/* Retail */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "120px" }}
+                      >
+                        {isEditMode ? (
+                          <input
+                            type="number"
+                            value={
+                              item.retail === null || item.retail === undefined
+                                ? ""
+                                : String(item.retail)
+                            }
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              const numValue =
+                                value === "" ? null : parseFloat(value) || null;
+                              handleItemChange(item.id, "retail", numValue);
+                            }}
+                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                              isDark
+                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                : "bg-white border-gray-300 text-gray-900"
+                            }`}
+                            placeholder="0.00"
+                            min="0"
+                            step="0.01"
+                          />
+                        ) : (
+                          <div
+                            className={`text-sm ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                          >
+                            {item.retail !== null && item.retail !== undefined
+                              ? `$${item.retail.toFixed(2)}/kg`
+                              : "-"}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Retail Labor% */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "100px" }}
+                      >
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          {(() => {
+                            const { laborPercent } = calculatePercentages(
+                              item.retail,
+                              item
+                            );
+                            return laborPercent !== null
+                              ? `${laborPercent.toFixed(2)}%`
+                              : "-";
+                          })()}
+                        </div>
+                      </td>
+
+                      {/* Retail COG% */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "100px" }}
+                      >
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          {(() => {
+                            const { cogPercent } = calculatePercentages(
+                              item.retail,
+                              item
+                            );
+                            return cogPercent !== null
+                              ? `${cogPercent.toFixed(2)}%`
+                              : "-";
+                          })()}
+                        </div>
+                      </td>
+
+                      {/* Retail LCOG% */}
+                      <td
+                        className="px-6 py-4 whitespace-nowrap"
+                        style={{ minWidth: "100px" }}
+                      >
+                        <div
+                          className={`text-sm ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          {(() => {
+                            const { lcogPercent } = calculatePercentages(
+                              item.retail,
+                              item
+                            );
+                            return lcogPercent !== null
+                              ? `${lcogPercent.toFixed(2)}%`
+                              : "-";
+                          })()}
+                        </div>
+                      </td>
+
+                      {/* ゴミ箱（Editモード時のみ） */}
+                      {isEditMode && (
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleItemDeleteClick(item.id);
+                            }}
+                            className={`p-2 rounded-md transition-colors ${
+                              item.isMarkedForDeletion
+                                ? "bg-red-500 text-white hover:bg-red-600"
+                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                            }`}
+                            title="Mark for deletion"
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+
+                    {/* 展開されたレシピとLaborセクション */}
+                    {item.isExpanded && (
+                      <tr>
+                        <td
+                          colSpan={isEditMode ? 6 : 5}
+                          className="px-6 py-4 bg-gray-50"
+                        >
+                          <div className="space-y-6">
+                            {/* Recipeセクション */}
+                            <div>
+                              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                                Recipe:
+                                {isEditMode && (
+                                  <span className="ml-4 text-sm font-normal text-gray-600">
+                                    Total:{" "}
+                                    {calculateTotalIngredientsGrams(
+                                      item.recipe_lines
+                                    ).toFixed(2)}{" "}
+                                    g
+                                  </span>
+                                )}
+                              </h3>
+                              <table className="w-full">
+                                <thead className="bg-gray-100">
+                                  <tr>
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      Item
                                     </th>
-                                  )}
-                                </tr>
-                              </thead>
-                              <tbody className="bg-white divide-y divide-gray-200">
-                                {item.recipe_lines
-                                  .filter(
-                                    (line) => line.line_type === "ingredient"
-                                  )
-                                  .map((line) => (
-                                    <tr
-                                      key={line.id}
-                                      className={
-                                        line.isMarkedForDeletion
-                                          ? "bg-red-50"
-                                          : ""
-                                      }
-                                    >
-                                      <td className="px-4 py-2">
-                                        {isEditMode ? (
-                                          <SearchableSelect
-                                            options={getAvailableItemsForSelect(
-                                              line.child_item_id
-                                            )}
-                                            value={line.child_item_id || ""}
-                                            onChange={(value) =>
-                                              handleRecipeLineChange(
-                                                item.id,
-                                                line.id,
-                                                "child_item_id",
-                                                value
-                                              )
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      Vendor Selection
+                                    </th>
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      Quantity
+                                    </th>
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      Unit
+                                    </th>
+                                    {isEditMode && (
+                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 w-16">
+                                        {/* ゴミ箱列 */}
+                                      </th>
+                                    )}
+                                  </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                  {item.recipe_lines
+                                    .filter(
+                                      (line) => line.line_type === "ingredient"
+                                    )
+                                    .map((line) => (
+                                      <tr
+                                        key={line.id}
+                                        className={
+                                          line.isMarkedForDeletion
+                                            ? "bg-red-50"
+                                            : ""
+                                        }
+                                      >
+                                        <td className="px-4 py-2">
+                                          {isEditMode ? (
+                                            <SearchableSelect
+                                              options={getAvailableItemsForSelect(
+                                                line.child_item_id
+                                              )}
+                                              value={line.child_item_id || ""}
+                                              onChange={(value) =>
+                                                handleRecipeLineChange(
+                                                  item.id,
+                                                  line.id,
+                                                  "child_item_id",
+                                                  value
+                                                )
+                                              }
+                                              placeholder="Select item..."
+                                            />
+                                          ) : (
+                                            <div
+                                              className={`text-sm ${
+                                                isDark
+                                                  ? "text-slate-100"
+                                                  : "text-gray-900"
+                                              }`}
+                                            >
+                                              {availableItems.find(
+                                                (i) =>
+                                                  i.id === line.child_item_id
+                                              )?.name || "-"}
+                                            </div>
+                                          )}
+                                        </td>
+                                        {/* Vendor列 */}
+                                        <td className="px-4 py-2">
+                                          {(() => {
+                                            const childItem =
+                                              availableItems.find(
+                                                (i) =>
+                                                  i.id === line.child_item_id
+                                              );
+                                            const isRawItem =
+                                              childItem?.item_kind === "raw";
+                                            const availableVendorProducts =
+                                              getAvailableVendorProducts(
+                                                line.child_item_id || "",
+                                                line.specific_child
+                                              );
+
+                                            if (!isRawItem) {
+                                              return (
+                                                <div className="text-sm text-gray-400">
+                                                  -
+                                                </div>
+                                              );
                                             }
-                                            placeholder="Select item..."
-                                          />
-                                        ) : (
-                                          <div
-                                            className={`text-sm ${
-                                              isDark
-                                                ? "text-slate-100"
-                                                : "text-gray-900"
-                                            }`}
-                                          >
-                                            {availableItems.find(
-                                              (i) => i.id === line.child_item_id
-                                            )?.name || "-"}
-                                          </div>
-                                        )}
-                                      </td>
-                                      {/* Vendor列 */}
-                                      <td className="px-4 py-2">
-                                        {(() => {
-                                          const childItem = availableItems.find(
-                                            (i) => i.id === line.child_item_id
-                                          );
-                                          const isRawItem =
-                                            childItem?.item_kind === "raw";
-                                          const availableVendorProducts =
-                                            getAvailableVendorProducts(
-                                              line.child_item_id || "",
-                                              line.specific_child
-                                            );
 
-                                          if (!isRawItem) {
-                                            return (
-                                              <div className="text-sm text-gray-400">
-                                                -
-                                              </div>
-                                            );
-                                          }
-
-                                          if (isEditMode) {
-                                            return (
-                                              <div className="space-y-2">
-                                                <div className="flex items-center gap-4">
-                                                  <label className="flex items-center gap-1">
-                                                    <input
-                                                      type="radio"
-                                                      name={`vendor-${line.id}`}
-                                                      checked={
-                                                        line.specific_child ===
-                                                          null ||
-                                                        line.specific_child ===
-                                                          "lowest"
-                                                      }
-                                                      onChange={() =>
-                                                        handleRecipeLineChange(
-                                                          item.id,
-                                                          line.id,
-                                                          "specific_child",
-                                                          "lowest"
-                                                        )
-                                                      }
-                                                      className="w-4 h-4"
-                                                    />
-                                                    <span className="text-sm">
-                                                      Lowest
-                                                    </span>
-                                                  </label>
-                                                  <label className="flex items-center gap-1">
-                                                    <input
-                                                      type="radio"
-                                                      name={`vendor-${line.id}`}
-                                                      checked={
-                                                        line.specific_child !==
-                                                          null &&
-                                                        line.specific_child !==
-                                                          "lowest"
-                                                      }
-                                                      onChange={() => {
-                                                        // Specificを選択したら、最初のvendor_productを選択
-                                                        if (
-                                                          availableVendorProducts.length >
-                                                          0
-                                                        ) {
+                                            if (isEditMode) {
+                                              return (
+                                                <div className="space-y-2">
+                                                  <div className="flex items-center gap-4">
+                                                    <label className="flex items-center gap-1">
+                                                      <input
+                                                        type="radio"
+                                                        name={`vendor-${line.id}`}
+                                                        checked={
+                                                          line.specific_child ===
+                                                            null ||
+                                                          line.specific_child ===
+                                                            "lowest"
+                                                        }
+                                                        onChange={() =>
                                                           handleRecipeLineChange(
                                                             item.id,
                                                             line.id,
                                                             "specific_child",
-                                                            availableVendorProducts[0]
-                                                              .id
-                                                          );
+                                                            "lowest"
+                                                          )
                                                         }
-                                                      }}
-                                                      className="w-4 h-4"
-                                                    />
-                                                    <span className="text-sm">
-                                                      Specific
-                                                    </span>
-                                                  </label>
-                                                </div>
-                                                {line.specific_child !== null &&
-                                                  line.specific_child !==
-                                                    "lowest" && (
-                                                    <select
-                                                      value={
-                                                        line.specific_child
-                                                      }
-                                                      onChange={(e) =>
-                                                        handleRecipeLineChange(
-                                                          item.id,
-                                                          line.id,
-                                                          "specific_child",
-                                                          e.target.value
-                                                        )
-                                                      }
-                                                      className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                                        isDark
-                                                          ? "bg-slate-700 border-slate-600 text-slate-100"
-                                                          : "bg-white border-gray-300 text-gray-900"
-                                                      }`}
-                                                    >
-                                                      {availableVendorProducts.map(
-                                                        (vp) => {
-                                                          const vendor =
-                                                            vendors.find(
-                                                              (v) =>
-                                                                v.id ===
-                                                                vp.vendor_id
-                                                            );
-                                                          const vendorName =
-                                                            vendor?.name || "";
-                                                          const productName =
-                                                            vp.product_name ||
-                                                            vp.brand_name ||
-                                                            "";
-                                                          const childItem =
-                                                            availableItems.find(
-                                                              (i) =>
-                                                                i.id ===
-                                                                line.child_item_id
-                                                            );
-                                                          const costPerKg =
-                                                            childItem
-                                                              ? calculateCostPerKg(
-                                                                  vp,
-                                                                  childItem
-                                                                )
-                                                              : null;
-                                                          const costDisplay =
-                                                            costPerKg !== null
-                                                              ? `    $${costPerKg.toFixed(
-                                                                  2
-                                                                )}/kg`
-                                                              : "";
-                                                          const isDeprecated =
-                                                            !!vp.deprecated;
-                                                          return (
-                                                            <option
-                                                              key={vp.id}
-                                                              value={vp.id}
-                                                              disabled={
-                                                                isDeprecated
-                                                              }
-                                                              style={{
-                                                                opacity:
-                                                                  isDeprecated
-                                                                    ? 0.5
-                                                                    : 1,
-                                                                color:
-                                                                  isDeprecated
-                                                                    ? "#9ca3af"
-                                                                    : undefined,
-                                                              }}
-                                                            >
-                                                              {isDeprecated
-                                                                ? "[Deprecated] "
-                                                                : ""}
-                                                              {vendorName} -{" "}
-                                                              {productName}
-                                                              {costDisplay}
-                                                            </option>
-                                                          );
+                                                        className="w-4 h-4"
+                                                      />
+                                                      <span className="text-sm">
+                                                        Lowest
+                                                      </span>
+                                                    </label>
+                                                    <label className="flex items-center gap-1">
+                                                      <input
+                                                        type="radio"
+                                                        name={`vendor-${line.id}`}
+                                                        checked={
+                                                          line.specific_child !==
+                                                            null &&
+                                                          line.specific_child !==
+                                                            "lowest"
                                                         }
-                                                      )}
-                                                    </select>
-                                                  )}
-                                              </div>
-                                            );
-                                          } else {
-                                            // 表示モード
-                                            if (
-                                              line.specific_child === null ||
-                                              line.specific_child === "lowest"
-                                            ) {
-                                              return (
-                                                <div
-                                                  className={`text-sm ${
-                                                    isDark
-                                                      ? "text-slate-100"
-                                                      : "text-gray-900"
-                                                  }`}
-                                                >
-                                                  Lowest
+                                                        onChange={() => {
+                                                          // Specificを選択したら、最初のvendor_productを選択
+                                                          if (
+                                                            availableVendorProducts.length >
+                                                            0
+                                                          ) {
+                                                            handleRecipeLineChange(
+                                                              item.id,
+                                                              line.id,
+                                                              "specific_child",
+                                                              availableVendorProducts[0]
+                                                                .id
+                                                            );
+                                                          }
+                                                        }}
+                                                        className="w-4 h-4"
+                                                      />
+                                                      <span className="text-sm">
+                                                        Specific
+                                                      </span>
+                                                    </label>
+                                                  </div>
+                                                  {line.specific_child !==
+                                                    null &&
+                                                    line.specific_child !==
+                                                      "lowest" && (
+                                                      <select
+                                                        value={
+                                                          line.specific_child
+                                                        }
+                                                        onChange={(e) =>
+                                                          handleRecipeLineChange(
+                                                            item.id,
+                                                            line.id,
+                                                            "specific_child",
+                                                            e.target.value
+                                                          )
+                                                        }
+                                                        className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                                          isDark
+                                                            ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                            : "bg-white border-gray-300 text-gray-900"
+                                                        }`}
+                                                      >
+                                                        {availableVendorProducts.map(
+                                                          (vp) => {
+                                                            const vendor =
+                                                              vendors.find(
+                                                                (v) =>
+                                                                  v.id ===
+                                                                  vp.vendor_id
+                                                              );
+                                                            const vendorName =
+                                                              vendor?.name ||
+                                                              "";
+                                                            const productName =
+                                                              vp.product_name ||
+                                                              vp.brand_name ||
+                                                              "";
+                                                            const childItem =
+                                                              availableItems.find(
+                                                                (i) =>
+                                                                  i.id ===
+                                                                  line.child_item_id
+                                                              );
+                                                            const costPerKg =
+                                                              childItem
+                                                                ? calculateCostPerKg(
+                                                                    vp,
+                                                                    childItem
+                                                                  )
+                                                                : null;
+                                                            const costDisplay =
+                                                              costPerKg !== null
+                                                                ? `    $${costPerKg.toFixed(
+                                                                    2
+                                                                  )}/kg`
+                                                                : "";
+                                                            const isDeprecated =
+                                                              !!vp.deprecated;
+                                                            return (
+                                                              <option
+                                                                key={vp.id}
+                                                                value={vp.id}
+                                                                disabled={
+                                                                  isDeprecated
+                                                                }
+                                                                style={{
+                                                                  opacity:
+                                                                    isDeprecated
+                                                                      ? 0.5
+                                                                      : 1,
+                                                                  color:
+                                                                    isDeprecated
+                                                                      ? "#9ca3af"
+                                                                      : undefined,
+                                                                }}
+                                                              >
+                                                                {isDeprecated
+                                                                  ? "[Deprecated] "
+                                                                  : ""}
+                                                                {vendorName} -{" "}
+                                                                {productName}
+                                                                {costDisplay}
+                                                              </option>
+                                                            );
+                                                          }
+                                                        )}
+                                                      </select>
+                                                    )}
                                                 </div>
                                               );
                                             } else {
-                                              const selectedVendorProduct =
-                                                availableVendorProducts.find(
-                                                  (vp) =>
-                                                    vp.id ===
-                                                    line.specific_child
-                                                );
-                                              const vendor =
-                                                selectedVendorProduct
-                                                  ? vendors.find(
-                                                      (v) =>
-                                                        v.id ===
-                                                        selectedVendorProduct.vendor_id
-                                                    )
-                                                  : null;
-                                              const vendorName =
-                                                vendor?.name || "";
-                                              const productName =
-                                                selectedVendorProduct?.product_name ||
-                                                selectedVendorProduct?.brand_name ||
-                                                "";
-                                              const childItem =
-                                                availableItems.find(
-                                                  (i) =>
-                                                    i.id === line.child_item_id
-                                                );
-                                              const costPerKg =
-                                                childItem &&
-                                                selectedVendorProduct
-                                                  ? calculateCostPerKg(
-                                                      selectedVendorProduct,
-                                                      childItem
-                                                    )
-                                                  : null;
-                                              const costDisplay =
-                                                costPerKg !== null
-                                                  ? `    $${costPerKg.toFixed(
-                                                      2
-                                                    )}/kg`
-                                                  : "";
-                                              return (
-                                                <div className="space-y-1">
+                                              // 表示モード
+                                              if (
+                                                line.specific_child === null ||
+                                                line.specific_child === "lowest"
+                                              ) {
+                                                return (
                                                   <div
                                                     className={`text-sm ${
                                                       isDark
@@ -2441,399 +2758,463 @@ export default function CostPage() {
                                                         : "text-gray-900"
                                                     }`}
                                                   >
-                                                    {vendorName} - {productName}
-                                                    {costDisplay}
+                                                    Lowest
                                                   </div>
-                                                  {/* last_change history */}
-                                                  {(() => {
-                                                    const apiLine =
-                                                      item.recipe_lines.find(
-                                                        (rl) =>
-                                                          rl.id === line.id
-                                                      );
-                                                    if (
-                                                      apiLine &&
-                                                      "last_change" in
-                                                        apiLine &&
-                                                      apiLine.last_change
-                                                    ) {
-                                                      return (
-                                                        <div className="text-xs text-blue-600 dark:text-blue-400 italic">
-                                                          History:{" "}
-                                                          {apiLine.last_change}
-                                                        </div>
-                                                      );
-                                                    }
-                                                    return null;
-                                                  })()}
-                                                </div>
-                                              );
-                                            }
-                                          }
-                                        })()}
-                                      </td>
-                                      <td className="px-4 py-2">
-                                        {isEditMode ? (
-                                          <input
-                                            type="number"
-                                            value={
-                                              line.quantity === 0 ||
-                                              !line.quantity
-                                                ? ""
-                                                : String(line.quantity)
-                                            }
-                                            onChange={(e) => {
-                                              const value = e.target.value;
-                                              // 空文字列の場合は0、それ以外は数値に変換
-                                              const numValue =
-                                                value === ""
-                                                  ? 0
-                                                  : parseFloat(value) || 0;
-                                              handleRecipeLineChange(
-                                                item.id,
-                                                line.id,
-                                                "quantity",
-                                                numValue
-                                              );
-                                            }}
-                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                              isDark
-                                                ? "bg-slate-700 border-slate-600 text-slate-100"
-                                                : "bg-white border-gray-300 text-gray-900"
-                                            }`}
-                                            placeholder="0"
-                                            min="0"
-                                            step="0.01"
-                                          />
-                                        ) : (
-                                          <div
-                                            className={`text-sm ${
-                                              isDark
-                                                ? "text-slate-100"
-                                                : "text-gray-900"
-                                            }`}
-                                          >
-                                            {line.quantity || 0}
-                                          </div>
-                                        )}
-                                      </td>
-                                      <td className="px-4 py-2">
-                                        {isEditMode ? (
-                                          <select
-                                            value={line.unit || "g"}
-                                            onChange={(e) =>
-                                              handleRecipeLineChange(
-                                                item.id,
-                                                line.id,
-                                                "unit",
-                                                e.target.value
-                                              )
-                                            }
-                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                              isDark
-                                                ? "bg-slate-700 border-slate-600 text-slate-100"
-                                                : "bg-white border-gray-300 text-gray-900"
-                                            }`}
-                                            disabled={!line.child_item_id}
-                                          >
-                                            {(() => {
-                                              const availableUnits =
-                                                getAvailableUnitsForItem(
-                                                  line.child_item_id || ""
                                                 );
-                                              // Itemが選択されていない場合は空のオプションを表示
-                                              if (availableUnits.length === 0) {
+                                              } else {
+                                                const selectedVendorProduct =
+                                                  availableVendorProducts.find(
+                                                    (vp) =>
+                                                      vp.id ===
+                                                      line.specific_child
+                                                  );
+                                                const vendor =
+                                                  selectedVendorProduct
+                                                    ? vendors.find(
+                                                        (v) =>
+                                                          v.id ===
+                                                          selectedVendorProduct.vendor_id
+                                                      )
+                                                    : null;
+                                                const vendorName =
+                                                  vendor?.name || "";
+                                                const productName =
+                                                  selectedVendorProduct?.product_name ||
+                                                  selectedVendorProduct?.brand_name ||
+                                                  "";
+                                                const childItem =
+                                                  availableItems.find(
+                                                    (i) =>
+                                                      i.id ===
+                                                      line.child_item_id
+                                                  );
+                                                const costPerKg =
+                                                  childItem &&
+                                                  selectedVendorProduct
+                                                    ? calculateCostPerKg(
+                                                        selectedVendorProduct,
+                                                        childItem
+                                                      )
+                                                    : null;
+                                                const costDisplay =
+                                                  costPerKg !== null
+                                                    ? `    $${costPerKg.toFixed(
+                                                        2
+                                                      )}/kg`
+                                                    : "";
                                                 return (
-                                                  <option value="">
-                                                    Select item first
-                                                  </option>
+                                                  <div className="space-y-1">
+                                                    <div
+                                                      className={`text-sm ${
+                                                        isDark
+                                                          ? "text-slate-100"
+                                                          : "text-gray-900"
+                                                      }`}
+                                                    >
+                                                      {vendorName} -{" "}
+                                                      {productName}
+                                                      {costDisplay}
+                                                    </div>
+                                                    {/* last_change history */}
+                                                    {(() => {
+                                                      const apiLine =
+                                                        item.recipe_lines.find(
+                                                          (rl) =>
+                                                            rl.id === line.id
+                                                        );
+                                                      if (
+                                                        apiLine &&
+                                                        "last_change" in
+                                                          apiLine &&
+                                                        apiLine.last_change
+                                                      ) {
+                                                        return (
+                                                          <div className="text-xs text-blue-600 dark:text-blue-400 italic">
+                                                            History:{" "}
+                                                            {
+                                                              apiLine.last_change
+                                                            }
+                                                          </div>
+                                                        );
+                                                      }
+                                                      return null;
+                                                    })()}
+                                                  </div>
                                                 );
                                               }
-                                              return availableUnits.map(
-                                                (unit) => {
-                                                  // eachの場合、選択されたアイテムのeach_gramsを確認
-                                                  let isEachDisabled = false;
-                                                  if (
-                                                    unit === "each" &&
-                                                    line.child_item_id
-                                                  ) {
-                                                    const selectedItem =
-                                                      availableItems.find(
-                                                        (i) =>
-                                                          i.id ===
-                                                          line.child_item_id
-                                                      );
-                                                    isEachDisabled =
-                                                      !selectedItem?.each_grams ||
-                                                      selectedItem.each_grams ===
-                                                        0;
-                                                  }
-
+                                            }
+                                          })()}
+                                        </td>
+                                        <td className="px-4 py-2">
+                                          {isEditMode ? (
+                                            <input
+                                              type="number"
+                                              value={
+                                                line.quantity === 0 ||
+                                                !line.quantity
+                                                  ? ""
+                                                  : String(line.quantity)
+                                              }
+                                              onChange={(e) => {
+                                                const value = e.target.value;
+                                                // 空文字列の場合は0、それ以外は数値に変換
+                                                const numValue =
+                                                  value === ""
+                                                    ? 0
+                                                    : parseFloat(value) || 0;
+                                                handleRecipeLineChange(
+                                                  item.id,
+                                                  line.id,
+                                                  "quantity",
+                                                  numValue
+                                                );
+                                              }}
+                                              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                                isDark
+                                                  ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                  : "bg-white border-gray-300 text-gray-900"
+                                              }`}
+                                              placeholder="0"
+                                              min="0"
+                                              step="0.01"
+                                            />
+                                          ) : (
+                                            <div
+                                              className={`text-sm ${
+                                                isDark
+                                                  ? "text-slate-100"
+                                                  : "text-gray-900"
+                                              }`}
+                                            >
+                                              {line.quantity || 0}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="px-4 py-2">
+                                          {isEditMode ? (
+                                            <select
+                                              value={line.unit || "g"}
+                                              onChange={(e) =>
+                                                handleRecipeLineChange(
+                                                  item.id,
+                                                  line.id,
+                                                  "unit",
+                                                  e.target.value
+                                                )
+                                              }
+                                              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                                isDark
+                                                  ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                  : "bg-white border-gray-300 text-gray-900"
+                                              }`}
+                                              disabled={!line.child_item_id}
+                                            >
+                                              {(() => {
+                                                const availableUnits =
+                                                  getAvailableUnitsForItem(
+                                                    line.child_item_id || ""
+                                                  );
+                                                // Itemが選択されていない場合は空のオプションを表示
+                                                if (
+                                                  availableUnits.length === 0
+                                                ) {
                                                   return (
-                                                    <option
-                                                      key={unit}
-                                                      value={unit}
-                                                      disabled={isEachDisabled}
-                                                      title={
-                                                        isEachDisabled
-                                                          ? "Please set each_grams in the Base Items tab"
-                                                          : ""
-                                                      }
-                                                    >
-                                                      {unit}
-                                                      {isEachDisabled &&
-                                                        " (setup required)"}
+                                                    <option value="">
+                                                      Select item first
                                                     </option>
                                                   );
                                                 }
-                                              );
-                                            })()}
-                                          </select>
-                                        ) : (
-                                          <div
-                                            className={`text-sm ${
-                                              isDark
-                                                ? "text-slate-100"
-                                                : "text-gray-900"
-                                            }`}
-                                          >
-                                            {line.unit || "-"}
-                                          </div>
-                                        )}
-                                      </td>
-                                      {isEditMode && (
-                                        <td className="px-4 py-2">
-                                          <button
-                                            onClick={() =>
-                                              handleRecipeLineDeleteClick(
-                                                item.id,
-                                                line.id
-                                              )
-                                            }
-                                            className={`p-2 rounded-md transition-colors ${
-                                              line.isMarkedForDeletion
-                                                ? "bg-red-500 text-white hover:bg-red-600"
-                                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                                            }`}
-                                          >
-                                            <Trash2 className="w-4 h-4" />
-                                          </button>
-                                        </td>
-                                      )}
-                                    </tr>
-                                  ))}
-                                {isEditMode && (
-                                  <tr>
-                                    <td
-                                      colSpan={isEditMode ? 5 : 4}
-                                      className="px-4 py-2"
-                                    >
-                                      <button
-                                        onClick={() =>
-                                          handleAddIngredientLine(item.id)
-                                        }
-                                        className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                                      >
-                                        <Plus className="w-4 h-4" />
-                                        <span className="text-sm">
-                                          Add ingredient
-                                        </span>
-                                      </button>
-                                    </td>
-                                  </tr>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
+                                                return availableUnits.map(
+                                                  (unit) => {
+                                                    // eachの場合、選択されたアイテムのeach_gramsを確認
+                                                    let isEachDisabled = false;
+                                                    if (
+                                                      unit === "each" &&
+                                                      line.child_item_id
+                                                    ) {
+                                                      const selectedItem =
+                                                        availableItems.find(
+                                                          (i) =>
+                                                            i.id ===
+                                                            line.child_item_id
+                                                        );
+                                                      isEachDisabled =
+                                                        !selectedItem?.each_grams ||
+                                                        selectedItem.each_grams ===
+                                                          0;
+                                                    }
 
-                          {/* Laborセクション */}
-                          <div>
-                            <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                              Labor:
-                            </h3>
-                            <table className="w-full">
-                              <thead className="bg-gray-100">
-                                <tr>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
-                                    Role
-                                  </th>
-                                  <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
-                                    Minutes
-                                  </th>
+                                                    return (
+                                                      <option
+                                                        key={unit}
+                                                        value={unit}
+                                                        disabled={
+                                                          isEachDisabled
+                                                        }
+                                                        title={
+                                                          isEachDisabled
+                                                            ? "Please set each_grams in the Base Items tab"
+                                                            : ""
+                                                        }
+                                                      >
+                                                        {unit}
+                                                        {isEachDisabled &&
+                                                          " (setup required)"}
+                                                      </option>
+                                                    );
+                                                  }
+                                                );
+                                              })()}
+                                            </select>
+                                          ) : (
+                                            <div
+                                              className={`text-sm ${
+                                                isDark
+                                                  ? "text-slate-100"
+                                                  : "text-gray-900"
+                                              }`}
+                                            >
+                                              {line.unit || "-"}
+                                            </div>
+                                          )}
+                                        </td>
+                                        {isEditMode && (
+                                          <td className="px-4 py-2">
+                                            <button
+                                              onClick={() =>
+                                                handleRecipeLineDeleteClick(
+                                                  item.id,
+                                                  line.id
+                                                )
+                                              }
+                                              className={`p-2 rounded-md transition-colors ${
+                                                line.isMarkedForDeletion
+                                                  ? "bg-red-500 text-white hover:bg-red-600"
+                                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                              }`}
+                                            >
+                                              <Trash2 className="w-4 h-4" />
+                                            </button>
+                                          </td>
+                                        )}
+                                      </tr>
+                                    ))}
                                   {isEditMode && (
-                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 w-16">
-                                      {/* ゴミ箱列 */}
-                                    </th>
-                                  )}
-                                </tr>
-                              </thead>
-                              <tbody className="bg-white divide-y divide-gray-200">
-                                {item.recipe_lines
-                                  .filter((line) => line.line_type === "labor")
-                                  .map((line) => (
-                                    <tr
-                                      key={line.id}
-                                      className={
-                                        line.isMarkedForDeletion
-                                          ? "bg-red-50"
-                                          : ""
-                                      }
-                                    >
-                                      <td className="px-4 py-2">
-                                        {isEditMode ? (
-                                          <select
-                                            value={line.labor_role || ""}
-                                            onChange={(e) =>
-                                              handleRecipeLineChange(
-                                                item.id,
-                                                line.id,
-                                                "labor_role",
-                                                e.target.value
-                                              )
-                                            }
-                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                              isDark
-                                                ? "bg-slate-700 border-slate-600 text-slate-100"
-                                                : "bg-white border-gray-300 text-gray-900"
-                                            }`}
-                                          >
-                                            <option value="">
-                                              Select role...
-                                            </option>
-                                            {laborRoles.map((role) => (
-                                              <option
-                                                key={role.id}
-                                                value={role.name}
-                                              >
-                                                {role.name}
-                                              </option>
-                                            ))}
-                                          </select>
-                                        ) : (
-                                          <div
-                                            className={`text-sm ${
-                                              isDark
-                                                ? "text-slate-100"
-                                                : "text-gray-900"
-                                            }`}
-                                          >
-                                            {laborRoles.find(
-                                              (r) => r.name === line.labor_role
-                                            )?.name || "-"}
-                                          </div>
-                                        )}
-                                      </td>
-                                      <td className="px-4 py-2">
-                                        {isEditMode ? (
-                                          <input
-                                            type="number"
-                                            value={
-                                              line.minutes === 0
-                                                ? ""
-                                                : line.minutes || ""
-                                            }
-                                            onChange={(e) => {
-                                              const value = e.target.value;
-                                              // 空文字列の場合は0、それ以外は数値に変換
-                                              const numValue =
-                                                value === ""
-                                                  ? 0
-                                                  : parseFloat(value) || 0;
-                                              handleRecipeLineChange(
-                                                item.id,
-                                                line.id,
-                                                "minutes",
-                                                numValue
-                                              );
-                                            }}
-                                            className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                              isDark
-                                                ? "bg-slate-700 border-slate-600 text-slate-100"
-                                                : "bg-white border-gray-300 text-gray-900"
-                                            }`}
-                                            placeholder="0"
-                                            min="0"
-                                            step="0.01"
-                                          />
-                                        ) : (
-                                          <div
-                                            className={`text-sm ${
-                                              isDark
-                                                ? "text-slate-100"
-                                                : "text-gray-900"
-                                            }`}
-                                          >
-                                            {line.minutes || 0} minutes
-                                          </div>
-                                        )}
-                                      </td>
-                                      {isEditMode && (
-                                        <td className="px-4 py-2">
-                                          <button
-                                            onClick={() =>
-                                              handleRecipeLineDeleteClick(
-                                                item.id,
-                                                line.id
-                                              )
-                                            }
-                                            className={`p-2 rounded-md transition-colors ${
-                                              line.isMarkedForDeletion
-                                                ? "bg-red-500 text-white hover:bg-red-600"
-                                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                                            }`}
-                                          >
-                                            <Trash2 className="w-4 h-4" />
-                                          </button>
-                                        </td>
-                                      )}
-                                    </tr>
-                                  ))}
-                                {isEditMode && (
-                                  <tr>
-                                    <td
-                                      colSpan={isEditMode ? 3 : 2}
-                                      className="px-4 py-2"
-                                    >
-                                      <button
-                                        onClick={() =>
-                                          handleAddLaborLine(item.id)
-                                        }
-                                        className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                                    <tr>
+                                      <td
+                                        colSpan={isEditMode ? 5 : 4}
+                                        className="px-4 py-2"
                                       >
-                                        <Plus className="w-4 h-4" />
-                                        <span className="text-sm">
-                                          Add labor
-                                        </span>
-                                      </button>
-                                    </td>
-                                  </tr>
-                                )}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
+                                        <button
+                                          onClick={() =>
+                                            handleAddIngredientLine(item.id)
+                                          }
+                                          className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                                        >
+                                          <Plus className="w-4 h-4" />
+                                          <span className="text-sm">
+                                            Add ingredient
+                                          </span>
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
 
-              {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
-              {isEditMode && (
-                <tr>
-                  <td colSpan={isEditMode ? 6 : 5} className="px-6 py-4">
-                    <button
-                      onClick={handleAddItemClick}
-                      className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                    >
-                      <Plus className="w-5 h-5" />
-                      <span>Add new item</span>
-                    </button>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                            {/* Laborセクション */}
+                            <div>
+                              <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                                Labor:
+                              </h3>
+                              <table className="w-full">
+                                <thead className="bg-gray-100">
+                                  <tr>
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      Role
+                                    </th>
+                                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      Minutes
+                                    </th>
+                                    {isEditMode && (
+                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 w-16">
+                                        {/* ゴミ箱列 */}
+                                      </th>
+                                    )}
+                                  </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                  {item.recipe_lines
+                                    .filter(
+                                      (line) => line.line_type === "labor"
+                                    )
+                                    .map((line) => (
+                                      <tr
+                                        key={line.id}
+                                        className={
+                                          line.isMarkedForDeletion
+                                            ? "bg-red-50"
+                                            : ""
+                                        }
+                                      >
+                                        <td className="px-4 py-2">
+                                          {isEditMode ? (
+                                            <select
+                                              value={line.labor_role || ""}
+                                              onChange={(e) =>
+                                                handleRecipeLineChange(
+                                                  item.id,
+                                                  line.id,
+                                                  "labor_role",
+                                                  e.target.value
+                                                )
+                                              }
+                                              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                                isDark
+                                                  ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                  : "bg-white border-gray-300 text-gray-900"
+                                              }`}
+                                            >
+                                              <option value="">
+                                                Select role...
+                                              </option>
+                                              {laborRoles.map((role) => (
+                                                <option
+                                                  key={role.id}
+                                                  value={role.name}
+                                                >
+                                                  {role.name}
+                                                </option>
+                                              ))}
+                                            </select>
+                                          ) : (
+                                            <div
+                                              className={`text-sm ${
+                                                isDark
+                                                  ? "text-slate-100"
+                                                  : "text-gray-900"
+                                              }`}
+                                            >
+                                              {laborRoles.find(
+                                                (r) =>
+                                                  r.name === line.labor_role
+                                              )?.name || "-"}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="px-4 py-2">
+                                          {isEditMode ? (
+                                            <input
+                                              type="number"
+                                              value={
+                                                line.minutes === 0
+                                                  ? ""
+                                                  : line.minutes || ""
+                                              }
+                                              onChange={(e) => {
+                                                const value = e.target.value;
+                                                // 空文字列の場合は0、それ以外は数値に変換
+                                                const numValue =
+                                                  value === ""
+                                                    ? 0
+                                                    : parseFloat(value) || 0;
+                                                handleRecipeLineChange(
+                                                  item.id,
+                                                  line.id,
+                                                  "minutes",
+                                                  numValue
+                                                );
+                                              }}
+                                              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                                isDark
+                                                  ? "bg-slate-700 border-slate-600 text-slate-100"
+                                                  : "bg-white border-gray-300 text-gray-900"
+                                              }`}
+                                              placeholder="0"
+                                              min="0"
+                                              step="0.01"
+                                            />
+                                          ) : (
+                                            <div
+                                              className={`text-sm ${
+                                                isDark
+                                                  ? "text-slate-100"
+                                                  : "text-gray-900"
+                                              }`}
+                                            >
+                                              {line.minutes || 0} minutes
+                                            </div>
+                                          )}
+                                        </td>
+                                        {isEditMode && (
+                                          <td className="px-4 py-2">
+                                            <button
+                                              onClick={() =>
+                                                handleRecipeLineDeleteClick(
+                                                  item.id,
+                                                  line.id
+                                                )
+                                              }
+                                              className={`p-2 rounded-md transition-colors ${
+                                                line.isMarkedForDeletion
+                                                  ? "bg-red-500 text-white hover:bg-red-600"
+                                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                              }`}
+                                            >
+                                              <Trash2 className="w-4 h-4" />
+                                            </button>
+                                          </td>
+                                        )}
+                                      </tr>
+                                    ))}
+                                  {isEditMode && (
+                                    <tr>
+                                      <td
+                                        colSpan={isEditMode ? 3 : 2}
+                                        className="px-4 py-2"
+                                      >
+                                        <button
+                                          onClick={() =>
+                                            handleAddLaborLine(item.id)
+                                          }
+                                          className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                                        >
+                                          <Plus className="w-4 h-4" />
+                                          <span className="text-sm">
+                                            Add labor
+                                          </span>
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+
+                {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
+                {isEditMode && (
+                  <tr>
+                    <td colSpan={isEditMode ? 6 : 5} className="px-6 py-4">
+                      <button
+                        onClick={handleAddItemClick}
+                        className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                      >
+                        <Plus className="w-5 h-5" />
+                        <span>Add new item</span>
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

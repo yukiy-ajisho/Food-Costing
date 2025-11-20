@@ -173,6 +173,8 @@ export interface Item {
   notes?: string | null;
   deprecated?: string | null; // timestamp when deprecated
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
+  wholesale?: number | null; // wholesale price
+  retail?: number | null; // retail price
 }
 
 export interface RecipeLine {
@@ -335,6 +337,18 @@ export const costAPI = {
         }),
       }
     );
+  },
+  getCostsBreakdown: () => {
+    return fetchAPI<{
+      costs: Record<
+        string,
+        {
+          food_cost_per_gram: number;
+          labor_cost_per_gram: number;
+          total_cost_per_gram: number;
+        }
+      >;
+    }>("/items/costs/breakdown");
   },
 };
 

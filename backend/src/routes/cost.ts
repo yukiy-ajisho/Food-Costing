@@ -5,6 +5,7 @@ import {
   calculateCostsForAllChanges,
   clearCostCache,
 } from "../services/cost";
+import { supabase } from "../config/supabase";
 
 const router = Router();
 
@@ -113,6 +114,59 @@ router.post("/items/costs/differential", async (req, res) => {
     costsMap.forEach((cost, itemId) => {
       costs[itemId] = cost;
     });
+
+    res.json({ costs });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /items/costs/breakdown
+ * 全アイテムのコスト内訳（Food Cost / Labor Cost）を取得
+ * Response: {
+ *   costs: {
+ *     [itemId: string]: {
+ *       food_cost_per_gram: number;
+ *       labor_cost_per_gram: number;
+ *       total_cost_per_gram: number;
+ *     }
+ *   }
+ * }
+ */
+router.get("/items/costs/breakdown", async (req, res) => {
+  try {
+    // PostgreSQL関数を呼び出し
+    const { data, error } = await supabase.rpc(
+      "calculate_item_costs_with_breakdown"
+    );
+
+    if (error) {
+      throw new Error(`Database error: ${error.message}`);
+    }
+
+    if (!data || !Array.isArray(data)) {
+      throw new Error("Invalid response from database function");
+    }
+
+    // 結果をitem_idをキーとするオブジェクトに変換
+    const costs: Record<
+      string,
+      {
+        food_cost_per_gram: number;
+        labor_cost_per_gram: number;
+        total_cost_per_gram: number;
+      }
+    > = {};
+
+    for (const row of data) {
+      costs[row.out_item_id] = {
+        food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
+        labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
+        total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
+      };
+    }
 
     res.json({ costs });
   } catch (error: unknown) {
