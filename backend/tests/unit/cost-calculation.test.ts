@@ -12,34 +12,65 @@ jest.mock("../../src/config/supabase", () => {
       from: jest.fn((table: string) => {
         if (table === "recipe_lines") {
           return {
-            select: jest.fn(() => ({
-              eq: jest.fn((column: string, value: string) => {
-                return Promise.resolve({
-                  data: mockRecipeLinesMap.get(value) || null,
-                  error: null,
-                });
-              }),
-            })),
+            select: jest.fn(() => {
+              let parentItemId: string | null = null;
+              const mockChain = {
+                eq: jest.fn((column: string, value: string) => {
+                  if (column === "parent_item_id") {
+                    parentItemId = value;
+                  }
+                  // user_idフィルタは無視してチェーンを続ける
+                  // 最後の.eq()呼び出し後にデータを返す
+                  return {
+                    eq: jest.fn((column2: string, value2: string) => {
+                      // user_idフィルタは無視
+                      return Promise.resolve({
+                        data: parentItemId ? mockRecipeLinesMap.get(parentItemId) || null : null,
+                        error: null,
+                      });
+                    }),
+                  };
+                }),
+              };
+              return mockChain;
+            }),
           };
         }
         if (table === "items") {
           return {
-            select: jest.fn(() => ({
-              eq: jest.fn((column: string, value: string) => ({
-                single: jest.fn(() => {
+            select: jest.fn(() => {
+              let itemId: string | null = null;
+              const mockChain = {
+                eq: jest.fn((column: string, value: string) => {
+                  if (column === "id") {
+                    itemId = value;
+                  }
+                  // user_idフィルタは無視してチェーンを続ける
+                  return {
+                    eq: jest.fn((column2: string, value2: string) => {
+                      // user_idフィルタは無視
+                      return {
+                        single: jest.fn(() => {
+                          return Promise.resolve({
+                            data: itemId ? mockItemsMap.get(itemId) || null : null,
+                            error: null,
+                          });
+                        }),
+                      };
+                    }),
+                  };
+                }),
+              };
+              return mockChain;
+            }),
+            update: jest.fn(() => ({
+              eq: jest.fn(() => ({
+                eq: jest.fn(() => {
                   return Promise.resolve({
-                    data: mockItemsMap.get(value) || null,
                     error: null,
                   });
                 }),
               })),
-            })),
-            update: jest.fn(() => ({
-              eq: jest.fn(() => {
-                return Promise.resolve({
-                  error: null,
-                });
-              }),
             })),
           };
         }
@@ -100,6 +131,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-1",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -156,6 +188,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-2",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -238,6 +271,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-3-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -323,6 +357,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-4-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -424,6 +459,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算（Egg Salad）
       const costPerGram = await getCost(
         "item-5-prepped-2",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -555,6 +591,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-6-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -688,6 +725,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-7-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -773,6 +811,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-9-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -890,6 +929,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-10-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1033,6 +1073,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-11-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1107,6 +1148,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-12-raw",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1218,6 +1260,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-13-prepped-2",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1328,6 +1371,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-14-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1435,6 +1479,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-15-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1600,6 +1645,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-16-prepped-3",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1676,6 +1722,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-17-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1753,6 +1800,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-18-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1815,6 +1863,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-19-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1916,6 +1965,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-20-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2026,6 +2076,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-29-prepped",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2165,6 +2216,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-22-prepped-2",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2590,6 +2642,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-23-prepped-6",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2705,6 +2758,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-21-prepped-1",
+          "test-user-id",
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -2823,6 +2877,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-24-prepped-1",
+          "test-user-id",
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -2979,6 +3034,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-25-prepped-1",
+          "test-user-id",
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3118,6 +3174,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-26-prepped-1",
+          "test-user-id",
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3273,6 +3330,7 @@ describe("Cost Calculation Unit Tests", () => {
       // エラーが発生しないことを期待
       const costPerGram = await getCost(
         "item-27-prepped-3",
+        "test-user-id",
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -3407,6 +3465,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-28-prepped-2",
+          "test-user-id",
           new Set(),
           baseItemsMap,
           itemsMap,
