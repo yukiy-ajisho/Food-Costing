@@ -13,6 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("vendors")
       .select("*")
+      .eq("user_id", req.user!.id)
       .order("name", { ascending: true });
 
     if (error) {
@@ -21,8 +22,7 @@ router.get("/", async (req, res) => {
 
     res.json(data || []);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -37,6 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("vendors")
       .select("*")
       .eq("id", req.params.id)
+      .eq("user_id", req.user!.id)
       .single();
 
     if (error) {
@@ -45,8 +46,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -64,9 +64,15 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name is required" });
     }
 
+    // user_idを自動設定
+    const vendorWithUserId = {
+      ...vendor,
+      user_id: req.user!.id,
+    };
+
     const { data, error } = await supabase
       .from("vendors")
-      .insert([vendor])
+      .insert([vendorWithUserId])
       .select()
       .single();
 
@@ -76,8 +82,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -91,10 +96,13 @@ router.put("/:id", async (req, res) => {
     const vendor: Partial<Vendor> = req.body;
     const { id } = req.params;
 
+    // user_idを更新から除外（セキュリティのため）
+    const { user_id, ...vendorWithoutUserId } = vendor;
     const { data, error } = await supabase
       .from("vendors")
-      .update(vendor)
+      .update(vendorWithoutUserId)
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .select()
       .single();
 
@@ -102,10 +110,13 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    if (!data) {
+      return res.status(404).json({ error: "Vendor not found" });
+    }
+
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -119,7 +130,8 @@ router.delete("/:id", async (req, res) => {
     const { error } = await supabase
       .from("vendors")
       .delete()
-      .eq("id", req.params.id);
+      .eq("id", req.params.id)
+      .eq("user_id", req.user!.id);
 
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -127,8 +139,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

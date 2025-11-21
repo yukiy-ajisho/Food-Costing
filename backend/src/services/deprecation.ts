@@ -17,7 +17,8 @@ import {
  * 条件: アクティブなvendor_productsが0個の場合のみ
  */
 export async function deprecateBaseItem(
-  baseItemId: string
+  baseItemId: string,
+  userId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // アクティブなvendor_productsがあるかチェック
@@ -25,6 +26,7 @@ export async function deprecateBaseItem(
       .from("vendor_products")
       .select("id")
       .eq("base_item_id", baseItemId)
+      .eq("user_id", userId)
       .is("deprecated", null);
 
     if (vpError) {
@@ -43,7 +45,8 @@ export async function deprecateBaseItem(
     const { error: baseItemError } = await supabase
       .from("base_items")
       .update({ deprecated: now })
-      .eq("id", baseItemId);
+      .eq("id", baseItemId)
+      .eq("user_id", userId);
 
     if (baseItemError) {
       return { success: false, error: baseItemError.message };
@@ -55,6 +58,7 @@ export async function deprecateBaseItem(
       .update({ deprecated: now, deprecation_reason: "direct" })
       .eq("base_item_id", baseItemId)
       .eq("item_kind", "raw")
+      .eq("user_id", userId)
       .is("deprecated", null);
 
     if (itemsError) {
@@ -72,7 +76,8 @@ export async function deprecateBaseItem(
  * Vendor Productをdeprecatedにする
  */
 export async function deprecateVendorProduct(
-  vendorProductId: string
+  vendorProductId: string,
+  userId: string
 ): Promise<{ success: boolean; error?: string; affectedItems?: string[] }> {
   try {
     const now = new Date().toISOString();
@@ -82,6 +87,7 @@ export async function deprecateVendorProduct(
       .from("vendor_products")
       .select("*")
       .eq("id", vendorProductId)
+      .eq("user_id", userId)
       .single();
 
     if (vpError || !vendorProduct) {
@@ -92,7 +98,8 @@ export async function deprecateVendorProduct(
     const { error: updateError } = await supabase
       .from("vendor_products")
       .update({ deprecated: now })
-      .eq("id", vendorProductId);
+      .eq("id", vendorProductId)
+      .eq("user_id", userId);
 
     if (updateError) {
       return { success: false, error: updateError.message };
@@ -103,7 +110,8 @@ export async function deprecateVendorProduct(
       .from("recipe_lines")
       .select("*, items!recipe_lines_parent_item_id_fkey(*)")
       .eq("line_type", "ingredient")
-      .eq("specific_child", vendorProductId);
+      .eq("specific_child", vendorProductId)
+      .eq("user_id", userId);
 
     console.log(
       `[DEPRECATE VP] Vendor Product ${vendorProductId} deprecated. Found ${
@@ -131,7 +139,8 @@ export async function deprecateVendorProduct(
         const { error: parentUpdateError } = await supabase
           .from("items")
           .update({ deprecated: now, deprecation_reason: "indirect" })
-          .eq("id", parentItemId);
+          .eq("id", parentItemId)
+          .eq("user_id", userId);
 
         if (parentUpdateError) {
           console.error(
@@ -142,7 +151,7 @@ export async function deprecateVendorProduct(
         }
 
         // その親のさらに親も連鎖的にdeprecate
-        await deprecateItemCascade(parentItemId, now);
+        await deprecateItemCascade(parentItemId, now, userId);
       }
     }
 
@@ -153,6 +162,7 @@ export async function deprecateVendorProduct(
       .select("*")
       .eq("item_kind", "raw")
       .eq("base_item_id", vendorProduct.base_item_id)
+      .eq("user_id", userId)
       .is("deprecated", null);
 
     if (rawError) {
@@ -167,7 +177,8 @@ export async function deprecateVendorProduct(
           .select("*")
           .eq("line_type", "ingredient")
           .eq("child_item_id", rawItem.id)
-          .eq("specific_child", "lowest");
+          .eq("specific_child", "lowest")
+          .eq("user_id", userId);
 
         if (lowestError) continue;
 
@@ -177,6 +188,7 @@ export async function deprecateVendorProduct(
             .from("vendor_products")
             .select("*")
             .eq("base_item_id", vendorProduct.base_item_id)
+            .eq("user_id", userId)
             .is("deprecated", null);
 
           if (otherError) continue;
@@ -194,7 +206,8 @@ export async function deprecateVendorProduct(
               const { error: parentUpdateError } = await supabase
                 .from("items")
                 .update({ deprecated: now, deprecation_reason: "indirect" })
-                .eq("id", line.parent_item_id);
+                .eq("id", line.parent_item_id)
+                .eq("user_id", userId);
 
               if (parentUpdateError) {
                 console.error(
@@ -205,7 +218,7 @@ export async function deprecateVendorProduct(
               }
 
               // その親のさらに親も連鎖的にdeprecate
-              await deprecateItemCascade(line.parent_item_id, now);
+              await deprecateItemCascade(line.parent_item_id, now, userId);
             }
           } else {
             // 代替がある場合、最安値を探して切り替え、last_changeを記録
@@ -213,7 +226,8 @@ export async function deprecateVendorProduct(
               lowestLines,
               vendorProduct,
               otherVPs,
-              vendorProductId
+              vendorProductId,
+              userId
             );
           }
         }
@@ -234,7 +248,8 @@ export async function deprecateVendorProduct(
  * Prepped Itemをdeprecatedにする
  */
 export async function deprecatePreppedItem(
-  itemId: string
+  itemId: string,
+  userId: string
 ): Promise<{ success: boolean; error?: string; affectedItems?: string[] }> {
   try {
     // Itemを取得
@@ -242,6 +257,7 @@ export async function deprecatePreppedItem(
       .from("items")
       .select("*")
       .eq("id", itemId)
+      .eq("user_id", userId)
       .single();
 
     if (itemError || !item) {
@@ -255,14 +271,15 @@ export async function deprecatePreppedItem(
     const now = new Date().toISOString();
 
     // 先に親itemsを再帰的にdeprecatedにする（この時点ではまだItem自体はactive）
-    const affectedItemIds = await deprecateItemCascade(itemId, now);
+    const affectedItemIds = await deprecateItemCascade(itemId, now, userId);
 
     // その後、Itemをdeprecatedにする（direct - ユーザーが明示的にdeprecate）
     // 既にindirectでdeprecatedされている場合でも、directに上書き
     const { error: updateError } = await supabase
       .from("items")
       .update({ deprecated: now, deprecation_reason: "direct" })
-      .eq("id", itemId);
+      .eq("id", itemId)
+      .eq("user_id", userId);
 
     if (updateError) {
       return { success: false, error: updateError.message };
@@ -285,6 +302,7 @@ export async function deprecatePreppedItem(
 async function deprecateItemCascade(
   itemId: string,
   deprecatedTime: string,
+  userId: string,
   visited: Set<string> = new Set()
 ): Promise<Set<string>> {
   const affectedItems = new Set<string>();
@@ -300,7 +318,8 @@ async function deprecateItemCascade(
     .from("recipe_lines")
     .select("parent_item_id")
     .eq("line_type", "ingredient")
-    .eq("child_item_id", itemId);
+    .eq("child_item_id", itemId)
+    .eq("user_id", userId);
 
   if (plError || !parentLines) {
     return affectedItems;
@@ -315,6 +334,7 @@ async function deprecateItemCascade(
       .from("items")
       .select("*")
       .eq("id", parentId)
+      .eq("user_id", userId)
       .single();
 
     if (parentError || !parentItem) continue;
@@ -326,7 +346,8 @@ async function deprecateItemCascade(
     const { error: updateError } = await supabase
       .from("items")
       .update({ deprecated: deprecatedTime, deprecation_reason: "indirect" })
-      .eq("id", parentId);
+      .eq("id", parentId)
+      .eq("user_id", userId);
 
     if (!updateError) {
       affectedItems.add(parentId);
@@ -335,6 +356,7 @@ async function deprecateItemCascade(
       const nestedAffected = await deprecateItemCascade(
         parentId,
         deprecatedTime,
+        userId,
         visited
       );
       nestedAffected.forEach((id) => affectedItems.add(id));
@@ -351,7 +373,8 @@ async function switchToLowestVendorProduct(
   recipeLines: RecipeLine[],
   deprecatedVendorProduct: VendorProduct,
   activeVendorProducts: VendorProduct[],
-  deprecatedVpId: string
+  deprecatedVpId: string,
+  userId: string
 ): Promise<void> {
   try {
     // 最安のvendor_productを探す（コスト計算ロジックと同じ）
@@ -372,12 +395,14 @@ async function switchToLowestVendorProduct(
       .from("vendors")
       .select("name")
       .eq("id", deprecatedVendorProduct.vendor_id)
+      .eq("user_id", userId)
       .single();
 
     const { data: newVendor } = await supabase
       .from("vendors")
       .select("name")
       .eq("id", lowestVP.vendor_id)
+      .eq("user_id", userId)
       .single();
 
     // Format: "Vendor A's Product Name" or just "Vendor A" if no product name
@@ -401,7 +426,8 @@ async function switchToLowestVendorProduct(
       await supabase
         .from("recipe_lines")
         .update({ last_change: newChange })
-        .eq("id", line.id);
+        .eq("id", line.id)
+        .eq("user_id", userId);
     }
   } catch (error) {
     console.error("Failed to switch to lowest vendor product:", error);
@@ -412,7 +438,8 @@ async function switchToLowestVendorProduct(
  * Itemをdeprecatedから復活させる（undeprecate）
  */
 export async function undeprecateItem(
-  itemId: string
+  itemId: string,
+  userId: string
 ): Promise<{ success: boolean; error?: string; undeprecatedItems?: string[] }> {
   try {
     // Itemを取得
@@ -420,6 +447,7 @@ export async function undeprecateItem(
       .from("items")
       .select("*")
       .eq("id", itemId)
+      .eq("user_id", userId)
       .single();
 
     if (itemError || !item) {
@@ -437,6 +465,7 @@ export async function undeprecateItem(
         .from("base_items")
         .select("*")
         .eq("id", item.base_item_id)
+        .eq("user_id", userId)
         .single();
 
       if (baseError || !baseItem || baseItem.deprecated) {
@@ -451,6 +480,7 @@ export async function undeprecateItem(
         .from("vendor_products")
         .select("*")
         .eq("base_item_id", item.base_item_id)
+        .eq("user_id", userId)
         .is("deprecated", null);
 
       if (vpError || !activeVPs || activeVPs.length === 0) {
@@ -463,7 +493,10 @@ export async function undeprecateItem(
 
     // Prepped itemの場合、すべての材料がアクティブかチェック
     if (item.item_kind === "prepped") {
-      const allIngredientsActive = await checkAllIngredientsActive(itemId);
+      const allIngredientsActive = await checkAllIngredientsActive(
+        itemId,
+        userId
+      );
       if (!allIngredientsActive) {
         return {
           success: false,
@@ -477,7 +510,8 @@ export async function undeprecateItem(
     const { error } = await supabase
       .from("items")
       .update({ deprecated: null, deprecation_reason: null })
-      .eq("id", itemId);
+      .eq("id", itemId)
+      .eq("user_id", userId);
 
     if (error) {
       return { success: false, error: error.message };
@@ -491,12 +525,14 @@ export async function undeprecateItem(
       .from("recipe_lines")
       .select("*")
       .eq("line_type", "ingredient")
-      .eq("child_item_id", itemId);
+      .eq("child_item_id", itemId)
+      .eq("user_id", userId);
 
     if (!rlError && recipeLines) {
       for (const line of recipeLines) {
         const result = await recursivelyUndeprecateParents(
           line.parent_item_id,
+          userId,
           new Set()
         );
         result.forEach((id) => undeprecatedItems.add(id));
@@ -517,7 +553,8 @@ export async function undeprecateItem(
  * Base Itemをdeprecatedから復活させる
  */
 export async function undeprecateBaseItem(
-  baseItemId: string
+  baseItemId: string,
+  userId: string
 ): Promise<{ success: boolean; error?: string; undeprecatedItems?: string[] }> {
   try {
     // アクティブなvendor_productsが存在するかチェック
@@ -525,6 +562,7 @@ export async function undeprecateBaseItem(
       .from("vendor_products")
       .select("*")
       .eq("base_item_id", baseItemId)
+      .eq("user_id", userId)
       .is("deprecated", null);
 
     if (vpError) {
@@ -543,7 +581,8 @@ export async function undeprecateBaseItem(
     const { error } = await supabase
       .from("base_items")
       .update({ deprecated: null })
-      .eq("id", baseItemId);
+      .eq("id", baseItemId)
+      .eq("user_id", userId);
 
     if (error) {
       return { success: false, error: error.message };
@@ -557,6 +596,7 @@ export async function undeprecateBaseItem(
       .select("*")
       .eq("item_kind", "raw")
       .eq("base_item_id", baseItemId)
+      .eq("user_id", userId)
       .not("deprecated", "is", null);
 
     if (!rawError && rawItems) {
@@ -564,7 +604,8 @@ export async function undeprecateBaseItem(
         const { error: itemUpdateError } = await supabase
           .from("items")
           .update({ deprecated: null, deprecation_reason: null })
-          .eq("id", rawItem.id);
+          .eq("id", rawItem.id)
+          .eq("user_id", userId);
 
         if (!itemUpdateError) {
           undeprecatedItems.add(rawItem.id);
@@ -577,12 +618,14 @@ export async function undeprecateBaseItem(
             .from("recipe_lines")
             .select("*")
             .eq("line_type", "ingredient")
-            .eq("child_item_id", rawItem.id);
+            .eq("child_item_id", rawItem.id)
+            .eq("user_id", userId);
 
           if (!rlError && recipeLines) {
             for (const line of recipeLines) {
               const result = await recursivelyUndeprecateParents(
                 line.parent_item_id,
+                userId,
                 new Set()
               );
               result.forEach((id) => undeprecatedItems.add(id));
@@ -606,13 +649,15 @@ export async function undeprecateBaseItem(
  * Vendor Productをdeprecatedから復活させる
  */
 export async function undeprecateVendorProduct(
-  vendorProductId: string
+  vendorProductId: string,
+  userId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { error } = await supabase
       .from("vendor_products")
       .update({ deprecated: null })
-      .eq("id", vendorProductId);
+      .eq("id", vendorProductId)
+      .eq("user_id", userId);
 
     if (error) {
       return { success: false, error: error.message };
@@ -628,14 +673,18 @@ export async function undeprecateVendorProduct(
 /**
  * Prepped Itemのすべての材料がアクティブかチェック
  */
-async function checkAllIngredientsActive(itemId: string): Promise<boolean> {
+async function checkAllIngredientsActive(
+  itemId: string,
+  userId: string
+): Promise<boolean> {
   try {
     // レシピラインを取得（ingredientのみ）
     const { data: recipeLines, error: rlError } = await supabase
       .from("recipe_lines")
       .select("*")
       .eq("parent_item_id", itemId)
-      .eq("line_type", "ingredient");
+      .eq("line_type", "ingredient")
+      .eq("user_id", userId);
 
     if (rlError || !recipeLines) {
       return false;
@@ -655,6 +704,7 @@ async function checkAllIngredientsActive(itemId: string): Promise<boolean> {
         .from("items")
         .select("*")
         .eq("id", line.child_item_id)
+        .eq("user_id", userId)
         .single();
 
       if (itemError || !childItem) {
@@ -677,6 +727,7 @@ async function checkAllIngredientsActive(itemId: string): Promise<boolean> {
           .from("vendor_products")
           .select("*")
           .eq("base_item_id", childItem.base_item_id)
+          .eq("user_id", userId)
           .is("deprecated", null);
 
         if (vpError || !activeVPs || activeVPs.length === 0) {
@@ -711,6 +762,7 @@ async function checkAllIngredientsActive(itemId: string): Promise<boolean> {
  */
 async function recursivelyUndeprecateParents(
   itemId: string,
+  userId: string,
   visited: Set<string> = new Set()
 ): Promise<Set<string>> {
   const undeprecatedItems = new Set<string>();
@@ -726,6 +778,7 @@ async function recursivelyUndeprecateParents(
     .from("items")
     .select("*")
     .eq("id", itemId)
+    .eq("user_id", userId)
     .single();
 
   if (itemError || !item) {
@@ -738,14 +791,15 @@ async function recursivelyUndeprecateParents(
   }
 
   // すべての材料がアクティブかチェック
-  const allIngredientsActive = await checkAllIngredientsActive(itemId);
+  const allIngredientsActive = await checkAllIngredientsActive(itemId, userId);
 
   if (allIngredientsActive) {
     // Itemをundeprecate
     const { error: updateError } = await supabase
       .from("items")
       .update({ deprecated: null, deprecation_reason: null })
-      .eq("id", itemId);
+      .eq("id", itemId)
+      .eq("user_id", userId);
 
     if (!updateError) {
       undeprecatedItems.add(itemId);
@@ -758,12 +812,14 @@ async function recursivelyUndeprecateParents(
         .from("recipe_lines")
         .select("parent_item_id")
         .eq("line_type", "ingredient")
-        .eq("child_item_id", itemId);
+        .eq("child_item_id", itemId)
+        .eq("user_id", userId);
 
       if (!plError && parentLines) {
         for (const line of parentLines) {
           const nestedUndeprecated = await recursivelyUndeprecateParents(
             line.parent_item_id,
+            userId,
             visited
           );
           nestedUndeprecated.forEach((id) => undeprecatedItems.add(id));
@@ -779,7 +835,8 @@ async function recursivelyUndeprecateParents(
  * Vendor Product作成後、影響を受けるアイテムを自動undeprecate
  */
 export async function autoUndeprecateAfterVendorProductCreation(
-  vendorProductId: string
+  vendorProductId: string,
+  userId: string
 ): Promise<{ success: boolean; undeprecatedItems?: string[] }> {
   try {
     // Vendor Productを取得
@@ -787,6 +844,7 @@ export async function autoUndeprecateAfterVendorProductCreation(
       .from("vendor_products")
       .select("*")
       .eq("id", vendorProductId)
+      .eq("user_id", userId)
       .single();
 
     if (vpError || !vendorProduct) {
@@ -800,7 +858,8 @@ export async function autoUndeprecateAfterVendorProductCreation(
       .from("items")
       .select("*")
       .eq("item_kind", "raw")
-      .eq("base_item_id", vendorProduct.base_item_id);
+      .eq("base_item_id", vendorProduct.base_item_id)
+      .eq("user_id", userId);
 
     if (rawError || !rawItems) {
       return { success: false };
@@ -812,7 +871,8 @@ export async function autoUndeprecateAfterVendorProductCreation(
         .from("recipe_lines")
         .select("*")
         .eq("line_type", "ingredient")
-        .eq("child_item_id", rawItem.id);
+        .eq("child_item_id", rawItem.id)
+        .eq("user_id", userId);
 
       if (rlError || !recipeLines) continue;
 
@@ -826,6 +886,7 @@ export async function autoUndeprecateAfterVendorProductCreation(
         ) {
           const result = await recursivelyUndeprecateParents(
             line.parent_item_id,
+            userId,
             new Set()
           );
           result.forEach((id) => undeprecatedItems.add(id));
@@ -851,11 +912,13 @@ export async function autoUndeprecateAfterVendorProductCreation(
  * Recipe Line更新後、影響を受けるアイテムを自動undeprecate
  */
 export async function autoUndeprecateAfterRecipeLineUpdate(
-  parentItemId: string
+  parentItemId: string,
+  userId: string
 ): Promise<{ success: boolean; undeprecatedItems?: string[] }> {
   try {
     const undeprecatedItems = await recursivelyUndeprecateParents(
       parentItemId,
+      userId,
       new Set()
     );
 

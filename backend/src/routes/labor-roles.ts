@@ -13,6 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("labor_roles")
       .select("*")
+      .eq("user_id", req.user!.id)
       .order("name");
 
     if (error) {
@@ -21,8 +22,7 @@ router.get("/", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -37,6 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("labor_roles")
       .select("*")
       .eq("id", req.params.id)
+      .eq("user_id", req.user!.id)
       .single();
 
     if (error) {
@@ -45,8 +46,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -72,9 +72,15 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // user_idを自動設定
+    const roleWithUserId = {
+      ...role,
+      user_id: req.user!.id,
+    };
+
     const { data, error } = await supabase
       .from("labor_roles")
-      .insert([role])
+      .insert([roleWithUserId])
       .select()
       .single();
 
@@ -84,8 +90,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -99,10 +104,13 @@ router.put("/:id", async (req, res) => {
     const role: Partial<LaborRole> = req.body;
     const { id } = req.params;
 
+    // user_idを更新から除外（セキュリティのため）
+    const { user_id, ...roleWithoutUserId } = role;
     const { data, error } = await supabase
       .from("labor_roles")
-      .update(role)
+      .update(roleWithoutUserId)
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .select()
       .single();
 
@@ -110,10 +118,13 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    if (!data) {
+      return res.status(404).json({ error: "Labor role not found" });
+    }
+
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -127,7 +138,8 @@ router.delete("/:id", async (req, res) => {
     const { error } = await supabase
       .from("labor_roles")
       .delete()
-      .eq("id", req.params.id);
+      .eq("id", req.params.id)
+      .eq("user_id", req.user!.id);
 
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -135,8 +147,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

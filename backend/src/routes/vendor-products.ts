@@ -13,6 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("vendor_products")
       .select("*")
+      .eq("user_id", req.user!.id)
       .order("product_name");
 
     if (error) {
@@ -36,6 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("vendor_products")
       .select("*")
       .eq("id", req.params.id)
+      .eq("user_id", req.user!.id)
       .single();
 
     if (error) {
@@ -72,10 +74,16 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // user_idを自動設定
+    const vendorProductWithUserId = {
+      ...vendorProduct,
+      user_id: req.user!.id,
+    };
+
     // vendor_productsを作成
     const { data: newVendorProduct, error: vpError } = await supabase
       .from("vendor_products")
-      .insert([vendorProduct])
+      .insert([vendorProductWithUserId])
       .select()
       .single();
 
@@ -88,7 +96,8 @@ router.post("/", async (req, res) => {
       "../services/deprecation"
     );
     const undeprecateResult = await autoUndeprecateAfterVendorProductCreation(
-      newVendorProduct.id
+      newVendorProduct.id,
+      req.user!.id
     );
 
     if (undeprecateResult.undeprecatedItems?.length) {
@@ -113,15 +122,22 @@ router.put("/:id", async (req, res) => {
     const vendorProduct: Partial<VendorProduct> = req.body;
     const { id } = req.params;
 
+    // user_idを更新から除外（セキュリティのため）
+    const { user_id, ...vendorProductWithoutUserId } = vendorProduct;
     const { data, error } = await supabase
       .from("vendor_products")
-      .update(vendorProduct)
+      .update(vendorProductWithoutUserId)
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .select()
       .single();
 
     if (error) {
       return res.status(400).json({ error: error.message });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Vendor product not found" });
     }
 
     res.json(data);
@@ -138,7 +154,7 @@ router.put("/:id", async (req, res) => {
 router.patch("/:id/deprecate", async (req, res) => {
   try {
     const { deprecateVendorProduct } = await import("../services/deprecation");
-    const result = await deprecateVendorProduct(req.params.id);
+    const result = await deprecateVendorProduct(req.params.id, req.user!.id);
 
     if (!result.success) {
       return res.status(400).json({ error: result.error });
@@ -163,7 +179,8 @@ router.delete("/:id", async (req, res) => {
     const { error } = await supabase
       .from("vendor_products")
       .delete()
-      .eq("id", req.params.id);
+      .eq("id", req.params.id)
+      .eq("user_id", req.user!.id);
 
     if (error) {
       return res.status(400).json({ error: error.message });

@@ -3,6 +3,8 @@
  * バックエンドAPIとの通信を管理
  */
 
+import { createClient } from "./supabase-client";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 /**
@@ -139,11 +141,13 @@ export interface BaseItem {
   name: string;
   specific_weight?: number | null; // g/ml for non-mass units (gallon, liter, floz)
   deprecated?: string | null; // timestamp when deprecated
+  user_id: string; // FK to users
 }
 
 export interface Vendor {
   id: string;
   name: string;
+  user_id: string; // FK to users
 }
 
 export interface VendorProduct {
@@ -156,6 +160,7 @@ export interface VendorProduct {
   purchase_quantity: number;
   purchase_cost: number;
   deprecated?: string | null; // timestamp when deprecated
+  user_id: string; // FK to users
 }
 
 export interface Item {
@@ -175,6 +180,7 @@ export interface Item {
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   wholesale?: number | null; // wholesale price
   retail?: number | null; // retail price
+  user_id: string; // FK to users
 }
 
 export interface RecipeLine {
@@ -188,12 +194,14 @@ export interface RecipeLine {
   labor_role?: string | null;
   minutes?: number | null;
   last_change?: string | null; // vendor product change history
+  user_id: string; // FK to users
 }
 
 export interface LaborRole {
   id: string;
   name: string;
   hourly_wage: number;
+  user_id: string; // FK to users
 }
 
 export interface NonMassUnit {
@@ -201,24 +209,58 @@ export interface NonMassUnit {
   name: string;
 }
 
-// API呼び出しヘルパー
-async function fetchAPI<T>(
+/**
+ * 認証付きAPIリクエスト
+ * セッションからアクセストークンを取得してAuthorizationヘッダーに追加
+ */
+export async function apiRequest<T>(
   endpoint: string,
-  options?: RequestInit
+  options: RequestInit = {}
 ): Promise<T> {
+  const supabase = createClient();
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+
+  if (sessionError || !session) {
+    console.error("No session found or session error:", sessionError);
+    // 認証エラー時にログインページにリダイレクト
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+    throw new Error("Authentication required.");
+  }
+
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...options?.headers,
+      Authorization: `Bearer ${session.access_token}`,
+      ...options.headers,
     },
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: `HTTP ${response.status}: ${response.statusText}`,
-    }));
-    throw new Error(error.error || "API request failed");
+    // 401エラー（認証エラー）の場合はログインページにリダイレクト
+    if (response.status === 401) {
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+      throw new Error("Authentication required.");
+    }
+
+    let errorData: unknown;
+    try {
+      errorData = await response.json();
+    } catch {
+      errorData = { message: response.statusText };
+    }
+    throw new Error(
+      (errorData as { error?: string; message?: string }).error ||
+        (errorData as { error?: string; message?: string }).message ||
+        "API request failed"
+    );
   }
 
   if (response.status === 204) {
@@ -226,6 +268,14 @@ async function fetchAPI<T>(
   }
 
   return response.json();
+}
+
+// API呼び出しヘルパー（後方互換性のため残すが、apiRequestを使用）
+async function fetchAPI<T>(
+  endpoint: string,
+  options?: RequestInit
+): Promise<T> {
+  return apiRequest<T>(endpoint, options);
 }
 
 // Items API

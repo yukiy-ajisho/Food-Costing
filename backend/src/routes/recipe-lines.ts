@@ -7,7 +7,8 @@ import { checkCycle } from "../services/cycle-detection";
  * Recipe Lineのバリデーション: deprecatedな材料やvendor_productを使おうとしていないかチェック
  */
 async function validateRecipeLineNotDeprecated(
-  line: Partial<RecipeLine>
+  line: Partial<RecipeLine>,
+  userId: string
 ): Promise<{ valid: boolean; error?: string }> {
   // ingredientのみチェック（laborはチェック不要）
   if (line.line_type !== "ingredient" || !line.child_item_id) {
@@ -19,6 +20,7 @@ async function validateRecipeLineNotDeprecated(
     .from("items")
     .select("*")
     .eq("id", line.child_item_id)
+    .eq("user_id", userId)
     .single();
 
   if (itemError || !childItem) {
@@ -45,6 +47,7 @@ async function validateRecipeLineNotDeprecated(
         .from("vendor_products")
         .select("*")
         .eq("id", line.specific_child)
+        .eq("user_id", userId)
         .single();
 
       if (vpError || !vendorProduct) {
@@ -101,7 +104,10 @@ router.post("/", async (req, res) => {
     // 循環参照チェック（ingredient lineの場合）
     if (line.line_type === "ingredient" && line.child_item_id) {
       // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
-      const { data: allItems } = await supabase.from("items").select("*");
+      const { data: allItems } = await supabase
+        .from("items")
+        .select("*")
+        .eq("user_id", req.user!.id);
 
       // マップを作成
       const itemsMap = new Map<string, Item>();
@@ -111,7 +117,8 @@ router.post("/", async (req, res) => {
       const { data: allRecipeLines } = await supabase
         .from("recipe_lines")
         .select("*")
-        .eq("line_type", "ingredient");
+        .eq("line_type", "ingredient")
+        .eq("user_id", req.user!.id);
 
       // 新しいレシピラインを含むマップを作成
       const recipeLinesMap = new Map<string, RecipeLine[]>();
@@ -130,6 +137,7 @@ router.post("/", async (req, res) => {
         quantity: line.quantity || null,
         unit: line.unit || null,
         labor_role: null,
+        user_id: req.user!.id,
         minutes: null,
       };
       const existing = recipeLinesMap.get(line.parent_item_id!) || [];
@@ -140,6 +148,7 @@ router.post("/", async (req, res) => {
       try {
         await checkCycle(
           line.parent_item_id!,
+          req.user!.id,
           new Set(),
           itemsMap,
           recipeLinesMap,
@@ -155,14 +164,23 @@ router.post("/", async (req, res) => {
     }
 
     // Deprecatedバリデーション
-    const validation = await validateRecipeLineNotDeprecated(line);
+    const validation = await validateRecipeLineNotDeprecated(
+      line,
+      req.user!.id
+    );
     if (!validation.valid) {
       return res.status(400).json({ error: validation.error });
     }
 
+    // user_idを自動設定
+    const lineWithUserId = {
+      ...line,
+      user_id: req.user!.id,
+    };
+
     const { data, error } = await supabase
       .from("recipe_lines")
-      .insert([line])
+      .insert([lineWithUserId])
       .select()
       .single();
 
@@ -175,7 +193,10 @@ router.post("/", async (req, res) => {
       const { autoUndeprecateAfterRecipeLineUpdate } = await import(
         "../services/deprecation"
       );
-      await autoUndeprecateAfterRecipeLineUpdate(line.parent_item_id);
+      await autoUndeprecateAfterRecipeLineUpdate(
+        line.parent_item_id,
+        req.user!.id
+      );
     }
 
     res.status(201).json(data);
@@ -199,6 +220,7 @@ router.put("/:id", async (req, res) => {
       .from("recipe_lines")
       .select("*")
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .single();
 
     if (!existingLine) {
@@ -212,7 +234,10 @@ router.put("/:id", async (req, res) => {
       line.child_item_id !== existingLine.child_item_id
     ) {
       // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
-      const { data: allItems } = await supabase.from("items").select("*");
+      const { data: allItems } = await supabase
+        .from("items")
+        .select("*")
+        .eq("user_id", req.user!.id);
 
       // マップを作成
       const itemsMap = new Map<string, Item>();
@@ -222,7 +247,8 @@ router.put("/:id", async (req, res) => {
       const { data: allRecipeLines } = await supabase
         .from("recipe_lines")
         .select("*")
-        .eq("line_type", "ingredient");
+        .eq("line_type", "ingredient")
+        .eq("user_id", req.user!.id);
 
       // 更新後のレシピラインを含むマップを作成
       const recipeLinesMap = new Map<string, RecipeLine[]>();
@@ -244,6 +270,7 @@ router.put("/:id", async (req, res) => {
       try {
         await checkCycle(
           existingLine.parent_item_id,
+          req.user!.id,
           new Set(),
           itemsMap,
           recipeLinesMap,
@@ -258,10 +285,13 @@ router.put("/:id", async (req, res) => {
       }
     }
 
+    // user_idを更新から除外（セキュリティのため）
+    const { user_id, ...lineWithoutUserId } = line;
     const { data, error } = await supabase
       .from("recipe_lines")
-      .update(line)
+      .update(lineWithoutUserId)
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .select()
       .single();
 
@@ -277,7 +307,10 @@ router.put("/:id", async (req, res) => {
       const { autoUndeprecateAfterRecipeLineUpdate } = await import(
         "../services/deprecation"
       );
-      await autoUndeprecateAfterRecipeLineUpdate(existingLine.parent_item_id);
+      await autoUndeprecateAfterRecipeLineUpdate(
+        existingLine.parent_item_id,
+        req.user!.id
+      );
     }
 
     res.json(data);
@@ -296,7 +329,8 @@ router.delete("/:id", async (req, res) => {
     const { error } = await supabase
       .from("recipe_lines")
       .delete()
-      .eq("id", req.params.id);
+      .eq("id", req.params.id)
+      .eq("user_id", req.user!.id);
 
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -329,7 +363,10 @@ router.post("/batch", async (req, res) => {
     }
 
     // すべてのアイテムとレシピラインを取得（循環参照チェック用）
-    const { data: allItems } = await supabase.from("items").select("*");
+    const { data: allItems } = await supabase
+      .from("items")
+      .select("*")
+      .eq("user_id", req.user!.id);
     const itemsMap = new Map<string, Item>();
     allItems?.forEach((i) => itemsMap.set(i.id, i));
 
@@ -337,12 +374,14 @@ router.post("/batch", async (req, res) => {
     const { data: ingredientRecipeLines } = await supabase
       .from("recipe_lines")
       .select("*")
-      .eq("line_type", "ingredient");
+      .eq("line_type", "ingredient")
+      .eq("user_id", req.user!.id);
 
     // 更新対象を探す用: すべてのレシピライン（ingredientとlaborの両方）を取得
     const { data: allRecipeLines } = await supabase
       .from("recipe_lines")
-      .select("*");
+      .select("*")
+      .eq("user_id", req.user!.id);
 
     // 既存のレシピラインのマップを作成（循環参照チェック用）
     const recipeLinesMap = new Map<string, RecipeLine[]>();
@@ -398,6 +437,7 @@ router.post("/batch", async (req, res) => {
         quantity: create.quantity || null,
         unit: create.unit || null,
         specific_child: create.specific_child ?? null, // nullish coalescing: null/undefinedのみnullに
+        user_id: req.user!.id,
         labor_role: create.labor_role || null,
         minutes: create.minutes || null,
         created_at: undefined,
@@ -423,7 +463,10 @@ router.post("/batch", async (req, res) => {
           });
         }
         // Deprecatedバリデーション
-        const validation = await validateRecipeLineNotDeprecated(create);
+        const validation = await validateRecipeLineNotDeprecated(
+          create,
+          req.user!.id
+        );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
         }
@@ -444,7 +487,10 @@ router.post("/batch", async (req, res) => {
           });
         }
         // Deprecatedバリデーション
-        const validation = await validateRecipeLineNotDeprecated(update);
+        const validation = await validateRecipeLineNotDeprecated(
+          update,
+          req.user!.id
+        );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
         }
@@ -486,6 +532,7 @@ router.post("/batch", async (req, res) => {
       try {
         await checkCycle(
           parentId,
+          req.user!.id,
           new Set(),
           itemsMap,
           updatedRecipeLinesMap,
@@ -525,7 +572,8 @@ router.post("/batch", async (req, res) => {
       const { error: deleteError } = await supabase
         .from("recipe_lines")
         .delete()
-        .in("id", deletes);
+        .in("id", deletes)
+        .eq("user_id", req.user!.id);
 
       if (deleteError) {
         return res.status(400).json({ error: deleteError.message });
@@ -544,11 +592,12 @@ router.post("/batch", async (req, res) => {
     // 更新
     if (updates.length > 0) {
       for (const update of updates) {
-        const { id, ...lineData } = update;
+        const { id, user_id, ...lineData } = update;
         const { data, error: updateError } = await supabase
           .from("recipe_lines")
           .update(lineData)
           .eq("id", id)
+          .eq("user_id", req.user!.id)
           .select()
           .single();
 
@@ -563,9 +612,13 @@ router.post("/batch", async (req, res) => {
 
     // 作成
     if (creates.length > 0) {
+      const createsWithUserId = creates.map((create: Partial<RecipeLine>) => ({
+        ...create,
+        user_id: req.user!.id,
+      }));
       const { data: createdData, error: createError } = await supabase
         .from("recipe_lines")
-        .insert(creates)
+        .insert(createsWithUserId)
         .select();
 
       if (createError) {
@@ -583,6 +636,7 @@ router.post("/batch", async (req, res) => {
         .from("items")
         .select("*")
         .eq("id", parentId)
+        .eq("user_id", req.user!.id)
         .single();
 
       if (parentError || !parentItem) {
@@ -596,7 +650,8 @@ router.post("/batch", async (req, res) => {
           .from("recipe_lines")
           .select("id")
           .eq("parent_item_id", parentId)
-          .eq("line_type", "ingredient");
+          .eq("line_type", "ingredient")
+          .eq("user_id", req.user!.id);
 
         if (ilError) {
           return res.status(500).json({ error: ilError.message });
@@ -617,7 +672,7 @@ router.post("/batch", async (req, res) => {
 
     // 作成、更新、削除の影響を受けた親itemsをすべてチェック
     for (const parentId of affectedParentIds) {
-      await autoUndeprecateAfterRecipeLineUpdate(parentId);
+      await autoUndeprecateAfterRecipeLineUpdate(parentId, req.user!.id);
     }
 
     res.json(results);

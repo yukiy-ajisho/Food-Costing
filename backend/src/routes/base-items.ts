@@ -13,6 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("base_items")
       .select("*")
+      .eq("user_id", req.user!.id)
       .order("name", { ascending: true });
 
     if (error) {
@@ -36,6 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("base_items")
       .select("*")
       .eq("id", req.params.id)
+      .eq("user_id", req.user!.id)
       .single();
 
     if (error) {
@@ -62,9 +64,15 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name is required" });
     }
 
+    // user_idを自動設定
+    const baseItemWithUserId = {
+      ...baseItem,
+      user_id: req.user!.id,
+    };
+
     const { data, error } = await supabase
       .from("base_items")
-      .insert([baseItem])
+      .insert([baseItemWithUserId])
       .select()
       .single();
 
@@ -88,15 +96,22 @@ router.put("/:id", async (req, res) => {
     const baseItem: Partial<BaseItem> = req.body;
     const { id } = req.params;
 
+    // user_idを更新から除外（セキュリティのため）
+    const { user_id, ...baseItemWithoutUserId } = baseItem;
     const { data, error } = await supabase
       .from("base_items")
-      .update(baseItem)
+      .update(baseItemWithoutUserId)
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .select()
       .single();
 
     if (error) {
       return res.status(400).json({ error: error.message });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "Base item not found" });
     }
 
     res.json(data);
@@ -113,7 +128,7 @@ router.put("/:id", async (req, res) => {
 router.patch("/:id/deprecate", async (req, res) => {
   try {
     const { deprecateBaseItem } = await import("../services/deprecation");
-    const result = await deprecateBaseItem(req.params.id);
+    const result = await deprecateBaseItem(req.params.id, req.user!.id);
 
     if (!result.success) {
       return res.status(400).json({ error: result.error });
@@ -135,7 +150,8 @@ router.delete("/:id", async (req, res) => {
     const { error } = await supabase
       .from("base_items")
       .delete()
-      .eq("id", req.params.id);
+      .eq("id", req.params.id)
+      .eq("user_id", req.user!.id);
 
     if (error) {
       return res.status(400).json({ error: error.message });
