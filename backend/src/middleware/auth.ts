@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { createClient } from "@supabase/supabase-js";
 
 // ExpressのRequest型を拡張してuser情報を追加
+/* eslint-disable @typescript-eslint/no-namespace */
 declare global {
   namespace Express {
     interface Request {
@@ -11,6 +12,7 @@ declare global {
     }
   }
 }
+/* eslint-enable @typescript-eslint/no-namespace */
 
 /**
  * 認証ミドルウェア

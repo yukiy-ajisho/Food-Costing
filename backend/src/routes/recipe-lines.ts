@@ -286,7 +286,8 @@ router.put("/:id", async (req, res) => {
     }
 
     // user_idを更新から除外（セキュリティのため）
-    const { user_id, ...lineWithoutUserId } = line;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user_id: _user_id, ...lineWithoutUserId } = line;
     const { data, error } = await supabase
       .from("recipe_lines")
       .update(lineWithoutUserId)
@@ -592,7 +593,8 @@ router.post("/batch", async (req, res) => {
     // 更新
     if (updates.length > 0) {
       for (const update of updates) {
-        const { id, user_id, ...lineData } = update;
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { id, user_id: _user_id, ...lineData } = update;
         const { data, error: updateError } = await supabase
           .from("recipe_lines")
           .update(lineData)

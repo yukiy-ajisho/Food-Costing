@@ -741,7 +741,8 @@ export async function calculateCostsForChangedItems(
     // Raw Itemの場合、すべてのspecificVendorProductIdのキャッシュをクリア
     // Prepped Itemの場合、itemIdのみのキャッシュをクリア
     const keysToDelete: string[] = [];
-    for (const [key, _] of costCache.entries()) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for (const [key, _unused] of costCache.entries()) {
       if (key === itemId || key.startsWith(`${itemId}:`)) {
         keysToDelete.push(key);
       }
@@ -1012,7 +1013,8 @@ export async function calculateCostsForAllChanges(
   // 影響を受けるアイテムのキャッシュのみクリア
   for (const itemId of affectedItemIds) {
     const keysToDelete: string[] = [];
-    for (const [key, _] of costCache.entries()) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for (const [key, _unused] of costCache.entries()) {
       if (key === itemId || key.startsWith(`${itemId}:`)) {
         keysToDelete.push(key);
       }

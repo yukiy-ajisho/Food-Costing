@@ -123,7 +123,8 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
 
     // user_idを更新から除外（セキュリティのため）
-    const { user_id, ...vendorProductWithoutUserId } = vendorProduct;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user_id: _user_id, ...vendorProductWithoutUserId } = vendorProduct;
     const { data, error } = await supabase
       .from("vendor_products")
       .update(vendorProductWithoutUserId)

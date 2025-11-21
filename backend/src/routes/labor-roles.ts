@@ -105,7 +105,8 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
 
     // user_idを更新から除外（セキュリティのため）
-    const { user_id, ...roleWithoutUserId } = role;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user_id: _user_id, ...roleWithoutUserId } = role;
     const { data, error } = await supabase
       .from("labor_roles")
       .update(roleWithoutUserId)

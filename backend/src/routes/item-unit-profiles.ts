@@ -62,7 +62,8 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
 
     // user_idを更新から除外（セキュリティのため）
-    const { user_id, ...profileWithoutUserId } = profile;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user_id: _user_id, ...profileWithoutUserId } = profile;
     const { data, error } = await supabase
       .from("item_unit_profiles")
       .update(profileWithoutUserId)

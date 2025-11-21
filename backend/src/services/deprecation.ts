@@ -1,11 +1,5 @@
 import { supabase } from "../config/supabase";
-import {
-  Item,
-  BaseItem,
-  VendorProduct,
-  RecipeLine,
-  Vendor,
-} from "../types/database";
+import { VendorProduct, RecipeLine } from "../types/database";
 
 /**
  * Deprecation Service

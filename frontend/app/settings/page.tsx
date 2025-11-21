@@ -148,6 +148,7 @@ export default function SettingsPage() {
       id: `new-${Date.now()}`,
       name: "",
       hourly_wage: 0,
+      user_id: "", // 一時的な値（保存時にバックエンドで自動設定される）
     };
     setLaborRoles([...laborRoles, newRole]);
   };

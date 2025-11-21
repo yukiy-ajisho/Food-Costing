@@ -278,7 +278,8 @@ router.put("/:id", async (req, res) => {
     }
 
     // user_idを更新から除外（セキュリティのため）
-    const { user_id, ...itemWithoutUserId } = item;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user_id: _user_id, ...itemWithoutUserId } = item;
     const { data, error } = await supabase
       .from("items")
       .update(itemWithoutUserId)
