@@ -17,38 +17,54 @@ import { Item, RecipeLine } from "../types/database";
  */
 export async function checkCycle(
   itemId: string,
+  userId: string,
   visited: Set<string> = new Set(),
   itemsMap: Map<string, Item> = new Map(),
   recipeLinesMap: Map<string, RecipeLine[]> = new Map(),
   currentPath: string[] = []
 ): Promise<void> {
+  // デバッグログ: チェック開始
+  let item = itemsMap.get(itemId);
+  const itemName = item?.name || itemId;
+  const currentPathNames = currentPath.map((id) => {
+    const pathItem = itemsMap.get(id);
+    return pathItem?.name || id;
+  });
+  console.log(
+    `[CYCLE DETECTION] Checking item: ${itemName} (${itemId}), Current path: [${currentPathNames.join(
+      " → "
+    )}]`
+  );
+
   // 循環検出
   if (visited.has(itemId)) {
     const cyclePath = [...currentPath, itemId];
     // アイテム名を取得してパスを表示
-    const item = itemsMap.get(itemId);
-    const itemName = item?.name || itemId;
     const pathNames = cyclePath.map((id) => {
       const pathItem = itemsMap.get(id);
       return pathItem?.name || id;
     });
     const pathString = pathNames.join(" → ");
+    console.error(
+      `[CYCLE DETECTION] ❌ CYCLE DETECTED! Item: ${itemName} (${itemId}), Cycle path: ${pathString}`
+    );
     throw new Error(
       `Cycle detected in recipe dependency chain. Item "${itemName}" creates a circular dependency. Path: ${pathString}`
     );
   }
 
   // アイテムを取得（itemsMapから取得を試みる、存在しない場合のみデータベースから取得）
-  let item = itemsMap.get(itemId);
   if (!item) {
     const { data: fetchedItem, error: itemError } = await supabase
       .from("items")
       .select("*")
       .eq("id", itemId)
+      .eq("user_id", userId)
       .single();
 
     if (itemError || !fetchedItem) {
       // アイテムが存在しない場合はスキップ（新規作成の場合など）
+      console.log(`[CYCLE DETECTION] Item not found: ${itemId}, skipping...`);
       return;
     }
     item = fetchedItem;
@@ -57,6 +73,9 @@ export async function checkCycle(
 
   // Raw Itemの場合は循環参照の可能性がない（材料を持たないため）
   if (item.item_kind === "raw") {
+    console.log(
+      `[CYCLE DETECTION] Item is raw: ${itemName} (${itemId}), no cycle possible, skipping...`
+    );
     return;
   }
 
@@ -67,15 +86,23 @@ export async function checkCycle(
       .from("recipe_lines")
       .select("*")
       .eq("parent_item_id", itemId)
-      .eq("line_type", "ingredient");
+      .eq("line_type", "ingredient")
+      .eq("user_id", userId);
 
     if (linesError) {
       // エラーが発生した場合はスキップ
+      console.log(
+        `[CYCLE DETECTION] Error fetching recipe lines for ${itemName} (${itemId}): ${linesError.message}, skipping...`
+      );
       return;
     }
     recipeLines = fetchedLines || [];
     recipeLinesMap.set(itemId, recipeLines);
   }
+
+  console.log(
+    `[CYCLE DETECTION] Item ${itemName} (${itemId}) has ${recipeLines.length} ingredient lines`
+  );
 
   // 訪問済みマーク
   visited.add(itemId);
@@ -87,15 +114,25 @@ export async function checkCycle(
       if (line.line_type !== "ingredient") continue;
       if (!line.child_item_id) continue;
 
+      const childItem = itemsMap.get(line.child_item_id);
+      const childItemName = childItem?.name || line.child_item_id;
+      console.log(
+        `[CYCLE DETECTION] Checking child item: ${childItemName} (${line.child_item_id}) of ${itemName} (${itemId})`
+      );
+
       // 子アイテムの循環参照を再帰的にチェック
       await checkCycle(
         line.child_item_id,
+        userId,
         visited,
         itemsMap,
         recipeLinesMap,
         newPath
       );
     }
+    console.log(
+      `[CYCLE DETECTION] ✅ No cycle detected for item: ${itemName} (${itemId})`
+    );
   } finally {
     // 訪問済みマークを削除（他の経路での探索を許可）
     visited.delete(itemId);
@@ -111,12 +148,16 @@ export async function checkCycle(
  */
 export async function checkCyclesForItems(
   itemIds: string[],
+  userId: string,
   itemsMap: Map<string, Item> = new Map(),
   recipeLinesMap: Map<string, RecipeLine[]> = new Map()
 ): Promise<void> {
   // すべてのアイテムとレシピラインを事前に取得（パフォーマンス向上）
   if (itemsMap.size === 0) {
-    const { data: allItems } = await supabase.from("items").select("*");
+    const { data: allItems } = await supabase
+      .from("items")
+      .select("*")
+      .eq("user_id", userId);
     allItems?.forEach((item) => itemsMap.set(item.id, item));
   }
 
@@ -124,7 +165,8 @@ export async function checkCyclesForItems(
     const { data: allRecipeLines } = await supabase
       .from("recipe_lines")
       .select("*")
-      .eq("line_type", "ingredient");
+      .eq("line_type", "ingredient")
+      .eq("user_id", userId);
     allRecipeLines?.forEach((line) => {
       const existing = recipeLinesMap.get(line.parent_item_id) || [];
       existing.push(line);
@@ -134,6 +176,6 @@ export async function checkCyclesForItems(
 
   // 各アイテムの循環参照をチェック
   for (const itemId of itemIds) {
-    await checkCycle(itemId, new Set(), itemsMap, recipeLinesMap, []);
+    await checkCycle(itemId, userId, new Set(), itemsMap, recipeLinesMap, []);
   }
 }

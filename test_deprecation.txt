@@ -1,0 +1,589 @@
+=============================================================
+DEPRECATION機能 テストケース
+=============================================================
+
+前提知識：
+- Direct Deprecation: ユーザーが明示的にdeprecate、またはシステム的に使用不可
+  → UIで完全非表示（現在選択中のものはグレーアウト表示）
+- Indirect Deprecation: 材料がdeprecateされた連鎖
+  → UIで表示（⚠ Affected マーク付き）
+  → 自動undeprecate可能
+
+=============================================================
+PART 1: 基本的なPrepped Item Deprecation
+=============================================================
+
+テスト1: 単純なPrepped Item Deprecation
+初期状態:
+  - Item A (Prepped Item, active)
+    材料: Flour 1000g
+  - Item B (Prepped Item, active)
+    材料: Item A 300g
+
+操作: Cost PageでItem Aをdeprecate
+
+期待結果:
+  - Item A: deprecated = 日時, deprecation_reason = "direct"
+  - Item B: deprecated = 日時, deprecation_reason = "indirect"
+
+UI確認:
+  - Cost Page Item List:
+    - Item A: 非表示
+    - Item B: 表示（⚠ Affected）
+
+データベース確認:
+  - items テーブルでItem AとItem Bを確認
+  - deprecated と deprecation_reason が正しく設定されているか
+
+=============================================================
+
+テスト2: 3階層のPrepped Item連鎖Deprecation
+初期状態:
+  - Item A (Prepped Item, active)
+    材料: Flour 1000g
+  - Item B (Prepped Item, active)
+    材料: Item A 300g, Sugar 200g
+  - Item C (Menu Item, active)
+    材料: Item B 400g
+
+操作: Cost PageでItem Aをdeprecate
+
+期待結果:
+  - Item A: deprecated = 日時, deprecation_reason = "direct"
+  - Item B: deprecated = 日時, deprecation_reason = "indirect"
+  - Item C: deprecated = 日時, deprecation_reason = "indirect"
+
+UI確認:
+  - Cost Page Item List:
+    - Item A: 非表示
+    - Item B: 表示（⚠ Affected）
+    - Item C: 表示（⚠ Affected）
+
+=============================================================
+
+テスト3: 複数親を持つPrepped Itemのdeprecation
+初期状態:
+  - Item A (Prepped Item, active)
+    材料: Flour 1000g
+  - Item B (Prepped Item, active)
+    材料: Item A 300g, Sugar 200g
+  - Item C (Menu Item, active)
+    材料: Item A 200g, Butter 100g
+
+操作: Cost PageでItem Aをdeprecate
+
+期待結果:
+  - Item A: deprecated = 日時, deprecation_reason = "direct"
+  - Item B: deprecated = 日時, deprecation_reason = "indirect"
+  - Item C: deprecated = 日時, deprecation_reason = "indirect"
+
+UI確認:
+  - Item B と Item C の両方が⚠ Affectedで表示される
+
+=============================================================
+
+テスト4: Indirect → Direct 変更
+初期状態:
+  - Item A (Prepped Item, deprecated, deprecation_reason = "direct")
+  - Item B (Prepped Item, deprecated, deprecation_reason = "indirect")
+    ※Item Aがdeprecateされたため連鎖
+
+操作: Cost PageでItem Bを直接deprecate
+
+期待結果:
+  - Item B: deprecation_reason = "direct" に変更
+
+UI確認:
+  - Item B: ⚠マークが消えて、非表示になる
+
+=============================================================
+PART 2: Vendor Product Deprecation（Specific選択）
+=============================================================
+
+テスト5: Specific選択のVendor Product Deprecation
+初期状態:
+  - Base Item: Tomato (active)
+  - Vendor Product A: Vendor 1, $5/kg (active)
+  - Vendor Product B: Vendor 2, $6/kg (active)
+  - Raw Item: Tomato (active)
+  - Prepped Item: Tomato Sauce (active)
+    材料: Tomato 200g, specific_child = Vendor Product A
+
+操作: Items PageでVendor Product Aをdeprecate
+
+期待結果:
+  - Vendor Product A: deprecated = 日時
+  - Base Item: active（変化なし）
+  - Raw Item: active（変化なし）
+  - Tomato Sauce: deprecated = 日時, deprecation_reason = "indirect"
+
+UI確認:
+  - Items Page Vendor Products タブ: Vendor Product A 非表示
+  - Items Page Base Items タブ: Tomato 表示（active）
+  - Cost Page Item List: Tomato Sauce 表示（⚠ Affected）
+  - Tomato Sauceのレシピ編集時:
+    - Vendor選択ドロップダウン: Vendor Product A グレーアウト表示
+
+=============================================================
+
+テスト6: Specific選択のVendor Product Deprecation（連鎖）
+初期状態:
+  - Vendor Product A (active)
+  - Raw Item: Tomato (active)
+  - Prepped Item: Tomato Sauce (active)
+    材料: Tomato 200g, specific_child = Vendor Product A
+  - Prepped Item: Pasta (active)
+    材料: Tomato Sauce 150g
+
+操作: Items PageでVendor Product Aをdeprecate
+
+期待結果:
+  - Vendor Product A: deprecated
+  - Tomato Sauce: deprecated, deprecation_reason = "indirect"
+  - Pasta: deprecated, deprecation_reason = "indirect"
+
+UI確認:
+  - Tomato Sauce: ⚠ Affected
+  - Pasta: ⚠ Affected
+
+=============================================================
+PART 3: Vendor Product Deprecation（Lowest選択＋代替あり）
+=============================================================
+
+テスト7: Lowest選択、代替あり - 自動切り替え
+初期状態:
+  - Base Item: Tomato (active)
+  - Vendor Product A: Vendor 1, $5/kg (active) ← 最安
+  - Vendor Product B: Vendor 2, $6/kg (active)
+  - Vendor Product C: Vendor 3, $7/kg (active)
+  - Raw Item: Tomato (active)
+  - Prepped Item: Tomato Sauce (active)
+    材料: Tomato 200g, specific_child = "lowest"
+
+操作: Items PageでVendor Product Aをdeprecate
+
+期待結果:
+  - Vendor Product A: deprecated
+  - Tomato Sauce: active（deprecateされない）
+  - recipe_lines.last_change = "Vendor 1's Tomato → Vendor 2's Tomato"
+
+UI確認:
+  - Tomato Sauce: 通常表示（⚠マークなし）
+  - Vendorカラム: "Vendor 2" 表示
+  - Last Changeカラム: "Vendor 1's Tomato → Vendor 2's Tomato" 表示
+
+=============================================================
+
+テスト8: Lowest選択、複数回切り替え
+初期状態:
+  - Vendor Product A: $5/kg (active)
+  - Vendor Product B: $6/kg (active)
+  - Vendor Product C: $7/kg (active)
+  - Prepped Item: Tomato Sauce (active)
+    材料: Tomato 200g, specific_child = "lowest"
+
+操作1: Vendor Product Aをdeprecate
+期待結果1:
+  - last_change = "Vendor 1's Tomato → Vendor 2's Tomato"
+
+操作2: Vendor Product Bをdeprecate
+期待結果2:
+  - last_change = "Vendor 1's Tomato → Vendor 2's Tomato → Vendor 3's Tomato"
+
+UI確認:
+  - Last Changeカラムに履歴が追加される形で表示
+
+=============================================================
+PART 4: Vendor Product Deprecation（Lowest選択＋代替なし）
+=============================================================
+
+テスト9: Lowest選択、最後の1つをdeprecate
+初期状態:
+  - Base Item: Tomato (active)
+  - Vendor Product A: $5/kg (active) ← 最後の1つ
+  - Raw Item: Tomato (active)
+  - Prepped Item: Tomato Sauce (active)
+    材料: Tomato 200g, specific_child = "lowest"
+
+操作: Items PageでVendor Product Aをdeprecate
+
+期待結果:
+  - Vendor Product A: deprecated
+  - Base Item: active（変化なし）
+  - Raw Item: active（変化なし）
+  - Tomato Sauce: deprecated, deprecation_reason = "indirect"
+
+重要: Raw ItemはdeprecateされないことをDB確認
+
+UI確認:
+  - Items Page Base Items タブ: Tomato 表示（active）
+  - Cost Page Item List: Tomato Sauce 表示（⚠ Affected）
+  - Cost Page レシピ編集時、Tomatoはドロップダウンに表示されない
+    （vendor product 0個のため選択不可）
+
+=============================================================
+
+テスト10: Lowest選択、複数レシピで使用
+初期状態:
+  - Vendor Product A: $5/kg (active) ← 最後の1つ
+  - Raw Item: Tomato (active)
+  - Prepped Item: Tomato Sauce (active)
+    材料: Tomato 200g, specific_child = "lowest"
+  - Prepped Item: Tomato Pasta (active)
+    材料: Tomato 150g, specific_child = "lowest"
+
+操作: Vendor Product Aをdeprecate
+
+期待結果:
+  - Vendor Product A: deprecated
+  - Raw Item: active
+  - Tomato Sauce: deprecated, deprecation_reason = "indirect"
+  - Tomato Pasta: deprecated, deprecation_reason = "indirect"
+
+UI確認:
+  - 両方のPrepped Itemsが⚠ Affectedで表示
+
+=============================================================
+PART 5: Base Item Deprecation
+=============================================================
+
+テスト11: Base Item Deprecation（vendor product 0個）
+初期状態:
+  - Base Item: Tomato (active)
+  - Vendor Products: 全て既にdeprecated
+  - Raw Item: Tomato (active)
+
+操作: Items Page Base Items タブでTomatoをdeprecate
+
+期待結果:
+  - Base Item: deprecated
+  - Raw Item: active（変化なし）
+
+UI確認:
+  - Items Page Base Items タブ: Tomato 非表示
+
+=============================================================
+
+テスト12: Base Item Deprecation失敗（vendor product残存）
+初期状態:
+  - Base Item: Tomato (active)
+  - Vendor Product A: $5/kg (active) ← 残っている
+  - Raw Item: Tomato (active)
+
+操作: Items PageでBase Item Tomatoをdeprecate
+
+期待結果:
+  - エラーメッセージ: "Cannot deprecate base item. 1 active vendor product(s) still exist."
+  - 何も変更されない
+
+=============================================================
+PART 6: 自動Undeprecation（Vendor Product追加）
+=============================================================
+
+テスト13: Vendor Product追加でPrepped Item復活
+初期状態:
+  - Base Item: Tomato (active)
+  - Vendor Products: 全てdeprecated（0個active）
+  - Raw Item: Tomato (active)
+  - Prepped Item: Tomato Sauce (deprecated, deprecation_reason = "indirect")
+  - Prepped Item: Pasta (deprecated, deprecation_reason = "indirect")
+    材料: Tomato Sauce 150g
+
+操作: Items Pageで新しいVendor Product追加（Vendor 3, $7/kg）
+
+期待結果:
+  - Vendor Product C: active
+  - Raw Item: active（変化なし）
+  - Tomato Sauce: active（undeprecate）
+  - Pasta: active（undeprecate）
+
+重要: 全て自動的にundeprecateされる
+
+UI確認:
+  - Tomato Sauce、Pasta: 通常表示（⚠マークなし）
+
+データベース確認:
+  - deprecated = null, deprecation_reason = null
+
+=============================================================
+
+テスト14: Vendor Product追加でもDirect Deprecationは復活しない
+初期状態:
+  - Base Item: Tomato (active)
+  - Vendor Products: 全てdeprecated
+  - Raw Item: Tomato (active)
+  - Prepped Item: Tomato Sauce (deprecated, deprecation_reason = "direct")
+    ※ユーザーが明示的にdeprecate済み
+
+操作: 新しいVendor Product追加
+
+期待結果:
+  - Raw Item: active
+  - Tomato Sauce: deprecated, deprecation_reason = "direct"（変化なし）
+
+重要: Direct deprecationは復活しない
+
+UI確認:
+  - Tomato Sauce: 非表示のまま
+
+=============================================================
+PART 7: 自動Undeprecation（Recipe Line編集）
+=============================================================
+
+テスト15: Deprecated材料を削除してUndeprecate
+初期状態:
+  - Item A (Prepped Item, deprecated, deprecation_reason = "direct")
+  - Item B (Prepped Item, deprecated, deprecation_reason = "indirect")
+    材料: Item A 300g, Sugar 200g
+
+操作: Cost PageでItem Bを編集、Item Aの行を削除してSave
+
+期待結果:
+  - Item B: active（undeprecate）
+  - Item B.deprecation_reason = null
+
+UI確認:
+  - Item B: 通常表示（⚠マークなし）
+
+=============================================================
+
+テスト16: Recipe Line編集で連鎖Undeprecate
+初期状態:
+  - Item A (deprecated, direct)
+  - Item B (deprecated, indirect) 材料: Item A, Sugar
+  - Item C (deprecated, indirect) 材料: Item B, Butter
+
+操作: Item BからItem Aを削除
+
+期待結果:
+  - Item B: active（undeprecate）
+  - Item C: active（undeprecate、再帰的に）
+
+=============================================================
+
+テスト17: Direct Deprecationは編集してもUndeprecateしない
+初期状態:
+  - Item A (deprecated, direct) ← 材料が原因ではなくユーザーが直接deprecate
+  - Item B (deprecated, indirect) ← 材料のせいで連鎖
+
+操作: Item Aの全材料を削除または置き換え
+
+期待結果:
+  - Item A: deprecated, deprecation_reason = "direct"（変化なし）
+
+重要: Direct deprecationは編集で復活しない
+
+=============================================================
+PART 8: Validation（Recipe Line作成・更新）
+=============================================================
+
+テスト18: Deprecated材料を追加しようとする
+初期状態:
+  - Item A (deprecated, direct)
+  - Item B (active)
+
+操作: Cost PageでItem Bのレシピに、Item Aを追加してSave
+
+期待結果:
+  - エラーメッセージ: "Cannot add deprecated ingredient: Prepped item "Item A" is no longer available. Please select an active item."
+  - 保存されない
+
+=============================================================
+
+テスト19: Deprecated Vendor Productを指定しようとする
+初期状態:
+  - Vendor Product A (deprecated)
+  - Raw Item: Tomato (active、他のvendor productあり）
+  - Prepped Item: Tomato Sauce (active)
+
+操作: Tomato Sauceのレシピで、Tomatoのvendor選択でVendor Product Aを指定してSave
+
+期待結果:
+  - エラーメッセージ: "Cannot select deprecated vendor product: "..." is no longer available. Please select an active vendor product or use "lowest cost" option."
+  - 保存されない
+
+=============================================================
+
+テスト20: 材料0個で保存しようとする
+初期状態:
+  - Item A (Prepped Item, active)
+    材料: Flour 1000g
+
+操作: Cost PageでFlourの行を削除してSave（材料0個）
+
+期待結果:
+  - エラーメッセージ: "Cannot save: Prepped item "Item A" must have at least one ingredient. Please add an ingredient before saving."
+  - 保存されない
+
+=============================================================
+PART 9: UI表示ルール
+=============================================================
+
+テスト21: Vendor Product選択ドロップダウン（新規）
+初期状態:
+  - Vendor Product A (active)
+  - Vendor Product B (deprecated)
+  - Vendor Product C (deprecated)
+
+操作: Cost Pageで新規Recipe Lineを追加、Vendor選択ドロップダウンを開く
+
+期待結果:
+  - Vendor Product A: 表示（選択可能）
+  - Vendor Product B: 非表示
+  - Vendor Product C: 非表示
+
+=============================================================
+
+テスト22: Vendor Product選択ドロップダウン（既存・選択中がdeprecated）
+初期状態:
+  - Vendor Product A (active)
+  - Vendor Product B (deprecated) ← 現在選択中
+  - Vendor Product C (deprecated)
+
+操作: 既存Recipe Lineを編集、Vendor選択ドロップダウンを開く
+
+期待結果:
+  - Vendor Product A: 表示（選択可能）
+  - Vendor Product B: グレーアウト表示（現在選択中）
+  - Vendor Product C: 非表示
+
+操作2: Vendor Product Aに変更してSave、再度編集モードでドロップダウン確認
+
+期待結果2:
+  - Vendor Product B: 非表示（選択解除されたので消える）
+
+=============================================================
+
+テスト23: Raw Item選択ドロップダウン（vendor product 0個）
+初期状態:
+  - Raw Item A (active, vendor products = 2個)
+  - Raw Item B (active, vendor products = 0個)
+  - Raw Item C (deprecated)
+
+操作: Ingredient選択ドロップダウンを開く
+
+期待結果:
+  - Raw Item A: 表示
+  - Raw Item B: 非表示（vendor product 0個）
+  - Raw Item C: 非表示（deprecated）
+
+=============================================================
+
+テスト24: Prepped Item選択ドロップダウン（Indirect Deprecated）
+初期状態:
+  - Prepped Item A (active)
+  - Prepped Item B (deprecated, direct)
+  - Prepped Item C (deprecated, indirect)
+
+操作: Ingredient選択ドロップダウンを開く
+
+期待結果:
+  - Prepped Item A: 表示（選択可能）
+  - Prepped Item B: 非表示
+  - Prepped Item C: グレーアウト表示（選択可能）
+
+操作2: Prepped Item Cを選択してSave、再度ドロップダウン確認
+
+期待結果2:
+  - Prepped Item C: 依然グレーアウト表示（Indirectは消えない）
+
+=============================================================
+PART 10: エッジケース
+=============================================================
+
+テスト25: 循環参照防止（連鎖deprecation）
+初期状態:
+  - Item A 材料: Item B
+  - Item B 材料: Item C
+  - Item C 材料: Sugar
+  ※循環はないが深い階層
+
+操作: Item Cをdeprecate
+
+期待結果:
+  - Item C: deprecated, direct
+  - Item B: deprecated, indirect
+  - Item A: deprecated, indirect
+  - 全て正常にdeprecateされる（無限ループにならない）
+
+=============================================================
+
+テスト26: 既にdeprecatedなitemを再度deprecate
+初期状態:
+  - Item A (deprecated, indirect)
+
+操作: Item Aを直接deprecate
+
+期待結果:
+  - Item A: deprecation_reason = "direct" に変更
+  - deprecated のタイムスタンプは更新される可能性あり
+
+=============================================================
+
+テスト27: 複数材料、一部がdeprecated
+初期状態:
+  - Item A (active) 材料: Flour (active), Sugar (deprecated), Butter (active)
+
+確認事項:
+  - Item AはSugarがdeprecatedなので、自動的にdeprecatedになっているはず
+  - deprecation_reason = "indirect"
+
+操作: Sugarの行を削除してSave
+
+期待結果:
+  - Item A: active（undeprecate）
+
+=============================================================
+
+テスト28: Base Item同名作成（deprecated後）
+初期状態:
+  - Base Item "Tomato" (deprecated)
+
+操作: Items Pageで新しいBase Item "Tomato"を作成
+
+期待結果:
+  - 成功（名前の一意性制約はactiveのみ）
+  - 2つの"Tomato"が存在（1つはdeprecated、1つはactive）
+
+UI確認:
+  - Items Page: activeな"Tomato"のみ表示
+
+=============================================================
+
+テスト29: LocalStorage履歴の記録と削除
+初期状態:
+  - localStorage "costing_change_history"が空
+
+操作1: Items PageでItem Aをdeprecate
+確認1: localStorageに変更履歴が記録される
+
+操作2: Cost Pageを訪問
+確認2: 
+  - 差分計算APIが呼ばれる
+  - localStorageがクリアされる
+
+操作3: Items PageでItem Bをdeprecate
+操作4: Cost Pageを再訪問
+確認4: Item Bの変更のみが差分計算される
+
+=============================================================
+
+テスト30: LocalStorage容量超過
+準備: 大量のdeprecate操作を行い、localStorageを満杯に近づける
+
+確認事項:
+  - QuotaExceededError時に古い履歴の半分が削除される
+  - エラーが発生せず、新しい履歴が保存される
+  - コンソールにwarningが表示される
+
+=============================================================
+END OF TEST CASES
+=============================================================
+
+テスト実施時の注意事項：
+1. 各テストの前にデータベースの初期状態を確認
+2. 各テストの後にデータベースを直接確認（deprecated, deprecation_reason）
+3. ブラウザのDevToolsでネットワークリクエストを確認
+4. バックエンドのログを確認（エラーやwarningがないか）
+5. テストは上から順に実施（簡単→複雑）
+

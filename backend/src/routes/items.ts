@@ -14,7 +14,7 @@ const router = Router();
  */
 router.get("/", async (req, res) => {
   try {
-    let query = supabase.from("items").select("*");
+    let query = supabase.from("items").select("*").eq("user_id", req.user!.id);
 
     // フィルター
     if (req.query.item_kind) {
@@ -32,8 +32,7 @@ router.get("/", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -48,6 +47,7 @@ router.get("/:id", async (req, res) => {
       .from("items")
       .select("*")
       .eq("id", req.params.id)
+      .eq("user_id", req.user!.id)
       .single();
 
     if (error) {
@@ -56,8 +56,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -77,9 +76,15 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // user_idを自動設定
+    const itemWithUserId = {
+      ...item,
+      user_id: req.user!.id,
+    };
+
     const { data, error } = await supabase
       .from("items")
-      .insert([item])
+      .insert([itemWithUserId])
       .select()
       .single();
 
@@ -89,8 +94,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -109,6 +113,7 @@ router.put("/:id", async (req, res) => {
       .from("items")
       .select("*")
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .single();
 
     // Prepped Itemの場合、Yieldバリデーション
@@ -129,23 +134,27 @@ router.put("/:id", async (req, res) => {
               .from("recipe_lines")
               .select("*")
               .eq("parent_item_id", id)
-              .eq("line_type", "ingredient");
+              .eq("line_type", "ingredient")
+              .eq("user_id", req.user!.id);
 
             if (recipeLines && recipeLines.length > 0) {
               // Base Itemsを取得
               const { data: baseItems } = await supabase
                 .from("base_items")
-                .select("*");
+                .select("*")
+                .eq("user_id", req.user!.id);
 
               // Itemsを取得
               const { data: allItems } = await supabase
                 .from("items")
-                .select("*");
+                .select("*")
+                .eq("user_id", req.user!.id);
 
               // Vendor Productsを取得
               const { data: vendorProducts } = await supabase
                 .from("vendor_products")
-                .select("*");
+                .select("*")
+                .eq("user_id", req.user!.id);
 
               // マップを作成
               const baseItemsMap = new Map<string, BaseItem>();
@@ -218,11 +227,15 @@ router.put("/:id", async (req, res) => {
         .from("recipe_lines")
         .select("*")
         .eq("parent_item_id", id)
-        .eq("line_type", "ingredient");
+        .eq("line_type", "ingredient")
+        .eq("user_id", req.user!.id);
 
       if (recipeLines && recipeLines.length > 0) {
         // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
-        const { data: allItems } = await supabase.from("items").select("*");
+        const { data: allItems } = await supabase
+          .from("items")
+          .select("*")
+          .eq("user_id", req.user!.id);
 
         // マップを作成
         const itemsMap = new Map<string, Item>();
@@ -232,7 +245,8 @@ router.put("/:id", async (req, res) => {
         const { data: allRecipeLines } = await supabase
           .from("recipe_lines")
           .select("*")
-          .eq("line_type", "ingredient");
+          .eq("line_type", "ingredient")
+          .eq("user_id", req.user!.id);
 
         const recipeLinesMap = new Map<string, RecipeLine[]>();
         allRecipeLines?.forEach((line) => {
@@ -243,7 +257,14 @@ router.put("/:id", async (req, res) => {
 
         // 循環参照をチェック（既存データも含めてチェック）
         try {
-          await checkCycle(id, new Set(), itemsMap, recipeLinesMap, []);
+          await checkCycle(
+            id,
+            req.user!.id,
+            new Set(),
+            itemsMap,
+            recipeLinesMap,
+            []
+          );
         } catch (cycleError: unknown) {
           const message =
             cycleError instanceof Error
@@ -256,10 +277,14 @@ router.put("/:id", async (req, res) => {
       }
     }
 
+    // user_idを更新から除外（セキュリティのため）
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user_id: _user_id, ...itemWithoutUserId } = item;
     const { data, error } = await supabase
       .from("items")
-      .update(item)
+      .update(itemWithoutUserId)
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .select()
       .single();
 
@@ -267,24 +292,51 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    if (!data) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PATCH /items/:id/deprecate
+ * Prepped Itemをdeprecatedにする
+ */
+router.patch("/:id/deprecate", async (req, res) => {
+  try {
+    const { deprecatePreppedItem } = await import("../services/deprecation");
+    const result = await deprecatePreppedItem(req.params.id, req.user!.id);
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({
+      message: "Item deprecated successfully",
+      affectedItems: result.affectedItems,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
 
 /**
  * DELETE /items/:id
- * アイテムを削除（CASCADEでrecipe_linesも削除される）
+ * アイテムを削除（物理削除は危険なので非推奨、deprecateを使用してください）
  */
 router.delete("/:id", async (req, res) => {
   try {
     const { error } = await supabase
       .from("items")
       .delete()
-      .eq("id", req.params.id);
+      .eq("id", req.params.id)
+      .eq("user_id", req.user!.id);
 
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -292,8 +344,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

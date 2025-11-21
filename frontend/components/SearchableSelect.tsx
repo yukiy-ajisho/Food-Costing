@@ -4,7 +4,12 @@ import { useState, useRef, useEffect } from "react";
 import { Search, ChevronDown } from "lucide-react";
 
 interface SearchableSelectProps {
-  options: { id: string; name: string }[];
+  options: {
+    id: string;
+    name: string;
+    disabled?: boolean;
+    deprecated?: boolean;
+  }[];
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
@@ -83,9 +88,19 @@ export function SearchableSelect({
           type="button"
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
-          className={`w-full px-3 py-2 text-left border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between ${
+          className={`w-full text-left border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between ${
             disabled ? "bg-gray-100 cursor-not-allowed" : "bg-white"
           }`}
+          style={{
+            height: "20px",
+            minHeight: "20px",
+            maxHeight: "20px",
+            lineHeight: "20px",
+            padding: "0 4px",
+            fontSize: "0.875rem",
+            boxSizing: "border-box",
+            margin: 0,
+          }}
         >
           <span className={selectedItem ? "text-gray-900" : "text-gray-500"}>
             {selectedItem ? selectedItem.name : placeholder}
@@ -128,11 +143,15 @@ export function SearchableSelect({
                 <button
                   key={option.id}
                   type="button"
-                  onClick={() => handleSelect(option.id)}
-                  className={`block w-full px-4 py-2 text-left hover:bg-blue-50 transition-colors ${
-                    value === option.id ? "bg-blue-100 font-semibold" : ""
-                  }`}
+                  onClick={() => !option.disabled && handleSelect(option.id)}
+                  disabled={option.disabled}
+                  className={`block w-full px-4 py-2 text-left transition-colors ${
+                    option.disabled || option.deprecated
+                      ? "opacity-50 cursor-not-allowed text-gray-400"
+                      : "hover:bg-blue-50"
+                  } ${value === option.id ? "bg-blue-100 font-semibold" : ""}`}
                 >
+                  {option.deprecated && "[Deprecated] "}
                   {option.name}
                 </button>
               ))

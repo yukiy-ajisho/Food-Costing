@@ -29,9 +29,15 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // user_idを自動設定
+    const profileWithUserId = {
+      ...profile,
+      user_id: req.user!.id,
+    };
+
     const { data, error } = await supabase
       .from("item_unit_profiles")
-      .insert([profile])
+      .insert([profileWithUserId])
       .select()
       .single();
 
@@ -41,8 +47,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -56,10 +61,14 @@ router.put("/:id", async (req, res) => {
     const profile: Partial<ItemUnitProfile> = req.body;
     const { id } = req.params;
 
+    // user_idを更新から除外（セキュリティのため）
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { user_id: _user_id, ...profileWithoutUserId } = profile;
     const { data, error } = await supabase
       .from("item_unit_profiles")
-      .update(profile)
+      .update(profileWithoutUserId)
       .eq("id", id)
+      .eq("user_id", req.user!.id)
       .select()
       .single();
 
@@ -67,10 +76,13 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    if (!data) {
+      return res.status(404).json({ error: "Item unit profile not found" });
+    }
+
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -84,7 +96,8 @@ router.delete("/:id", async (req, res) => {
     const { error } = await supabase
       .from("item_unit_profiles")
       .delete()
-      .eq("id", req.params.id);
+      .eq("id", req.params.id)
+      .eq("user_id", req.user!.id);
 
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -92,8 +105,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

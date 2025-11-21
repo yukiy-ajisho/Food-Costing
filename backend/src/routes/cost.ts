@@ -1,5 +1,11 @@
 import { Router } from "express";
-import { calculateCost, clearCostCache } from "../services/cost";
+import {
+  calculateCost,
+  calculateCosts,
+  calculateCostsForAllChanges,
+  clearCostCache,
+} from "../services/cost";
+import { supabase } from "../config/supabase";
 
 const router = Router();
 
@@ -16,15 +22,157 @@ router.get("/items/:id/cost", async (req, res) => {
       clearCostCache();
     }
 
-    const costPerGram = await calculateCost(id);
+    const costPerGram = await calculateCost(id, req.user!.id);
 
     res.json({
       item_id: id,
       cost_per_gram: costPerGram,
     });
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /items/costs
+ * 複数アイテムのコストを一度に計算（最適化版）
+ * Request body: { item_ids: string[] }
+ * Response: { costs: { [itemId: string]: number } }
+ */
+router.post("/items/costs", async (req, res) => {
+  try {
+    const { item_ids } = req.body;
+
+    if (!Array.isArray(item_ids)) {
+      return res.status(400).json({
+        error: "item_ids must be an array of strings",
+      });
+    }
+
+    if (item_ids.length === 0) {
+      return res.json({ costs: {} });
+    }
+
+    // 複数アイテムのコストを一度に計算
+    const costsMap = await calculateCosts(item_ids, req.user!.id);
+
+    // Mapをオブジェクトに変換
+    const costs: Record<string, number> = {};
+    costsMap.forEach((cost, itemId) => {
+      costs[itemId] = cost;
+    });
+
+    res.json({ costs });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /items/costs/differential
+ * 差分更新: 変更されたアイテムとその依存関係のみコストを計算
+ * Request body: {
+ *   changed_item_ids?: string[],
+ *   changed_vendor_product_ids?: string[],
+ *   changed_base_item_ids?: string[],
+ *   changed_labor_role_names?: string[]
+ * }
+ * Response: { costs: { [itemId: string]: number } }
+ */
+router.post("/items/costs/differential", async (req, res) => {
+  try {
+    const {
+      changed_item_ids = [],
+      changed_vendor_product_ids = [],
+      changed_base_item_ids = [],
+      changed_labor_role_names = [],
+    } = req.body;
+
+    if (
+      !Array.isArray(changed_item_ids) ||
+      !Array.isArray(changed_vendor_product_ids) ||
+      !Array.isArray(changed_base_item_ids) ||
+      !Array.isArray(changed_labor_role_names)
+    ) {
+      return res.status(400).json({
+        error: "All change arrays must be arrays",
+      });
+    }
+
+    // 差分更新でコストを計算
+    const costsMap = await calculateCostsForAllChanges(
+      changed_item_ids,
+      changed_vendor_product_ids,
+      changed_base_item_ids,
+      changed_labor_role_names,
+      req.user!.id
+    );
+
+    // Mapをオブジェクトに変換
+    const costs: Record<string, number> = {};
+    costsMap.forEach((cost, itemId) => {
+      costs[itemId] = cost;
+    });
+
+    res.json({ costs });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /items/costs/breakdown
+ * 全アイテムのコスト内訳（Food Cost / Labor Cost）を取得
+ * Response: {
+ *   costs: {
+ *     [itemId: string]: {
+ *       food_cost_per_gram: number;
+ *       labor_cost_per_gram: number;
+ *       total_cost_per_gram: number;
+ *     }
+ *   }
+ * }
+ */
+router.get("/items/costs/breakdown", async (req, res) => {
+  try {
+    // PostgreSQL関数を呼び出し（user_idをパラメータとして渡す）
+    const { data, error } = await supabase.rpc(
+      "calculate_item_costs_with_breakdown",
+      { p_user_id: req.user!.id }
+    );
+
+    if (error) {
+      throw new Error(`Database error: ${error.message}`);
+    }
+
+    if (!data || !Array.isArray(data)) {
+      throw new Error("Invalid response from database function");
+    }
+
+    // 結果をitem_idをキーとするオブジェクトに変換
+    const costs: Record<
+      string,
+      {
+        food_cost_per_gram: number;
+        labor_cost_per_gram: number;
+        total_cost_per_gram: number;
+      }
+    > = {};
+
+    for (const row of data) {
+      costs[row.out_item_id] = {
+        food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
+        labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
+        total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
+      };
+    }
+
+    res.json({ costs });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

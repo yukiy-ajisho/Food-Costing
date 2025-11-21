@@ -91,19 +91,60 @@ function computeRawCost(
  * @param itemsMap - Itemsのマップ（item_idをキーとして）
  * @param vendorProductsMap - Vendor Productsのマップ（vendor_product_idをキーとして）
  * @param laborRoles - 役職のマップ
+ * @param specificVendorProductId - 特定のvendor_productを指定（"lowest" | vendor_product.id | null）
  * @returns 1グラムあたりのコスト
  */
+/**
+ * キャッシュキーを生成
+ * Raw Itemの場合: itemId + specificVendorProductId
+ * Prepped Itemの場合: itemIdのみ（子アイテムのコストは再帰的に計算されるため）
+ */
+function getCacheKey(
+  itemId: string,
+  itemKind: "raw" | "prepped",
+  specificVendorProductId: string | "lowest" | null
+): string {
+  if (itemKind === "raw" && specificVendorProductId) {
+    // Raw Itemの場合、specificVendorProductIdを含める
+    const vpId =
+      specificVendorProductId === "lowest" ? "lowest" : specificVendorProductId;
+    return `${itemId}:${vpId}`;
+  }
+  // Prepped Itemの場合、itemIdのみ
+  return itemId;
+}
+
 export async function getCost(
   itemId: string,
+  userId: string,
   visited: Set<string> = new Set(),
   baseItemsMap: Map<string, BaseItem> = new Map(),
   itemsMap: Map<string, Item> = new Map(),
   vendorProductsMap: Map<string, VendorProduct> = new Map(),
-  laborRoles: Map<string, LaborRole> = new Map()
+  laborRoles: Map<string, LaborRole> = new Map(),
+  specificVendorProductId: string | "lowest" | null = null
 ): Promise<number> {
+  // アイテムを取得してitemKindを確認（キャッシュキー生成のため）
+  let item = itemsMap.get(itemId);
+  if (!item) {
+    const { data: fetchedItem, error: itemError } = await supabase
+      .from("items")
+      .select("*")
+      .eq("id", itemId)
+      .eq("user_id", userId)
+      .single();
+
+    if (itemError || !fetchedItem) {
+      throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
+    }
+    item = fetchedItem;
+    itemsMap.set(itemId, item);
+  }
+
   // 1. キャッシュチェック
-  if (costCache.has(itemId)) {
-    return costCache.get(itemId)!;
+  const cacheKey = getCacheKey(itemId, item.item_kind, specificVendorProductId);
+  if (costCache.has(cacheKey)) {
+    return costCache.get(cacheKey)!;
   }
 
   // 2. 循環検出
@@ -118,33 +159,22 @@ export async function getCost(
   visited.add(itemId);
 
   try {
-    // アイテムを取得（itemsMapから取得を試みる、存在しない場合のみデータベースから取得）
-    let item = itemsMap.get(itemId);
-    if (!item) {
-      const { data: fetchedItem, error: itemError } = await supabase
-        .from("items")
-        .select("*")
-        .eq("id", itemId)
-        .single();
-
-      if (itemError || !fetchedItem) {
-        throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
-      }
-      item = fetchedItem;
-      // itemsMapに保存（次回以降はitemsMapから取得できる）
-      itemsMap.set(itemId, item);
-    }
+    // アイテムは既に取得済み（キャッシュキー生成のため）
 
     /**
      * 子アイテムがitemsMapに存在することを保証するヘルパー関数
      * convertToGrams呼び出し前に使用
      */
-    const ensureItemInMap = async (childItemId: string): Promise<void> => {
+    const ensureItemInMap = async (
+      childItemId: string,
+      userId: string
+    ): Promise<void> => {
       if (!itemsMap.has(childItemId)) {
         const { data: fetchedItem, error: itemError } = await supabase
           .from("items")
           .select("*")
           .eq("id", childItemId)
+          .eq("user_id", userId)
           .single();
 
         if (itemError || !fetchedItem) {
@@ -162,7 +192,7 @@ export async function getCost(
         throw new Error(`Raw item ${itemId} has no base_item_id`);
       }
 
-      // base_item_idで全てのvendor_productsを取得
+      // base_item_idで全てのvendor_productsを取得（統一した経路）
       const matchingVendorProducts: VendorProduct[] = [];
       for (const vp of vendorProductsMap.values()) {
         if (vp.base_item_id === item.base_item_id) {
@@ -176,34 +206,63 @@ export async function getCost(
         );
       }
 
-      // 1グラムあたりのコストを計算して、最安のものを選択
-      let cheapestVendorProduct: VendorProduct | undefined;
-      let cheapestCostPerGram = Infinity;
+      let selectedVendorProduct: VendorProduct | undefined;
+      let costPerGram: number;
 
-      for (const vp of matchingVendorProducts) {
-        try {
-          const costPerGram = computeRawCost(item, vp, baseItemsMap);
-          if (costPerGram < cheapestCostPerGram) {
-            cheapestCostPerGram = costPerGram;
-            cheapestVendorProduct = vp;
+      // specificVendorProductIdに応じて処理を分岐
+      if (
+        specificVendorProductId === "lowest" ||
+        specificVendorProductId === null
+      ) {
+        // 最安のものを選択（activeなvendor productsのみ）
+        let cheapestCostPerGram = Infinity;
+
+        for (const vp of matchingVendorProducts) {
+          // Lowestの場合、deprecatedなvendor productsは除外
+          if (vp.deprecated) {
+            continue;
           }
-        } catch (error) {
-          // 計算できないvendor_productはスキップ
-          console.warn(
-            `Failed to calculate cost for vendor product ${vp.id}:`,
-            error
+
+          try {
+            const vpCostPerGram = computeRawCost(item, vp, baseItemsMap);
+            if (vpCostPerGram < cheapestCostPerGram) {
+              cheapestCostPerGram = vpCostPerGram;
+              selectedVendorProduct = vp;
+            }
+          } catch (error) {
+            // 計算できないvendor_productはスキップ
+            console.warn(
+              `Failed to calculate cost for vendor product ${vp.id}:`,
+              error
+            );
+          }
+        }
+
+        if (!selectedVendorProduct) {
+          throw new Error(
+            `No valid vendor product found for base_item ${item.base_item_id}`
           );
         }
-      }
 
-      if (!cheapestVendorProduct) {
-        throw new Error(
-          `No valid vendor product found for base_item ${item.base_item_id}`
+        costPerGram = cheapestCostPerGram;
+      } else {
+        // 特定のvendor_productを指定
+        selectedVendorProduct = matchingVendorProducts.find(
+          (vp) => vp.id === specificVendorProductId
         );
+
+        if (!selectedVendorProduct) {
+          throw new Error(
+            `Vendor product ${specificVendorProductId} not found for base_item ${item.base_item_id}`
+          );
+        }
+
+        costPerGram = computeRawCost(item, selectedVendorProduct, baseItemsMap);
       }
 
-      const costPerGram = cheapestCostPerGram;
-      costCache.set(itemId, costPerGram);
+      // キャッシュに保存（Raw Itemの場合、specificVendorProductIdを含むキーを使用）
+      const cacheKey = getCacheKey(itemId, "raw", specificVendorProductId);
+      costCache.set(cacheKey, costPerGram);
       return costPerGram;
     }
 
@@ -213,10 +272,14 @@ export async function getCost(
     }
 
     // Yieldをグラムに変換
-    // Yieldの単位は"g"または"each"のみ許可
-    if (item.proceed_yield_unit !== "g" && item.proceed_yield_unit !== "each") {
+    // Yieldの単位は"g", "kg", "each"を許可
+    if (
+      item.proceed_yield_unit !== "g" &&
+      item.proceed_yield_unit !== "kg" &&
+      item.proceed_yield_unit !== "each"
+    ) {
       throw new Error(
-        `Prepped item ${itemId} has invalid yield unit: ${item.proceed_yield_unit}. Only "g" and "each" are allowed.`
+        `Prepped item ${itemId} has invalid yield unit: ${item.proceed_yield_unit}. Only "g", "kg", and "each" are allowed.`
       );
     }
 
@@ -224,7 +287,8 @@ export async function getCost(
     const { data: recipeLines, error: linesError } = await supabase
       .from("recipe_lines")
       .select("*")
-      .eq("parent_item_id", itemId);
+      .eq("parent_item_id", itemId)
+      .eq("user_id", userId);
 
     if (linesError) {
       throw new Error(
@@ -262,7 +326,7 @@ export async function getCost(
         }
 
         // 子アイテムがitemsMapに存在することを保証（問題5の修正）
-        await ensureItemInMap(line.child_item_id);
+        await ensureItemInMap(line.child_item_id, userId);
 
         const grams = convertToGrams(
           line.unit,
@@ -300,7 +364,8 @@ export async function getCost(
         const { error: updateError } = await supabase
           .from("items")
           .update({ each_grams: eachGrams })
-          .eq("id", itemId);
+          .eq("id", itemId)
+          .eq("user_id", userId);
 
         if (updateError) {
           console.warn(
@@ -319,9 +384,14 @@ export async function getCost(
       // コスト計算用: 出来上がりの総重量（each_grams × Yield Amount）
       yieldGrams = eachGrams * yieldAmount;
     } else {
-      // Yieldが"g"の場合（問題6-4の修正）
-      // 171行目で既に"g"と"each"のみ許可されているため、ここでは必ず proceed_yield_unit === "g"
-      yieldGrams = item.proceed_yield_amount;
+      // Yieldが"g"または"kg"の場合（質量単位）
+      const multiplier = MASS_UNIT_CONVERSIONS[item.proceed_yield_unit];
+      if (!multiplier) {
+        throw new Error(
+          `Invalid yield unit: ${item.proceed_yield_unit} for item ${itemId}`
+        );
+      }
+      yieldGrams = item.proceed_yield_amount * multiplier;
     }
 
     if (yieldGrams === 0) {
@@ -344,7 +414,7 @@ export async function getCost(
         let grams = ingredientGramsMap.get(line.id);
         if (grams === undefined) {
           // 子アイテムがitemsMapに存在することを保証（問題5の修正）
-          await ensureItemInMap(line.child_item_id);
+          await ensureItemInMap(line.child_item_id, userId);
 
           grams = convertToGrams(
             line.unit,
@@ -356,14 +426,28 @@ export async function getCost(
           );
         }
 
+        // 子アイテムのitem_kindを確認
+        await ensureItemInMap(line.child_item_id, userId);
+        const childItem = itemsMap.get(line.child_item_id);
+        if (!childItem) {
+          throw new Error(`Child item ${line.child_item_id} not found`);
+        }
+
+        // 子アイテムがrawの場合、specific_childを渡す
+        // preppedの場合はnullを渡す（vendor_productは関係ない）
+        const specificVendorProductId =
+          childItem.item_kind === "raw" ? line.specific_child || null : null;
+
         // 子アイテムのコストを再帰的に取得
         const childCostPerGram = await getCost(
           line.child_item_id,
+          userId,
           visited,
           baseItemsMap,
           itemsMap,
           vendorProductsMap,
-          laborRoles
+          laborRoles,
+          specificVendorProductId
         );
 
         ingredientCost += grams * childCostPerGram;
@@ -386,8 +470,9 @@ export async function getCost(
     const totalBatchCost = ingredientCost + laborCost;
     const costPerGram = totalBatchCost / yieldGrams;
 
-    // キャッシュに保存
-    costCache.set(itemId, costPerGram);
+    // キャッシュに保存（Prepped Itemの場合、itemIdのみ）
+    const cacheKey = getCacheKey(itemId, "prepped", null);
+    costCache.set(cacheKey, costPerGram);
     return costPerGram;
   } finally {
     // 訪問済みマークを削除
@@ -405,8 +490,13 @@ export function clearCostCache(): void {
 /**
  * Base Itemsを取得してマップに変換（base_item_idをキーとして）
  */
-export async function getBaseItemsMap(): Promise<Map<string, BaseItem>> {
-  const { data, error } = await supabase.from("base_items").select("*");
+export async function getBaseItemsMap(
+  userId: string
+): Promise<Map<string, BaseItem>> {
+  const { data, error } = await supabase
+    .from("base_items")
+    .select("*")
+    .eq("user_id", userId);
 
   if (error) {
     throw new Error(`Failed to fetch base items: ${error.message}`);
@@ -424,8 +514,11 @@ export async function getBaseItemsMap(): Promise<Map<string, BaseItem>> {
 /**
  * Itemsを取得してマップに変換（item_idをキーとして）
  */
-export async function getItemsMap(): Promise<Map<string, Item>> {
-  const { data, error } = await supabase.from("items").select("*");
+export async function getItemsMap(userId: string): Promise<Map<string, Item>> {
+  const { data, error } = await supabase
+    .from("items")
+    .select("*")
+    .eq("user_id", userId);
 
   if (error) {
     throw new Error(`Failed to fetch items: ${error.message}`);
@@ -443,8 +536,13 @@ export async function getItemsMap(): Promise<Map<string, Item>> {
 /**
  * 役職を取得してマップに変換（nameをキーとして）
  */
-export async function getLaborRolesMap(): Promise<Map<string, LaborRole>> {
-  const { data, error } = await supabase.from("labor_roles").select("*");
+export async function getLaborRolesMap(
+  userId: string
+): Promise<Map<string, LaborRole>> {
+  const { data, error } = await supabase
+    .from("labor_roles")
+    .select("*")
+    .eq("user_id", userId);
 
   if (error) {
     throw new Error(`Failed to fetch labor roles: ${error.message}`);
@@ -462,10 +560,13 @@ export async function getLaborRolesMap(): Promise<Map<string, LaborRole>> {
 /**
  * Vendor Productsを取得してマップに変換（vendor_product_idをキーとして）
  */
-export async function getVendorProductsMap(): Promise<
-  Map<string, VendorProduct>
-> {
-  const { data, error } = await supabase.from("vendor_products").select("*");
+export async function getVendorProductsMap(
+  userId: string
+): Promise<Map<string, VendorProduct>> {
+  const { data, error } = await supabase
+    .from("vendor_products")
+    .select("*")
+    .eq("user_id", userId);
 
   if (error) {
     throw new Error(`Failed to fetch vendor products: ${error.message}`);
@@ -483,17 +584,21 @@ export async function getVendorProductsMap(): Promise<
 /**
  * コスト計算のエントリーポイント（ヘルパーデータを自動取得）
  */
-export async function calculateCost(itemId: string): Promise<number> {
+export async function calculateCost(
+  itemId: string,
+  userId: string
+): Promise<number> {
   // 計算開始時に全てのキャッシュをクリア（問題1、2、3、4の解決）
   // これにより、常に最新のデータで計算され、古いキャッシュによる問題を回避
   costCache.clear();
 
-  const baseItemsMap = await getBaseItemsMap();
-  const itemsMap = await getItemsMap();
-  const vendorProductsMap = await getVendorProductsMap();
-  const laborRoles = await getLaborRolesMap();
+  const baseItemsMap = await getBaseItemsMap(userId);
+  const itemsMap = await getItemsMap(userId);
+  const vendorProductsMap = await getVendorProductsMap(userId);
+  const laborRoles = await getLaborRolesMap(userId);
   return getCost(
     itemId,
+    userId,
     new Set(),
     baseItemsMap,
     itemsMap,
@@ -503,4 +608,445 @@ export async function calculateCost(itemId: string): Promise<number> {
   // 計算終了時のクリアは削除
   // 理由: 計算開始時にクリアするため、不要
   // 次の計算開始時に自動的にクリアされる
+}
+
+/**
+ * 複数アイテムのコストを一度に計算（最適化版）
+ * データを一度だけ取得し、キャッシュを一度だけクリアして複数アイテムを計算
+ * @param itemIds - コストを計算するアイテムIDの配列
+ * @returns アイテムIDをキー、コスト（1グラムあたり）を値とするMap
+ */
+export async function calculateCosts(
+  itemIds: string[],
+  userId: string
+): Promise<Map<string, number>> {
+  // 計算開始時に全てのキャッシュを一度だけクリア
+  costCache.clear();
+
+  // データを一度だけ取得
+  const baseItemsMap = await getBaseItemsMap(userId);
+  const itemsMap = await getItemsMap(userId);
+  const vendorProductsMap = await getVendorProductsMap(userId);
+  const laborRoles = await getLaborRolesMap(userId);
+
+  // 結果を保存するMap
+  const results = new Map<string, number>();
+
+  // 各アイテムのコストを順次計算（同じデータとキャッシュを使用）
+  for (const itemId of itemIds) {
+    try {
+      const costPerGram = await getCost(
+        itemId,
+        userId,
+        new Set(),
+        baseItemsMap,
+        itemsMap,
+        vendorProductsMap,
+        laborRoles
+      );
+      results.set(itemId, costPerGram);
+    } catch (error) {
+      // エラーが発生したアイテムはスキップ（エラーログを出力）
+      console.error(`Failed to calculate cost for item ${itemId}:`, error);
+      // エラーが発生したアイテムは結果に含めない
+    }
+  }
+
+  return results;
+}
+
+/**
+ * 依存関係の逆方向追跡: 指定されたアイテムを材料として使っている親アイテムを特定
+ * @param itemId - 材料として使われているアイテムID
+ * @param recipeLinesMap - Recipe Linesのマップ（parent_item_idをキーとして）
+ * @param visited - 訪問済みアイテムのセット（循環検出用）
+ * @returns 影響を受けるアイテムIDのセット（指定されたアイテム自体も含む）
+ */
+function findDependentItems(
+  itemId: string,
+  recipeLinesMap: Map<string, any[]>,
+  visited: Set<string> = new Set()
+): Set<string> {
+  const dependentItems = new Set<string>([itemId]);
+
+  // 循環検出
+  if (visited.has(itemId)) {
+    return dependentItems;
+  }
+
+  visited.add(itemId);
+
+  // このアイテムを材料として使っている親アイテムを検索
+  for (const [parentItemId, recipeLines] of recipeLinesMap.entries()) {
+    const usesThisItem = recipeLines.some(
+      (line) => line.line_type === "ingredient" && line.child_item_id === itemId
+    );
+
+    if (usesThisItem) {
+      dependentItems.add(parentItemId);
+      // 再帰的に、その親アイテムを材料として使っているアイテムも検索
+      const nestedDependents = findDependentItems(
+        parentItemId,
+        recipeLinesMap,
+        visited
+      );
+      nestedDependents.forEach((id) => dependentItems.add(id));
+    }
+  }
+
+  visited.delete(itemId);
+  return dependentItems;
+}
+
+/**
+ * 変更されたアイテムとその依存関係のみコストを計算（差分更新版）
+ * @param changedItemIds - 変更されたアイテムIDの配列
+ * @param recipeLinesMap - Recipe Linesのマップ（オプション、指定しない場合は取得）
+ * @returns アイテムIDをキー、コスト（1グラムあたり）を値とするMap
+ */
+export async function calculateCostsForChangedItems(
+  changedItemIds: string[],
+  userId: string,
+  recipeLinesMap?: Map<string, any[]>
+): Promise<Map<string, number>> {
+  if (changedItemIds.length === 0) {
+    return new Map();
+  }
+
+  // Recipe Linesのマップを取得（指定されていない場合）
+  if (!recipeLinesMap) {
+    const { data: allRecipeLines } = await supabase
+      .from("recipe_lines")
+      .select("*")
+      .eq("line_type", "ingredient")
+      .eq("user_id", userId);
+
+    recipeLinesMap = new Map<string, any[]>();
+    allRecipeLines?.forEach((line) => {
+      const existing = recipeLinesMap!.get(line.parent_item_id) || [];
+      existing.push(line);
+      recipeLinesMap!.set(line.parent_item_id, existing);
+    });
+  }
+
+  // 影響を受けるすべてのアイテムを特定（依存関係の逆方向追跡）
+  const affectedItemIds = new Set<string>();
+  for (const itemId of changedItemIds) {
+    const dependents = findDependentItems(itemId, recipeLinesMap, new Set());
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 影響を受けるアイテムのキャッシュのみクリア
+  for (const itemId of affectedItemIds) {
+    // Raw Itemの場合、すべてのspecificVendorProductIdのキャッシュをクリア
+    // Prepped Itemの場合、itemIdのみのキャッシュをクリア
+    const keysToDelete: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for (const [key, _unused] of costCache.entries()) {
+      if (key === itemId || key.startsWith(`${itemId}:`)) {
+        keysToDelete.push(key);
+      }
+    }
+    keysToDelete.forEach((key) => costCache.delete(key));
+  }
+
+  // データを一度だけ取得
+  const baseItemsMap = await getBaseItemsMap(userId);
+  const itemsMap = await getItemsMap(userId);
+  const vendorProductsMap = await getVendorProductsMap(userId);
+  const laborRoles = await getLaborRolesMap(userId);
+
+  // 結果を保存するMap
+  const results = new Map<string, number>();
+
+  // 影響を受けるアイテムのみコストを計算
+  for (const itemId of affectedItemIds) {
+    try {
+      const costPerGram = await getCost(
+        itemId,
+        userId,
+        new Set(),
+        baseItemsMap,
+        itemsMap,
+        vendorProductsMap,
+        laborRoles
+      );
+      results.set(itemId, costPerGram);
+    } catch (error) {
+      console.error(`Failed to calculate cost for item ${itemId}:`, error);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * vendor_product変更の影響範囲を特定
+ * @param vendorProductIds - 変更されたvendor_productのIDの配列
+ * @param itemsMap - Itemsのマップ
+ * @param recipeLinesMap - Recipe Linesのマップ
+ * @returns 影響を受けるアイテムIDのセット
+ */
+async function findItemsAffectedByVendorProductChanges(
+  vendorProductIds: string[],
+  userId: string,
+  itemsMap: Map<string, Item>,
+  recipeLinesMap: Map<string, any[]>
+): Promise<Set<string>> {
+  const affectedItemIds = new Set<string>();
+
+  // すべてのvendor_productsを取得
+  const { data: allVendorProducts } = await supabase
+    .from("vendor_products")
+    .select("*")
+    .eq("user_id", userId);
+
+  if (!allVendorProducts) {
+    return affectedItemIds;
+  }
+
+  // 変更されたvendor_productのbase_item_idを取得
+  const changedBaseItemIds = new Set<string>();
+  for (const vpId of vendorProductIds) {
+    const vp = allVendorProducts.find((vp) => vp.id === vpId);
+    if (vp?.base_item_id) {
+      changedBaseItemIds.add(vp.base_item_id);
+    }
+  }
+
+  // そのbase_item_idを持つraw itemを特定
+  const affectedRawItemIds = new Set<string>();
+  for (const [itemId, item] of itemsMap.entries()) {
+    if (
+      item.item_kind === "raw" &&
+      item.base_item_id &&
+      changedBaseItemIds.has(item.base_item_id)
+    ) {
+      affectedRawItemIds.add(itemId);
+    }
+  }
+
+  // そのraw itemを材料として使っているprepped itemを特定（依存関係の逆方向追跡）
+  for (const rawItemId of affectedRawItemIds) {
+    const dependents = findDependentItems(rawItemId, recipeLinesMap, new Set());
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  return affectedItemIds;
+}
+
+/**
+ * base_item変更の影響範囲を特定
+ * @param baseItemIds - 変更されたbase_itemのIDの配列
+ * @param itemsMap - Itemsのマップ
+ * @param recipeLinesMap - Recipe Linesのマップ
+ * @returns 影響を受けるアイテムIDのセット
+ */
+function findItemsAffectedByBaseItemChanges(
+  baseItemIds: string[],
+  itemsMap: Map<string, Item>,
+  recipeLinesMap: Map<string, any[]>
+): Set<string> {
+  const affectedItemIds = new Set<string>();
+
+  // そのbase_item_idを持つraw itemを特定
+  const affectedRawItemIds = new Set<string>();
+  for (const [itemId, item] of itemsMap.entries()) {
+    if (
+      item.item_kind === "raw" &&
+      item.base_item_id &&
+      baseItemIds.includes(item.base_item_id)
+    ) {
+      affectedRawItemIds.add(itemId);
+    }
+  }
+
+  // そのraw itemを材料として使っているprepped itemを特定（依存関係の逆方向追跡）
+  for (const rawItemId of affectedRawItemIds) {
+    const dependents = findDependentItems(rawItemId, recipeLinesMap, new Set());
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  return affectedItemIds;
+}
+
+/**
+ * labor_role変更の影響範囲を特定
+ * @param laborRoleNames - 変更されたlabor_roleのnameの配列
+ * @param recipeLinesMap - Recipe Linesのマップ（すべてのレシピライン、ingredientとlaborの両方）
+ * @returns 影響を受けるアイテムIDのセット
+ */
+function findItemsAffectedByLaborRoleChanges(
+  laborRoleNames: string[],
+  recipeLinesMap: Map<string, any[]>
+): Set<string> {
+  const affectedItemIds = new Set<string>();
+
+  // そのlabor_roleを使っているrecipe lineを持つprepped itemを特定
+  const directlyAffectedItemIds = new Set<string>();
+  for (const [parentItemId, recipeLines] of recipeLinesMap.entries()) {
+    const usesChangedLaborRole = recipeLines.some(
+      (line) =>
+        line.line_type === "labor" &&
+        line.labor_role &&
+        laborRoleNames.includes(line.labor_role)
+    );
+
+    if (usesChangedLaborRole) {
+      directlyAffectedItemIds.add(parentItemId);
+    }
+  }
+
+  // そのprepped itemを材料として使っているprepped itemを特定（依存関係の逆方向追跡）
+  // labor lineのみのrecipeLinesMapを作成（ingredient lineのみ）
+  const ingredientRecipeLinesMap = new Map<string, any[]>();
+  for (const [parentItemId, recipeLines] of recipeLinesMap.entries()) {
+    const ingredientLines = recipeLines.filter(
+      (line) => line.line_type === "ingredient"
+    );
+    if (ingredientLines.length > 0) {
+      ingredientRecipeLinesMap.set(parentItemId, ingredientLines);
+    }
+  }
+
+  for (const itemId of directlyAffectedItemIds) {
+    affectedItemIds.add(itemId);
+    const dependents = findDependentItems(
+      itemId,
+      ingredientRecipeLinesMap,
+      new Set()
+    );
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  return affectedItemIds;
+}
+
+/**
+ * すべての変更を統合して、影響を受けるアイテムを特定し、差分更新でコストを計算
+ * @param changedItemIds - 変更されたアイテムIDの配列（recipe_linesの変更による）
+ * @param changedVendorProductIds - 変更されたvendor_productのIDの配列
+ * @param changedBaseItemIds - 変更されたbase_itemのIDの配列
+ * @param changedLaborRoleNames - 変更されたlabor_roleのnameの配列
+ * @returns アイテムIDをキー、コスト（1グラムあたり）を値とするMap
+ */
+export async function calculateCostsForAllChanges(
+  changedItemIds: string[] = [],
+  changedVendorProductIds: string[] = [],
+  changedBaseItemIds: string[] = [],
+  changedLaborRoleNames: string[] = [],
+  userId: string
+): Promise<Map<string, number>> {
+  // すべてのアイテムとレシピラインを取得
+  const itemsMap = await getItemsMap(userId);
+  const { data: allRecipeLines } = await supabase
+    .from("recipe_lines")
+    .select("*")
+    .eq("user_id", userId);
+
+  // Recipe Linesのマップを作成（ingredientとlaborの両方）
+  const recipeLinesMap = new Map<string, any[]>();
+  allRecipeLines?.forEach((line) => {
+    const existing = recipeLinesMap.get(line.parent_item_id) || [];
+    existing.push(line);
+    recipeLinesMap.set(line.parent_item_id, existing);
+  });
+
+  // IngredientのみのRecipe Linesのマップ（依存関係追跡用）
+  const ingredientRecipeLinesMap = new Map<string, any[]>();
+  allRecipeLines?.forEach((line) => {
+    if (line.line_type === "ingredient") {
+      const existing = ingredientRecipeLinesMap.get(line.parent_item_id) || [];
+      existing.push(line);
+      ingredientRecipeLinesMap.set(line.parent_item_id, existing);
+    }
+  });
+
+  // 影響を受けるすべてのアイテムを特定
+  const affectedItemIds = new Set<string>();
+
+  // 1. 変更されたアイテム（recipe_linesの変更による）
+  for (const itemId of changedItemIds) {
+    const dependents = findDependentItems(
+      itemId,
+      ingredientRecipeLinesMap,
+      new Set()
+    );
+    dependents.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 2. vendor_product変更の影響
+  if (changedVendorProductIds.length > 0) {
+    const vendorProductAffected = await findItemsAffectedByVendorProductChanges(
+      changedVendorProductIds,
+      userId,
+      itemsMap,
+      ingredientRecipeLinesMap
+    );
+    vendorProductAffected.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 3. base_item変更の影響
+  if (changedBaseItemIds.length > 0) {
+    const baseItemAffected = findItemsAffectedByBaseItemChanges(
+      changedBaseItemIds,
+      itemsMap,
+      ingredientRecipeLinesMap
+    );
+    baseItemAffected.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 4. labor_role変更の影響
+  if (changedLaborRoleNames.length > 0) {
+    const laborRoleAffected = findItemsAffectedByLaborRoleChanges(
+      changedLaborRoleNames,
+      recipeLinesMap
+    );
+    laborRoleAffected.forEach((id) => affectedItemIds.add(id));
+  }
+
+  // 影響を受けるアイテムがなければ空のMapを返す
+  if (affectedItemIds.size === 0) {
+    return new Map();
+  }
+
+  // 影響を受けるアイテムのキャッシュのみクリア
+  for (const itemId of affectedItemIds) {
+    const keysToDelete: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for (const [key, _unused] of costCache.entries()) {
+      if (key === itemId || key.startsWith(`${itemId}:`)) {
+        keysToDelete.push(key);
+      }
+    }
+    keysToDelete.forEach((key) => costCache.delete(key));
+  }
+
+  // データを一度だけ取得
+  const baseItemsMap = await getBaseItemsMap(userId);
+  const vendorProductsMap = await getVendorProductsMap(userId);
+  const laborRoles = await getLaborRolesMap(userId);
+
+  // 結果を保存するMap
+  const results = new Map<string, number>();
+
+  // 影響を受けるアイテムのみコストを計算
+  for (const itemId of affectedItemIds) {
+    try {
+      const costPerGram = await getCost(
+        itemId,
+        userId,
+        new Set(),
+        baseItemsMap,
+        itemsMap,
+        vendorProductsMap,
+        laborRoles
+      );
+      results.set(itemId, costPerGram);
+    } catch (error) {
+      console.error(`Failed to calculate cost for item ${itemId}:`, error);
+    }
+  }
+
+  return results;
 }

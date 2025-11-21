@@ -3,18 +3,151 @@
  * バックエンドAPIとの通信を管理
  */
 
+import { createClient } from "./supabase-client";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+
+/**
+ * 変更履歴をlocalStorageに保存（Costingページの差分更新用）
+ */
+export function saveChangeHistory(changes: {
+  changed_item_ids?: string[];
+  changed_vendor_product_ids?: string[];
+  changed_base_item_ids?: string[];
+  changed_labor_role_names?: string[];
+}) {
+  try {
+    // 既存の変更履歴を取得
+    const existingStr = localStorage.getItem("costing_change_history");
+    let existing: typeof changes = {};
+    if (existingStr) {
+      try {
+        existing = JSON.parse(existingStr);
+      } catch (e) {
+        console.error("Failed to parse existing change history:", e);
+      }
+    }
+
+    // 変更をマージ（重複を除去）
+    const merged: typeof changes = {
+      changed_item_ids: [
+        ...new Set([
+          ...(existing.changed_item_ids || []),
+          ...(changes.changed_item_ids || []),
+        ]),
+      ],
+      changed_vendor_product_ids: [
+        ...new Set([
+          ...(existing.changed_vendor_product_ids || []),
+          ...(changes.changed_vendor_product_ids || []),
+        ]),
+      ],
+      changed_base_item_ids: [
+        ...new Set([
+          ...(existing.changed_base_item_ids || []),
+          ...(changes.changed_base_item_ids || []),
+        ]),
+      ],
+      changed_labor_role_names: [
+        ...new Set([
+          ...(existing.changed_labor_role_names || []),
+          ...(changes.changed_labor_role_names || []),
+        ]),
+      ],
+    };
+
+    // 空の配列は削除
+    if (merged.changed_item_ids?.length === 0) delete merged.changed_item_ids;
+    if (merged.changed_vendor_product_ids?.length === 0)
+      delete merged.changed_vendor_product_ids;
+    if (merged.changed_base_item_ids?.length === 0)
+      delete merged.changed_base_item_ids;
+    if (merged.changed_labor_role_names?.length === 0)
+      delete merged.changed_labor_role_names;
+
+    // localStorageに保存
+    try {
+      localStorage.setItem("costing_change_history", JSON.stringify(merged));
+    } catch (storageError: unknown) {
+      // QuotaExceededError → 古い履歴の半分を削除して再試行
+      if (
+        (storageError as Error).name === "QuotaExceededError" ||
+        (storageError as { code?: number }).code === 22
+      ) {
+        console.warn(
+          "LocalStorage quota exceeded. Clearing old history and retrying..."
+        );
+
+        // 各配列の古い半分を削除
+        const halfLength = (arr: string[] | undefined) =>
+          arr ? Math.floor(arr.length / 2) : 0;
+
+        const reduced: typeof changes = {
+          changed_item_ids: merged.changed_item_ids?.slice(
+            halfLength(merged.changed_item_ids)
+          ),
+          changed_vendor_product_ids: merged.changed_vendor_product_ids?.slice(
+            halfLength(merged.changed_vendor_product_ids)
+          ),
+          changed_base_item_ids: merged.changed_base_item_ids?.slice(
+            halfLength(merged.changed_base_item_ids)
+          ),
+          changed_labor_role_names: merged.changed_labor_role_names?.slice(
+            halfLength(merged.changed_labor_role_names)
+          ),
+        };
+
+        try {
+          localStorage.setItem(
+            "costing_change_history",
+            JSON.stringify(reduced)
+          );
+          console.log("Successfully saved reduced change history.");
+        } catch (retryError) {
+          console.error(
+            "Failed to save even after reducing history:",
+            retryError
+          );
+        }
+      } else {
+        throw storageError;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to save change history:", error);
+  }
+}
+
+/**
+ * 変更履歴を取得してクリア（Cost Pageで使用）
+ */
+export function getAndClearChangeHistory() {
+  try {
+    const historyStr = localStorage.getItem("costing_change_history");
+    if (historyStr) {
+      localStorage.removeItem("costing_change_history");
+      return JSON.parse(historyStr);
+    }
+    return null;
+  } catch (error) {
+    console.error("Failed to get and clear change history:", error);
+    return null;
+  }
+}
 
 // 型定義
 export interface BaseItem {
   id: string;
   name: string;
   specific_weight?: number | null; // g/ml for non-mass units (gallon, liter, floz)
+  deprecated?: string | null; // timestamp when deprecated
+  user_id: string; // FK to users
 }
 
 export interface Vendor {
   id: string;
   name: string;
+  user_id: string; // FK to users
 }
 
 export interface VendorProduct {
@@ -26,6 +159,8 @@ export interface VendorProduct {
   purchase_unit: string;
   purchase_quantity: number;
   purchase_cost: number;
+  deprecated?: string | null; // timestamp when deprecated
+  user_id: string; // FK to users
 }
 
 export interface Item {
@@ -41,6 +176,11 @@ export interface Item {
   // Common fields
   each_grams?: number | null; // grams for 'each' unit (used for both raw and prepped items)
   notes?: string | null;
+  deprecated?: string | null; // timestamp when deprecated
+  deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
+  wholesale?: number | null; // wholesale price
+  retail?: number | null; // retail price
+  user_id: string; // FK to users
 }
 
 export interface RecipeLine {
@@ -50,14 +190,18 @@ export interface RecipeLine {
   child_item_id?: string | null;
   quantity?: number | null;
   unit?: string | null;
+  specific_child?: string | null; // "lowest" or vendor_product.id (only for raw items)
   labor_role?: string | null;
   minutes?: number | null;
+  last_change?: string | null; // vendor product change history
+  user_id: string; // FK to users
 }
 
 export interface LaborRole {
   id: string;
   name: string;
   hourly_wage: number;
+  user_id: string; // FK to users
 }
 
 export interface NonMassUnit {
@@ -65,24 +209,58 @@ export interface NonMassUnit {
   name: string;
 }
 
-// API呼び出しヘルパー
-async function fetchAPI<T>(
+/**
+ * 認証付きAPIリクエスト
+ * セッションからアクセストークンを取得してAuthorizationヘッダーに追加
+ */
+export async function apiRequest<T>(
   endpoint: string,
-  options?: RequestInit
+  options: RequestInit = {}
 ): Promise<T> {
+  const supabase = createClient();
+  const {
+    data: { session },
+    error: sessionError,
+  } = await supabase.auth.getSession();
+
+  if (sessionError || !session) {
+    console.error("No session found or session error:", sessionError);
+    // 認証エラー時にログインページにリダイレクト
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+    throw new Error("Authentication required.");
+  }
+
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...options?.headers,
+      Authorization: `Bearer ${session.access_token}`,
+      ...options.headers,
     },
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({
-      error: `HTTP ${response.status}: ${response.statusText}`,
-    }));
-    throw new Error(error.error || "API request failed");
+    // 401エラー（認証エラー）の場合はログインページにリダイレクト
+    if (response.status === 401) {
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+      throw new Error("Authentication required.");
+    }
+
+    let errorData: unknown;
+    try {
+      errorData = await response.json();
+    } catch {
+      errorData = { message: response.statusText };
+    }
+    throw new Error(
+      (errorData as { error?: string; message?: string }).error ||
+        (errorData as { error?: string; message?: string }).message ||
+        "API request failed"
+    );
   }
 
   if (response.status === 204) {
@@ -90,6 +268,14 @@ async function fetchAPI<T>(
   }
 
   return response.json();
+}
+
+// API呼び出しヘルパー（後方互換性のため残すが、apiRequestを使用）
+async function fetchAPI<T>(
+  endpoint: string,
+  options?: RequestInit
+): Promise<T> {
+  return apiRequest<T>(endpoint, options);
 }
 
 // Items API
@@ -117,12 +303,28 @@ export const itemsAPI = {
     fetchAPI<void>(`/items/${id}`, {
       method: "DELETE",
     }),
+  deprecate: (id: string) =>
+    fetchAPI<{ message: string; affectedItems?: string[] }>(
+      `/items/${id}/deprecate`,
+      {
+        method: "PATCH",
+      }
+    ),
 };
 
 // Recipe Lines API
 export const recipeLinesAPI = {
   getByItemId: (itemId: string) =>
     fetchAPI<RecipeLine[]>(`/items/${itemId}/recipe`),
+  getByItemIds: (itemIds: string[]) => {
+    return fetchAPI<{ recipes: Record<string, RecipeLine[]> }>(
+      "/items/recipes",
+      {
+        method: "POST",
+        body: JSON.stringify({ item_ids: itemIds }),
+      }
+    );
+  },
   create: (line: Partial<RecipeLine>) =>
     fetchAPI<RecipeLine>("/recipe-lines", {
       method: "POST",
@@ -137,6 +339,20 @@ export const recipeLinesAPI = {
     fetchAPI<void>(`/recipe-lines/${id}`, {
       method: "DELETE",
     }),
+  batch: (operations: {
+    creates: Partial<RecipeLine>[];
+    updates: (Partial<RecipeLine> & { id: string })[];
+    deletes: string[];
+  }) => {
+    return fetchAPI<{
+      created: RecipeLine[];
+      updated: RecipeLine[];
+      deleted: string[];
+    }>("/recipe-lines/batch", {
+      method: "POST",
+      body: JSON.stringify(operations),
+    });
+  },
 };
 
 // Cost API
@@ -146,6 +362,43 @@ export const costAPI = {
     return fetchAPI<{ item_id: string; cost_per_gram: number }>(
       `/items/${itemId}/cost${query}`
     );
+  },
+  getCosts: (itemIds: string[]) => {
+    return fetchAPI<{ costs: Record<string, number> }>("/items/costs", {
+      method: "POST",
+      body: JSON.stringify({ item_ids: itemIds }),
+    });
+  },
+  getCostsDifferential: (params: {
+    changed_item_ids?: string[];
+    changed_vendor_product_ids?: string[];
+    changed_base_item_ids?: string[];
+    changed_labor_role_names?: string[];
+  }) => {
+    return fetchAPI<{ costs: Record<string, number> }>(
+      "/items/costs/differential",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          changed_item_ids: params.changed_item_ids || [],
+          changed_vendor_product_ids: params.changed_vendor_product_ids || [],
+          changed_base_item_ids: params.changed_base_item_ids || [],
+          changed_labor_role_names: params.changed_labor_role_names || [],
+        }),
+      }
+    );
+  },
+  getCostsBreakdown: () => {
+    return fetchAPI<{
+      costs: Record<
+        string,
+        {
+          food_cost_per_gram: number;
+          labor_cost_per_gram: number;
+          total_cost_per_gram: number;
+        }
+      >;
+    }>("/items/costs/breakdown");
   },
 };
 
@@ -166,6 +419,10 @@ export const baseItemsAPI = {
   delete: (id: string) =>
     fetchAPI<void>(`/base-items/${id}`, {
       method: "DELETE",
+    }),
+  deprecate: (id: string) =>
+    fetchAPI<{ message: string }>(`/base-items/${id}/deprecate`, {
+      method: "PATCH",
     }),
 };
 
@@ -207,6 +464,13 @@ export const vendorProductsAPI = {
     fetchAPI<void>(`/vendor-products/${id}`, {
       method: "DELETE",
     }),
+  deprecate: (id: string) =>
+    fetchAPI<{ message: string; affectedItems?: string[] }>(
+      `/vendor-products/${id}/deprecate`,
+      {
+        method: "PATCH",
+      }
+    ),
 };
 
 // Labor Roles API

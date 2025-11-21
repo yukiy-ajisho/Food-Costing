@@ -7,6 +7,7 @@ import {
   itemsAPI,
   baseItemsAPI,
   vendorsAPI,
+  saveChangeHistory,
   type Item,
   type BaseItem as APIBaseItem,
   type Vendor,
@@ -119,9 +120,10 @@ export default function ItemsPage() {
         setVendors(vendorsData);
         setItems(itemsData);
 
-        // VendorProductUI形式に変換
-        const vendorProductsUI: VendorProductUI[] = vendorProductsData.map(
-          (vp) => {
+        // VendorProductUI形式に変換（deprecatedを除外）
+        const vendorProductsUI: VendorProductUI[] = vendorProductsData
+          .filter((vp) => !vp.deprecated)
+          .map((vp) => {
             // 対応するitemを取得（each_gramsを取得するため）
             const item = itemsData.find(
               (i) => i.base_item_id === vp.base_item_id
@@ -155,8 +157,7 @@ export default function ItemsPage() {
               each_grams: item?.each_grams || null,
               needsWarning,
             };
-          }
-        );
+          });
 
         setVendorProducts(vendorProductsUI);
         setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
@@ -198,18 +199,22 @@ export default function ItemsPage() {
           itemsAPI.getAll({ item_kind: "raw" }),
         ]);
 
-        // Base Itemに対応するItemsレコードからeach_gramsを取得
-        const baseItemsUI: BaseItemUI[] = baseItemsData.map((baseItem) => {
-          const correspondingItem = itemsData.find(
-            (item) => item.base_item_id === baseItem.id
-          );
-          return {
-            id: baseItem.id,
-            name: baseItem.name,
-            specific_weight: baseItem.specific_weight,
-            each_grams: correspondingItem?.each_grams || null,
-          };
-        });
+        // Base Itemに対応するItemsレコードからeach_gramsを取得（deprecatedを除外）
+        const baseItemsUI: BaseItemUI[] = baseItemsData
+          .filter((baseItem) => !baseItem.deprecated)
+          .map((baseItem) => {
+            const correspondingItem = itemsData.find(
+              (item) => item.base_item_id === baseItem.id
+            );
+            return {
+              id: baseItem.id,
+              name: baseItem.name,
+              specific_weight: baseItem.specific_weight || null,
+              each_grams: correspondingItem?.each_grams || null,
+              isNew: false,
+              isMarkedForDeletion: false,
+            };
+          });
         setBaseItemsUI(baseItemsUI);
         setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUI)));
         setHasLoadedBaseItemsOnce(true);
@@ -297,11 +302,14 @@ export default function ItemsPage() {
         return true;
       });
 
+      // 変更されたvendor_productのIDを追跡
+      const changedVendorProductIds: string[] = [];
+
       // API呼び出し
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
           // 新規作成: vendor_productsを作成（自動的にitemsも作成される）
-          await vendorProductsAPI.create({
+          const newVp = await vendorProductsAPI.create({
             base_item_id: vp.base_item_id,
             vendor_id: vp.vendor_id,
             product_name: vp.product_name || null,
@@ -310,6 +318,7 @@ export default function ItemsPage() {
             purchase_quantity: vp.purchase_quantity,
             purchase_cost: vp.purchase_cost,
           });
+          changedVendorProductIds.push(newVp.id);
 
           // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         } else {
@@ -323,16 +332,26 @@ export default function ItemsPage() {
             purchase_quantity: vp.purchase_quantity,
             purchase_cost: vp.purchase_cost,
           });
+          changedVendorProductIds.push(vp.id);
 
           // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         }
       }
 
-      // 削除処理
+      // Deprecate処理
       for (const vp of vendorProducts) {
         if (vp.isMarkedForDeletion && !vp.isNew) {
-          await vendorProductsAPI.delete(vp.id);
+          // 削除ではなくdeprecateを使用
+          await vendorProductsAPI.deprecate(vp.id);
+          changedVendorProductIds.push(vp.id);
         }
+      }
+
+      // 変更履歴をlocalStorageに保存
+      if (changedVendorProductIds.length > 0) {
+        saveChangeHistory({
+          changed_vendor_product_ids: changedVendorProductIds,
+        });
       }
 
       // データを再取得
@@ -348,8 +367,9 @@ export default function ItemsPage() {
       setVendors(vendorsData);
       setItems(itemsData);
 
-      const vendorProductsUI: VendorProductUI[] = vendorProductsData.map(
-        (vp) => {
+      const vendorProductsUI: VendorProductUI[] = vendorProductsData
+        .filter((vp) => !vp.deprecated)
+        .map((vp) => {
           const item = itemsData.find(
             (i) => i.base_item_id === vp.base_item_id
           );
@@ -376,8 +396,7 @@ export default function ItemsPage() {
             each_grams: item?.each_grams || null,
             needsWarning,
           };
-        }
-      );
+        });
 
       setVendorProducts(vendorProductsUI);
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
@@ -479,6 +498,10 @@ export default function ItemsPage() {
         return true;
       });
 
+      // 変更されたbase_item_idとitem_idを追跡
+      const changedBaseItemIds: string[] = [];
+      const changedItemIds: string[] = [];
+
       for (const item of filteredBaseItems) {
         let baseItemId: string;
 
@@ -489,6 +512,7 @@ export default function ItemsPage() {
             specific_weight: item.specific_weight || null,
           });
           baseItemId = newBaseItem.id;
+          changedBaseItemIds.push(baseItemId);
         } else {
           // Base Itemを更新
           await baseItemsAPI.update(item.id, {
@@ -496,6 +520,7 @@ export default function ItemsPage() {
             specific_weight: item.specific_weight || null,
           });
           baseItemId = item.id;
+          changedBaseItemIds.push(baseItemId);
         }
 
         // 対応するitemsレコードを取得または作成
@@ -514,20 +539,32 @@ export default function ItemsPage() {
             each_grams: item.each_grams || null,
           });
           correspondingItem = newItem;
+          changedItemIds.push(newItem.id);
         } else {
           // itemsレコードが存在する場合は、each_gramsを更新
           if (item.each_grams !== undefined) {
             await itemsAPI.update(correspondingItem.id, {
               each_grams: item.each_grams || null,
             });
+            changedItemIds.push(correspondingItem.id);
           }
         }
       }
 
       for (const item of baseItemsUI) {
         if (item.isMarkedForDeletion && !item.isNew) {
-          await baseItemsAPI.delete(item.id);
+          // 削除ではなくdeprecateを使用
+          await baseItemsAPI.deprecate(item.id);
+          changedBaseItemIds.push(item.id);
         }
+      }
+
+      // 変更履歴をlocalStorageに保存
+      if (changedBaseItemIds.length > 0 || changedItemIds.length > 0) {
+        saveChangeHistory({
+          changed_base_item_ids: changedBaseItemIds,
+          changed_item_ids: changedItemIds,
+        });
       }
 
       // データを再取得
@@ -536,17 +573,20 @@ export default function ItemsPage() {
         itemsAPI.getAll({ item_kind: "raw" }),
       ]);
 
-      const baseItemsUIUpdated: BaseItemUI[] = baseItemsData.map((baseItem) => {
-        const correspondingItem = itemsData.find(
-          (item) => item.base_item_id === baseItem.id
-        );
-        return {
-          id: baseItem.id,
-          name: baseItem.name,
-          specific_weight: baseItem.specific_weight,
-          each_grams: correspondingItem?.each_grams || null,
-        };
-      });
+      // deprecatedされていないアイテムのみ表示
+      const baseItemsUIUpdated: BaseItemUI[] = baseItemsData
+        .filter((baseItem) => !baseItem.deprecated)
+        .map((baseItem) => {
+          const correspondingItem = itemsData.find(
+            (item) => item.base_item_id === baseItem.id
+          );
+          return {
+            id: baseItem.id,
+            name: baseItem.name,
+            specific_weight: baseItem.specific_weight,
+            each_grams: correspondingItem?.each_grams || null,
+          };
+        });
 
       setBaseItemsUI(baseItemsUIUpdated);
       setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUIUpdated)));
@@ -710,12 +750,6 @@ export default function ItemsPage() {
   //   name: vendor.name,
   // })); // 未使用のためコメントアウト
 
-  // 現在のタブのローディング状態
-  const isLoading =
-    (activeTab === "items" && loadingItems) ||
-    (activeTab === "raw-items" && loadingBaseItems) ||
-    (activeTab === "vendors" && loadingVendors);
-
   // 現在のタブのEditモード
   const isEditMode =
     (activeTab === "items" && isEditModeItems) ||
@@ -741,14 +775,6 @@ export default function ItemsPage() {
     else if (activeTab === "vendors") handleSaveClickVendors();
   };
 
-  if (isLoading) {
-    return (
-      <div className="p-8">
-        <div className="max-w-7xl mx-auto text-center">Loading...</div>
-      </div>
-    );
-  }
-
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
@@ -763,7 +789,7 @@ export default function ItemsPage() {
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
-              Items
+              Vendor Items
             </button>
             <button
               onClick={() => setActiveTab("raw-items")}
@@ -820,556 +846,1012 @@ export default function ItemsPage() {
 
         {/* Itemsタブ（vendor_productsテーブルを操作） */}
         {activeTab === "items" && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Base Item Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Vendor Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Product Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Brand Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Unit
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Quantity
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Cost
-                  </th>
-                  {isEditModeItems && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
-                      {/* ゴミ箱列のヘッダー */}
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {vendorProducts.map((vp) => (
-                  <Fragment key={vp.id}>
-                    <tr
-                      className={`${
-                        vp.isMarkedForDeletion ? "bg-red-50" : ""
-                      } hover:bg-gray-50`}
-                    >
-                      {/* Base Item Name */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditModeItems ? (
-                          <SearchableSelect
-                            options={baseItems.map((b) => ({
-                              id: b.id,
-                              name: b.name,
-                            }))}
-                            value={vp.base_item_id}
-                            onChange={(value) =>
-                              handleVendorProductChange(
-                                vp.id,
-                                "base_item_id",
-                                value
-                              )
-                            }
-                            placeholder="Select base item"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {baseItems.find((b) => b.id === vp.base_item_id)
-                              ?.name || "-"}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Vendor Name */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditModeItems ? (
-                          <SearchableSelect
-                            options={vendors.map((v) => ({
-                              id: v.id,
-                              name: v.name,
-                            }))}
-                            value={vp.vendor_id}
-                            onChange={(value) =>
-                              handleVendorProductChange(
-                                vp.id,
-                                "vendor_id",
-                                value
-                              )
-                            }
-                            placeholder="Select vendor"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {vendors.find((v) => v.id === vp.vendor_id)?.name ||
-                              "-"}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Product Name */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditModeItems ? (
-                          <input
-                            type="text"
-                            value={vp.product_name || ""}
-                            onChange={(e) =>
-                              handleVendorProductChange(
-                                vp.id,
-                                "product_name",
-                                e.target.value
-                              )
-                            }
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Product name"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {vp.product_name}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Brand Name */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditModeItems ? (
-                          <input
-                            type="text"
-                            value={vp.brand_name || ""}
-                            onChange={(e) =>
-                              handleVendorProductChange(
-                                vp.id,
-                                "brand_name",
-                                e.target.value || null
-                              )
-                            }
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Brand name (optional)"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {vp.brand_name || "-"}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Unit */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          {isEditModeItems ? (
-                            <select
-                              value={vp.purchase_unit}
-                              onChange={(e) =>
-                                handleVendorProductChange(
-                                  vp.id,
-                                  "purchase_unit",
-                                  e.target.value
-                                )
-                              }
-                              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            >
-                              {unitOptions.map((unit) => {
-                                // eachの場合、対応するitemsレコードのeach_gramsを確認
-                                let isEachDisabled = false;
-                                if (unit === "each" && vp.base_item_id) {
-                                  const correspondingItem = items.find(
-                                    (i) => i.base_item_id === vp.base_item_id
-                                  );
-                                  isEachDisabled =
-                                    !correspondingItem?.each_grams ||
-                                    correspondingItem.each_grams === 0;
-                                }
-
-                                return (
-                                  <option
-                                    key={unit}
-                                    value={unit}
-                                    disabled={isEachDisabled}
-                                    title={
-                                      isEachDisabled
-                                        ? "Please set each_grams in the Base Items tab"
-                                        : ""
-                                    }
-                                  >
-                                    {unit}
-                                    {isEachDisabled && " (setup required)"}
-                                  </option>
-                                );
-                              })}
-                            </select>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm text-gray-900">
-                                {vp.purchase_unit}
-                              </span>
-                              {/* 警告（赤点） */}
-                              {vp.needsWarning && (
-                                <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-                              )}
-                              {/* each_gramsが設定されている場合、表示 */}
-                              {vp.purchase_unit === "each" && vp.each_grams && (
-                                <span className="text-xs text-gray-500">
-                                  ({vp.each_grams}g)
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Quantity */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditModeItems ? (
-                          <input
-                            type="number"
-                            value={
-                              vp.purchase_quantity === 0
-                                ? ""
-                                : String(vp.purchase_quantity)
-                            }
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              const numValue =
-                                value === "" ? 0 : parseFloat(value) || 0;
-                              handleVendorProductChange(
-                                vp.id,
-                                "purchase_quantity",
-                                numValue
-                              );
-                            }}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="0"
-                            min="0"
-                            step="0.01"
-                          />
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            {vp.purchase_quantity}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* Cost */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {isEditModeItems ? (
-                          <div className="flex items-center gap-1">
-                            <span className="text-gray-500">$</span>
-                            <input
-                              type="number"
-                              value={
-                                vp.purchase_cost === 0
-                                  ? ""
-                                  : String(vp.purchase_cost)
-                              }
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                const numValue =
-                                  value === "" ? 0 : parseFloat(value) || 0;
-                                handleVendorProductChange(
-                                  vp.id,
-                                  "purchase_cost",
-                                  numValue
-                                );
-                              }}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="0.00"
-                              min="0"
-                              step="0.01"
-                            />
-                          </div>
-                        ) : (
-                          <div className="text-sm text-gray-900">
-                            ${vp.purchase_cost.toFixed(2)}
-                          </div>
-                        )}
-                      </td>
-
-                      {/* ゴミ箱 */}
+          <>
+            {loadingItems ? (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+                Loading...
+              </div>
+            ) : (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Base Item Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Vendor Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Product Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Brand Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Unit
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Quantity
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Cost
+                      </th>
                       {isEditModeItems && (
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <button
-                            onClick={() => handleDeleteClickItems(vp.id)}
-                            className={`p-2 rounded-md transition-colors ${
-                              vp.isMarkedForDeletion
-                                ? "bg-red-500 text-white hover:bg-red-600"
-                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                            }`}
-                            title="Mark for deletion"
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </td>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                          {/* ゴミ箱列のヘッダー */}
+                        </th>
                       )}
                     </tr>
-                  </Fragment>
-                ))}
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {vendorProducts.map((vp) => (
+                      <Fragment key={vp.id}>
+                        <tr
+                          className={`${
+                            vp.isMarkedForDeletion ? "bg-red-50" : ""
+                          } hover:bg-gray-50`}
+                          style={{
+                            height: "52px",
+                            minHeight: "52px",
+                            maxHeight: "52px",
+                          }}
+                        >
+                          {/* Base Item Name */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeItems ? (
+                                <SearchableSelect
+                                  options={baseItems.map((b) => ({
+                                    id: b.id,
+                                    name: b.name,
+                                  }))}
+                                  value={vp.base_item_id}
+                                  onChange={(value) =>
+                                    handleVendorProductChange(
+                                      vp.id,
+                                      "base_item_id",
+                                      value
+                                    )
+                                  }
+                                  placeholder="Select base item"
+                                />
+                              ) : (
+                                <div
+                                  className="text-sm text-gray-900"
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {baseItems.find(
+                                    (b) => b.id === vp.base_item_id
+                                  )?.name || "-"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
 
-                {/* プラスマーク行 */}
-                {isEditModeItems && (
-                  <tr>
-                    <td colSpan={isEditModeItems ? 8 : 7} className="px-6 py-4">
-                      <button
-                        onClick={() =>
-                          handleAddClickItems(
-                            vendorProducts.length > 0
-                              ? vendorProducts[vendorProducts.length - 1].id
-                              : ""
-                          )
-                        }
-                        className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                      >
-                        <Plus className="w-5 h-5" />
-                        <span>Add new vendor product</span>
-                      </button>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                          {/* Vendor Name */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeItems ? (
+                                <SearchableSelect
+                                  options={vendors.map((v) => ({
+                                    id: v.id,
+                                    name: v.name,
+                                  }))}
+                                  value={vp.vendor_id}
+                                  onChange={(value) =>
+                                    handleVendorProductChange(
+                                      vp.id,
+                                      "vendor_id",
+                                      value
+                                    )
+                                  }
+                                  placeholder="Select vendor"
+                                />
+                              ) : (
+                                <div
+                                  className="text-sm text-gray-900"
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {vendors.find((v) => v.id === vp.vendor_id)
+                                    ?.name || "-"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Product Name */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeItems ? (
+                                <input
+                                  type="text"
+                                  value={vp.product_name || ""}
+                                  onChange={(e) =>
+                                    handleVendorProductChange(
+                                      vp.id,
+                                      "product_name",
+                                      e.target.value
+                                    )
+                                  }
+                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="Product name"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  className="text-sm text-gray-900"
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {vp.product_name}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Brand Name */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeItems ? (
+                                <input
+                                  type="text"
+                                  value={vp.brand_name || ""}
+                                  onChange={(e) =>
+                                    handleVendorProductChange(
+                                      vp.id,
+                                      "brand_name",
+                                      e.target.value || null
+                                    )
+                                  }
+                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="Brand name (optional)"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  className="text-sm text-gray-900"
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {vp.brand_name || "-"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Unit */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className="flex items-center gap-2"
+                                style={{ height: "20px" }}
+                              >
+                                {isEditModeItems ? (
+                                  <select
+                                    value={vp.purchase_unit}
+                                    onChange={(e) =>
+                                      handleVendorProductChange(
+                                        vp.id,
+                                        "purchase_unit",
+                                        e.target.value
+                                      )
+                                    }
+                                    className="flex-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    style={{
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
+                                  >
+                                    {unitOptions.map((unit) => {
+                                      // eachの場合、対応するitemsレコードのeach_gramsを確認
+                                      let isEachDisabled = false;
+                                      if (unit === "each" && vp.base_item_id) {
+                                        const correspondingItem = items.find(
+                                          (i) =>
+                                            i.base_item_id === vp.base_item_id
+                                        );
+                                        isEachDisabled =
+                                          !correspondingItem?.each_grams ||
+                                          correspondingItem.each_grams === 0;
+                                      }
+
+                                      return (
+                                        <option
+                                          key={unit}
+                                          value={unit}
+                                          disabled={isEachDisabled}
+                                          title={
+                                            isEachDisabled
+                                              ? "Please set each_grams in the Base Items tab"
+                                              : ""
+                                          }
+                                        >
+                                          {unit}
+                                          {isEachDisabled &&
+                                            " (setup required)"}
+                                        </option>
+                                      );
+                                    })}
+                                  </select>
+                                ) : (
+                                  <div
+                                    className="flex items-center gap-2"
+                                    style={{ height: "20px" }}
+                                  >
+                                    <span
+                                      className="text-sm text-gray-900"
+                                      style={{
+                                        height: "20px",
+                                        lineHeight: "20px",
+                                      }}
+                                    >
+                                      {vp.purchase_unit}
+                                    </span>
+                                    {/* 警告（赤点） */}
+                                    {vp.needsWarning && (
+                                      <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                                    )}
+                                    {/* each_gramsが設定されている場合、表示 */}
+                                    {vp.purchase_unit === "each" &&
+                                      vp.each_grams && (
+                                        <span
+                                          className="text-xs text-gray-500"
+                                          style={{ lineHeight: "20px" }}
+                                        >
+                                          ({vp.each_grams}g)
+                                        </span>
+                                      )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Quantity */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeItems ? (
+                                <input
+                                  type="number"
+                                  value={
+                                    vp.purchase_quantity === 0
+                                      ? ""
+                                      : String(vp.purchase_quantity)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    const numValue =
+                                      value === "" ? 0 : parseFloat(value) || 0;
+                                    handleVendorProductChange(
+                                      vp.id,
+                                      "purchase_quantity",
+                                      numValue
+                                    );
+                                  }}
+                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="0"
+                                  min="0"
+                                  step="0.01"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  className="text-sm text-gray-900"
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {vp.purchase_quantity}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Cost */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeItems ? (
+                                <div
+                                  className="flex items-center gap-1"
+                                  style={{ height: "20px" }}
+                                >
+                                  <span
+                                    className="text-gray-500"
+                                    style={{ lineHeight: "20px" }}
+                                  >
+                                    $
+                                  </span>
+                                  <input
+                                    type="number"
+                                    value={
+                                      vp.purchase_cost === 0
+                                        ? ""
+                                        : String(vp.purchase_cost)
+                                    }
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      const numValue =
+                                        value === ""
+                                          ? 0
+                                          : parseFloat(value) || 0;
+                                      handleVendorProductChange(
+                                        vp.id,
+                                        "purchase_cost",
+                                        numValue
+                                      );
+                                    }}
+                                    className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="0.00"
+                                    min="0"
+                                    step="0.01"
+                                    style={{
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
+                                  />
+                                </div>
+                              ) : (
+                                <div
+                                  className="text-sm text-gray-900"
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  ${vp.purchase_cost.toFixed(2)}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* ゴミ箱 */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            {isEditModeItems && (
+                              <button
+                                onClick={() => handleDeleteClickItems(vp.id)}
+                                className={`p-2 rounded-md transition-colors ${
+                                  vp.isMarkedForDeletion
+                                    ? "bg-red-500 text-white hover:bg-red-600"
+                                    : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                }`}
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  boxSizing: "border-box",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "0",
+                                }}
+                                title="Mark for deletion"
+                              >
+                                <Trash2 className="w-5 h-5" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      </Fragment>
+                    ))}
+
+                    {/* プラスマーク行 */}
+                    {isEditModeItems && (
+                      <tr>
+                        <td
+                          colSpan={isEditModeItems ? 8 : 7}
+                          className="px-6"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <button
+                            onClick={() =>
+                              handleAddClickItems(
+                                vendorProducts.length > 0
+                                  ? vendorProducts[vendorProducts.length - 1].id
+                                  : ""
+                              )
+                            }
+                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                          >
+                            <Plus className="w-5 h-5" />
+                            <span>Add new vendor product</span>
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
 
         {/* Base Itemsタブ */}
         {activeTab === "raw-items" && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Specific Weight (g/ml)
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Each (g)
-                  </th>
-                  {isEditModeBaseItems && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
-                      {/* ゴミ箱列のヘッダー */}
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {baseItemsUI.map((item) => (
-                  <tr
-                    key={item.id}
-                    className={`${
-                      item.isMarkedForDeletion ? "bg-red-50" : ""
-                    } hover:bg-gray-50`}
-                  >
-                    {/* Name */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditModeBaseItems ? (
-                        <input
-                          type="text"
-                          value={item.name}
-                          onChange={(e) =>
-                            handleBaseItemChange(
-                              item.id,
-                              "name",
-                              e.target.value
-                            )
-                          }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Base item name"
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">{item.name}</div>
+          <>
+            {loadingBaseItems ? (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+                Loading...
+              </div>
+            ) : (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Specific Weight (g/ml)
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Each (g)
+                      </th>
+                      {isEditModeBaseItems && (
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                          {/* ゴミ箱列のヘッダー */}
+                        </th>
                       )}
-                    </td>
-
-                    {/* Specific Weight */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditModeBaseItems ? (
-                        <input
-                          type="number"
-                          value={item.specific_weight || ""}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            const numValue =
-                              value === "" ? null : parseFloat(value) || null;
-                            handleBaseItemChange(
-                              item.id,
-                              "specific_weight",
-                              numValue
-                            );
-                          }}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="0.00"
-                          min="0"
-                          step="0.01"
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">
-                          {item.specific_weight
-                            ? item.specific_weight.toFixed(2)
-                            : "-"}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Each (g) */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditModeBaseItems ? (
-                        <input
-                          type="number"
-                          value={item.each_grams || ""}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            const numValue =
-                              value === "" ? null : parseFloat(value) || null;
-                            handleBaseItemChange(
-                              item.id,
-                              "each_grams",
-                              numValue
-                            );
-                          }}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="0"
-                          min="0"
-                          step="0.01"
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">
-                          {item.each_grams ? item.each_grams.toFixed(2) : "-"}
-                        </div>
-                      )}
-                    </td>
-
-                    {/* ゴミ箱 */}
-                    {isEditModeBaseItems && (
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          onClick={() => handleDeleteClickBaseItems(item.id)}
-                          className={`p-2 rounded-md transition-colors ${
-                            item.isMarkedForDeletion
-                              ? "bg-red-500 text-white hover:bg-red-600"
-                              : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                          }`}
-                          title="Mark for deletion"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-
-                {/* プラスマーク行 */}
-                {isEditModeBaseItems && (
-                  <tr>
-                    <td
-                      colSpan={isEditModeBaseItems ? 4 : 3}
-                      className="px-6 py-4"
-                    >
-                      <button
-                        onClick={handleAddClickBaseItems}
-                        className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {baseItemsUI.map((item) => (
+                      <tr
+                        key={item.id}
+                        className={`${
+                          item.isMarkedForDeletion ? "bg-red-50" : ""
+                        } hover:bg-gray-50`}
+                        style={{
+                          height: "52px",
+                          minHeight: "52px",
+                          maxHeight: "52px",
+                        }}
                       >
-                        <Plus className="w-5 h-5" />
-                        <span>Add new base item</span>
-                      </button>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                        {/* Name */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            {isEditModeBaseItems ? (
+                              <input
+                                type="text"
+                                value={item.name}
+                                onChange={(e) =>
+                                  handleBaseItemChange(
+                                    item.id,
+                                    "name",
+                                    e.target.value
+                                  )
+                                }
+                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Base item name"
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  lineHeight: "20px",
+                                  padding: "0 4px",
+                                  fontSize: "0.875rem",
+                                  boxSizing: "border-box",
+                                  margin: 0,
+                                }}
+                              />
+                            ) : (
+                              <div
+                                className="text-sm text-gray-900"
+                                style={{ height: "20px", lineHeight: "20px" }}
+                              >
+                                {item.name}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Specific Weight */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            {isEditModeBaseItems ? (
+                              <input
+                                type="number"
+                                value={item.specific_weight || ""}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  const numValue =
+                                    value === ""
+                                      ? null
+                                      : parseFloat(value) || null;
+                                  handleBaseItemChange(
+                                    item.id,
+                                    "specific_weight",
+                                    numValue
+                                  );
+                                }}
+                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="0.00"
+                                min="0"
+                                step="0.01"
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  lineHeight: "20px",
+                                  padding: "0 4px",
+                                  fontSize: "0.875rem",
+                                  boxSizing: "border-box",
+                                  margin: 0,
+                                }}
+                              />
+                            ) : (
+                              <div
+                                className="text-sm text-gray-900"
+                                style={{ height: "20px", lineHeight: "20px" }}
+                              >
+                                {item.specific_weight
+                                  ? item.specific_weight.toFixed(2)
+                                  : "-"}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Each (g) */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            {isEditModeBaseItems ? (
+                              <input
+                                type="number"
+                                value={item.each_grams || ""}
+                                onChange={(e) => {
+                                  const value = e.target.value;
+                                  const numValue =
+                                    value === ""
+                                      ? null
+                                      : parseFloat(value) || null;
+                                  handleBaseItemChange(
+                                    item.id,
+                                    "each_grams",
+                                    numValue
+                                  );
+                                }}
+                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="0"
+                                min="0"
+                                step="0.01"
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  lineHeight: "20px",
+                                  padding: "0 4px",
+                                  fontSize: "0.875rem",
+                                  boxSizing: "border-box",
+                                  margin: 0,
+                                }}
+                              />
+                            ) : (
+                              <div
+                                className="text-sm text-gray-900"
+                                style={{ height: "20px", lineHeight: "20px" }}
+                              >
+                                {item.each_grams
+                                  ? item.each_grams.toFixed(2)
+                                  : "-"}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* ゴミ箱 */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          {isEditModeBaseItems && (
+                            <button
+                              onClick={() =>
+                                handleDeleteClickBaseItems(item.id)
+                              }
+                              className={`p-2 rounded-md transition-colors ${
+                                item.isMarkedForDeletion
+                                  ? "bg-red-500 text-white hover:bg-red-600"
+                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                              }`}
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                boxSizing: "border-box",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: "0",
+                              }}
+                              title="Mark for deletion"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {/* プラスマーク行 */}
+                    {isEditModeBaseItems && (
+                      <tr>
+                        <td
+                          colSpan={isEditModeBaseItems ? 4 : 3}
+                          className="px-6"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <button
+                            onClick={handleAddClickBaseItems}
+                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                          >
+                            <Plus className="w-5 h-5" />
+                            <span>Add new base item</span>
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
 
         {/* Vendorsタブ */}
         {activeTab === "vendors" && (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Name
-                  </th>
-                  {isEditModeVendors && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
-                      {/* ゴミ箱列のヘッダー */}
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {vendorsUI.map((vendor) => (
-                  <tr
-                    key={vendor.id}
-                    className={`${
-                      vendor.isMarkedForDeletion ? "bg-red-50" : ""
-                    } hover:bg-gray-50`}
-                  >
-                    {/* Name */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditModeVendors ? (
-                        <input
-                          type="text"
-                          value={vendor.name}
-                          onChange={(e) =>
-                            handleVendorChange(
-                              vendor.id,
-                              "name",
-                              e.target.value
-                            )
-                          }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Vendor name"
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">
-                          {vendor.name}
-                        </div>
+          <>
+            {loadingVendors ? (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+                Loading...
+              </div>
+            ) : (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Name
+                      </th>
+                      {isEditModeVendors && (
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                          {/* ゴミ箱列のヘッダー */}
+                        </th>
                       )}
-                    </td>
-
-                    {/* ゴミ箱 */}
-                    {isEditModeVendors && (
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <button
-                          onClick={() => handleDeleteClickVendors(vendor.id)}
-                          className={`p-2 rounded-md transition-colors ${
-                            vendor.isMarkedForDeletion
-                              ? "bg-red-500 text-white hover:bg-red-600"
-                              : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                          }`}
-                          title="Mark for deletion"
-                        >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-
-                {/* プラスマーク行 */}
-                {isEditModeVendors && (
-                  <tr>
-                    <td
-                      colSpan={isEditModeVendors ? 2 : 1}
-                      className="px-6 py-4"
-                    >
-                      <button
-                        onClick={handleAddClickVendors}
-                        className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {vendorsUI.map((vendor) => (
+                      <tr
+                        key={vendor.id}
+                        className={`${
+                          vendor.isMarkedForDeletion ? "bg-red-50" : ""
+                        } hover:bg-gray-50`}
+                        style={{
+                          height: "52px",
+                          minHeight: "52px",
+                          maxHeight: "52px",
+                        }}
                       >
-                        <Plus className="w-5 h-5" />
-                        <span>Add new vendor</span>
-                      </button>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                        {/* Name */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            {isEditModeVendors ? (
+                              <input
+                                type="text"
+                                value={vendor.name}
+                                onChange={(e) =>
+                                  handleVendorChange(
+                                    vendor.id,
+                                    "name",
+                                    e.target.value
+                                  )
+                                }
+                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Vendor name"
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  lineHeight: "20px",
+                                  padding: "0 4px",
+                                  fontSize: "0.875rem",
+                                  boxSizing: "border-box",
+                                  margin: 0,
+                                }}
+                              />
+                            ) : (
+                              <div
+                                className="text-sm text-gray-900"
+                                style={{ height: "20px", lineHeight: "20px" }}
+                              >
+                                {vendor.name}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* ゴミ箱 */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          {isEditModeVendors && (
+                            <button
+                              onClick={() =>
+                                handleDeleteClickVendors(vendor.id)
+                              }
+                              className={`p-2 rounded-md transition-colors ${
+                                vendor.isMarkedForDeletion
+                                  ? "bg-red-500 text-white hover:bg-red-600"
+                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                              }`}
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                boxSizing: "border-box",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: "0",
+                              }}
+                              title="Mark for deletion"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {/* プラスマーク行 */}
+                    {isEditModeVendors && (
+                      <tr>
+                        <td
+                          colSpan={isEditModeVendors ? 2 : 1}
+                          className="px-6"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <button
+                            onClick={handleAddClickVendors}
+                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                          >
+                            <Plus className="w-5 h-5" />
+                            <span>Add new vendor</span>
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
