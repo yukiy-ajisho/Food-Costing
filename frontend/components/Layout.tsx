@@ -53,6 +53,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         className={`w-0 xl:w-[270px] h-screen shadow-lg flex flex-col border-r transition-[width,transform] duration-300 ease-in-out transform -translate-x-full xl:translate-x-0 overflow-hidden ${
           isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"
         }`}
+        style={{ flexShrink: 0 }}
       >
         {/* ロゴ・アプリ名 */}
         <div className="p-6">
