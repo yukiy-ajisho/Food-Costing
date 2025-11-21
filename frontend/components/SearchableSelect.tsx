@@ -88,9 +88,19 @@ export function SearchableSelect({
           type="button"
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
-          className={`w-full px-3 py-2 text-left border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between ${
+          className={`w-full text-left border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between ${
             disabled ? "bg-gray-100 cursor-not-allowed" : "bg-white"
           }`}
+          style={{
+            height: "20px",
+            minHeight: "20px",
+            maxHeight: "20px",
+            lineHeight: "20px",
+            padding: "0 4px",
+            fontSize: "0.875rem",
+            boxSizing: "border-box",
+            margin: 0,
+          }}
         >
           <span className={selectedItem ? "text-gray-900" : "text-gray-500"}>
             {selectedItem ? selectedItem.name : placeholder}

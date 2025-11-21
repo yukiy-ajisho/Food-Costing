@@ -1,0 +1,107 @@
+-- =========================================================
+-- Migration: Handle existing data after adding user_id columns
+-- =========================================================
+-- WARNING: This migration handles existing data. You must decide how
+-- to handle existing records before running this migration.
+--
+-- Options:
+-- 1. Delete all existing data (uncomment DELETE statements)
+-- 2. Assign existing data to a specific user (uncomment UPDATE statements)
+-- 3. Leave data as-is and handle in application code (do nothing)
+--
+-- IMPORTANT: Review and modify this file based on your needs before running.
+
+-- =========================================================
+-- OPTION 1: Delete all existing data
+-- =========================================================
+-- Uncomment the following lines if you want to delete all existing data:
+--
+-- DELETE FROM item_unit_profiles;
+-- DELETE FROM recipe_lines;
+-- DELETE FROM items;
+-- DELETE FROM vendor_products;
+-- DELETE FROM base_items;
+-- DELETE FROM vendors;
+-- DELETE FROM labor_roles;
+-- DELETE FROM non_mass_units;
+
+-- =========================================================
+-- OPTION 2: Assign existing data to a specific user
+-- =========================================================
+-- Uncomment and modify the following lines if you want to assign
+-- existing data to a specific user. Replace 'YOUR_USER_ID_HERE' with
+-- the actual user ID from auth.users.
+--
+-- IMPORTANT: You must first create a user in auth.users and get their ID.
+-- Then replace 'YOUR_USER_ID_HERE' with that ID.
+--
+-- UPDATE base_items 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+--
+-- UPDATE vendors 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+--
+-- UPDATE vendor_products 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+--
+-- UPDATE items 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+--
+-- UPDATE recipe_lines 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+--
+-- UPDATE labor_roles 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+--
+-- UPDATE non_mass_units 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+--
+-- UPDATE item_unit_profiles 
+-- SET user_id = 'YOUR_USER_ID_HERE' 
+-- WHERE user_id IS NULL;
+
+-- =========================================================
+-- OPTION 3: Add NOT NULL constraint after handling data
+-- =========================================================
+-- After you have handled existing data (either deleted or assigned),
+-- you can uncomment the following lines to add NOT NULL constraints
+-- to ensure all future records must have a user_id.
+--
+-- ALTER TABLE base_items 
+--   ALTER COLUMN user_id SET NOT NULL;
+--
+-- ALTER TABLE vendors 
+--   ALTER COLUMN user_id SET NOT NULL;
+--
+-- ALTER TABLE vendor_products 
+--   ALTER COLUMN user_id SET NOT NULL;
+--
+-- ALTER TABLE items 
+--   ALTER COLUMN user_id SET NOT NULL;
+--
+-- ALTER TABLE recipe_lines 
+--   ALTER COLUMN user_id SET NOT NULL;
+--
+-- ALTER TABLE labor_roles 
+--   ALTER COLUMN user_id SET NOT NULL;
+--
+-- ALTER TABLE non_mass_units 
+--   ALTER COLUMN user_id SET NOT NULL;
+--
+-- ALTER TABLE item_unit_profiles 
+--   ALTER COLUMN user_id SET NOT NULL;
+
+-- =========================================================
+-- 完了
+-- =========================================================
+-- NOTE: This migration file is intentionally left mostly empty.
+-- You must review and uncomment the appropriate sections based on
+-- how you want to handle existing data.
+

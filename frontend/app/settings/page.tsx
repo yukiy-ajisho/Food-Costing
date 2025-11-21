@@ -219,67 +219,149 @@ export default function SettingsPage() {
                     className={`${
                       role.isMarkedForDeletion ? "bg-red-50" : ""
                     } hover:bg-gray-50`}
+                    style={{
+                      height: "52px",
+                      minHeight: "52px",
+                      maxHeight: "52px",
+                    }}
                   >
                     {/* Name */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditMode ? (
-                        <input
-                          type="text"
-                          value={role.name}
-                          onChange={(e) =>
-                            handleLaborRoleChange(
-                              role.id,
-                              "name",
-                              e.target.value
-                            )
-                          }
-                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          placeholder="Role name (e.g., Prep Cook)"
-                        />
-                      ) : (
-                        <div className="text-sm text-gray-900">{role.name}</div>
-                      )}
+                    <td
+                      className="px-6 whitespace-nowrap"
+                      style={{
+                        paddingTop: "16px",
+                        paddingBottom: "16px",
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: "20px",
+                          minHeight: "20px",
+                          maxHeight: "20px",
+                          display: "flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={role.name}
+                            onChange={(e) =>
+                              handleLaborRoleChange(
+                                role.id,
+                                "name",
+                                e.target.value
+                              )
+                            }
+                            className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            placeholder="Role name (e.g., Prep Cook)"
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              lineHeight: "20px",
+                              padding: "0 4px",
+                              fontSize: "0.875rem",
+                              boxSizing: "border-box",
+                              margin: 0,
+                            }}
+                          />
+                        ) : (
+                          <div
+                            className="text-sm text-gray-900"
+                            style={{ height: "20px", lineHeight: "20px" }}
+                          >
+                            {role.name}
+                          </div>
+                        )}
+                      </div>
                     </td>
 
                     {/* Hourly Wage */}
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      {isEditMode ? (
-                        <div className="flex items-center gap-1">
-                          <span className="text-gray-500">$</span>
-                          <input
-                            type="number"
-                            value={
-                              role.hourly_wage === 0
-                                ? ""
-                                : role.hourly_wage || ""
-                            }
-                            onChange={(e) => {
-                              const value = e.target.value;
-                              // 空文字列の場合は0、それ以外は数値に変換
-                              const numValue =
-                                value === "" ? 0 : parseFloat(value) || 0;
-                              handleLaborRoleChange(
-                                role.id,
-                                "hourly_wage",
-                                numValue
-                              );
-                            }}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="0.00"
-                            min="0"
-                            step="0.01"
-                          />
-                        </div>
-                      ) : (
-                        <div className="text-sm text-gray-900">
-                          ${role.hourly_wage.toFixed(2)}
-                        </div>
-                      )}
+                    <td
+                      className="px-6 whitespace-nowrap"
+                      style={{
+                        paddingTop: "16px",
+                        paddingBottom: "16px",
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: "20px",
+                          minHeight: "20px",
+                          maxHeight: "20px",
+                          display: "flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        {isEditMode ? (
+                          <div
+                            className="flex items-center gap-1"
+                            style={{ height: "20px" }}
+                          >
+                            <span
+                              className="text-gray-500"
+                              style={{ lineHeight: "20px" }}
+                            >
+                              $
+                            </span>
+                            <input
+                              type="number"
+                              value={
+                                role.hourly_wage === 0
+                                  ? ""
+                                  : role.hourly_wage || ""
+                              }
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                // 空文字列の場合は0、それ以外は数値に変換
+                                const numValue =
+                                  value === "" ? 0 : parseFloat(value) || 0;
+                                handleLaborRoleChange(
+                                  role.id,
+                                  "hourly_wage",
+                                  numValue
+                                );
+                              }}
+                              className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="0.00"
+                              min="0"
+                              step="0.01"
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                lineHeight: "20px",
+                                padding: "0 4px",
+                                fontSize: "0.875rem",
+                                boxSizing: "border-box",
+                                margin: 0,
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div
+                            className="text-sm text-gray-900"
+                            style={{ height: "20px", lineHeight: "20px" }}
+                          >
+                            ${role.hourly_wage.toFixed(2)}
+                          </div>
+                        )}
+                      </div>
                     </td>
 
                     {/* ゴミ箱（Editモード時のみ） */}
-                    {isEditMode && (
-                      <td className="px-6 py-4 whitespace-nowrap">
+                    <td
+                      className="px-6 whitespace-nowrap"
+                      style={{
+                        paddingTop: "16px",
+                        paddingBottom: "16px",
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      {isEditMode && (
                         <button
                           onClick={() => handleLaborRoleDeleteClick(role.id)}
                           className={`p-2 rounded-md transition-colors ${
@@ -287,19 +369,37 @@ export default function SettingsPage() {
                               ? "bg-red-500 text-white hover:bg-red-600"
                               : "text-gray-400 hover:text-red-500 hover:bg-red-50"
                           }`}
+                          style={{
+                            height: "20px",
+                            minHeight: "20px",
+                            maxHeight: "20px",
+                            boxSizing: "border-box",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            padding: "0",
+                          }}
                           title="Mark for deletion"
                         >
                           <Trash2 className="w-5 h-5" />
                         </button>
-                      </td>
-                    )}
+                      )}
+                    </td>
                   </tr>
                 ))}
 
                 {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
                 {isEditMode && (
                   <tr>
-                    <td colSpan={isEditMode ? 3 : 2} className="px-6 py-4">
+                    <td
+                      colSpan={isEditMode ? 3 : 2}
+                      className="px-6"
+                      style={{
+                        paddingTop: "16px",
+                        paddingBottom: "16px",
+                        boxSizing: "border-box",
+                      }}
+                    >
                       <button
                         onClick={handleAddLaborRole}
                         className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"

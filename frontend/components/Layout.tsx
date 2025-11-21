@@ -9,7 +9,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 const navigationItems = [
   {
     id: "cost",
-    label: "Costing",
+    label: "Recipe Costing",
     icon: Calculator,
     href: "/cost",
   },
