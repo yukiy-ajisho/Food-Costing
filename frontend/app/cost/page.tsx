@@ -123,12 +123,24 @@ function AddItemModal({
   const [name, setName] = useState("");
   const [isMenuItem, setIsMenuItem] = useState(false);
   const [proceedYieldAmount, setProceedYieldAmount] = useState(0);
+  const [proceedYieldAmountInput, setProceedYieldAmountInput] = useState<
+    string | null
+  >(null); // 入力中の文字列を保持
   const [proceedYieldUnit, setProceedYieldUnit] = useState<"g" | "kg" | "each">(
     "g"
   );
   const [eachGrams, setEachGrams] = useState<number | null>(null);
+  const [eachGramsInput, setEachGramsInput] = useState<string | null>(null); // 入力中の文字列を保持
   const [notes, setNotes] = useState("");
   const [recipeLines, setRecipeLines] = useState<RecipeLine[]>([]);
+  // 入力中のquantityを文字列として保持（line.id -> 入力中の文字列）
+  const [modalQuantityInputs, setModalQuantityInputs] = useState<
+    Map<string, string>
+  >(new Map());
+  // 入力中のminutesを文字列として保持（line.id -> 入力中の文字列）
+  const [modalMinutesInputs, setModalMinutesInputs] = useState<
+    Map<string, string>
+  >(new Map());
 
   // モーダル内でレシピラインを管理する関数
   const handleModalRecipeLineChange = (
@@ -324,18 +336,38 @@ function AddItemModal({
                 Proceed Yield Amount
               </label>
               <input
-                type="number"
-                value={proceedYieldAmount}
-                onChange={(e) =>
-                  setProceedYieldAmount(parseFloat(e.target.value) || 0)
+                type="text"
+                inputMode="decimal"
+                value={
+                  proceedYieldAmountInput !== null
+                    ? proceedYieldAmountInput
+                    : proceedYieldAmount === 0
+                    ? ""
+                    : String(proceedYieldAmount)
                 }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // 数字と小数点のみを許可（空文字列も許可）
+                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                  if (numericPattern.test(value)) {
+                    setProceedYieldAmountInput(value);
+                  }
+                  // マッチしない場合は何もしない（前の値を保持）
+                }}
+                onBlur={(e) => {
+                  const value = e.target.value;
+                  // フォーカスアウト時に数値に変換
+                  const numValue =
+                    value === "" || value === "." ? 0 : parseFloat(value) || 0;
+                  setProceedYieldAmount(numValue);
+                  // 入力中の文字列をクリア
+                  setProceedYieldAmountInput(null);
+                }}
                 className={`w-full px-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
                   isDark
                     ? "bg-slate-700 border-slate-600 text-slate-100"
                     : "bg-white border-gray-300 text-gray-900"
                 }`}
-                min="0"
-                step="0.01"
               />
             </div>
             <div>
@@ -377,20 +409,36 @@ function AddItemModal({
                 Each Grams
               </label>
               <input
-                type="number"
-                value={eachGrams || ""}
-                onChange={(e) =>
-                  setEachGrams(
-                    e.target.value === "" ? null : parseFloat(e.target.value)
-                  )
+                type="text"
+                inputMode="decimal"
+                value={
+                  eachGramsInput !== null ? eachGramsInput : eachGrams || ""
                 }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // 数字と小数点のみを許可（空文字列も許可）
+                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                  if (numericPattern.test(value)) {
+                    setEachGramsInput(value);
+                  }
+                  // マッチしない場合は何もしない（前の値を保持）
+                }}
+                onBlur={(e) => {
+                  const value = e.target.value;
+                  // フォーカスアウト時に数値に変換
+                  const numValue =
+                    value === "" || value === "."
+                      ? null
+                      : parseFloat(value) || null;
+                  setEachGrams(numValue);
+                  // 入力中の文字列をクリア
+                  setEachGramsInput(null);
+                }}
                 className={`w-full px-4 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
                   isDark
                     ? "bg-slate-700 border-slate-600 text-slate-100"
                     : "bg-white border-gray-300 text-gray-900"
                 }`}
-                min="0"
-                step="0.01"
                 placeholder="Enter grams per each"
               />
             </div>
@@ -674,21 +722,46 @@ function AddItemModal({
                           </td>
                           <td className="px-4 py-2">
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               value={
-                                line.quantity === 0 || !line.quantity
+                                modalQuantityInputs.has(line.id)
+                                  ? modalQuantityInputs.get(line.id)!
+                                  : line.quantity === 0 || !line.quantity
                                   ? ""
                                   : String(line.quantity)
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
+                                // 数字と小数点のみを許可（空文字列も許可）
+                                const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                                if (numericPattern.test(value)) {
+                                  setModalQuantityInputs((prev) => {
+                                    const newMap = new Map(prev);
+                                    newMap.set(line.id, value);
+                                    return newMap;
+                                  });
+                                }
+                                // マッチしない場合は何もしない（前の値を保持）
+                              }}
+                              onBlur={(e) => {
+                                const value = e.target.value;
+                                // フォーカスアウト時に数値に変換
                                 const numValue =
-                                  value === "" ? 0 : parseFloat(value) || 0;
+                                  value === "" || value === "."
+                                    ? 0
+                                    : parseFloat(value) || 0;
                                 handleModalRecipeLineChange(
                                   line.id,
                                   "quantity",
                                   numValue
                                 );
+                                // 入力中の文字列をクリア
+                                setModalQuantityInputs((prev) => {
+                                  const newMap = new Map(prev);
+                                  newMap.delete(line.id);
+                                  return newMap;
+                                });
                               }}
                               className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
                                 isDark
@@ -696,8 +769,6 @@ function AddItemModal({
                                   : "bg-white border-gray-300 text-gray-900"
                               }`}
                               placeholder="0"
-                              min="0"
-                              step="0.01"
                             />
                           </td>
                           <td className="px-4 py-2">
@@ -879,21 +950,44 @@ function AddItemModal({
                           </td>
                           <td className="px-4 py-2">
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="numeric"
                               value={
-                                line.minutes === 0 || !line.minutes
+                                modalMinutesInputs.has(line.id)
+                                  ? modalMinutesInputs.get(line.id)!
+                                  : line.minutes === 0 || !line.minutes
                                   ? ""
                                   : String(line.minutes)
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
+                                // 整数のみを許可（空文字列も許可）
+                                const integerPattern = /^\d*$/;
+                                if (integerPattern.test(value)) {
+                                  setModalMinutesInputs((prev) => {
+                                    const newMap = new Map(prev);
+                                    newMap.set(line.id, value);
+                                    return newMap;
+                                  });
+                                }
+                                // マッチしない場合は何もしない（前の値を保持）
+                              }}
+                              onBlur={(e) => {
+                                const value = e.target.value;
+                                // フォーカスアウト時に整数に変換
                                 const numValue =
-                                  value === "" ? 0 : parseFloat(value) || 0;
+                                  value === "" ? 0 : parseInt(value, 10) || 0;
                                 handleModalRecipeLineChange(
                                   line.id,
                                   "minutes",
                                   numValue
                                 );
+                                // 入力中の文字列をクリア
+                                setModalMinutesInputs((prev) => {
+                                  const newMap = new Map(prev);
+                                  newMap.delete(line.id);
+                                  return newMap;
+                                });
                               }}
                               className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
                                 isDark
@@ -901,8 +995,6 @@ function AddItemModal({
                                   : "bg-white border-gray-300 text-gray-900"
                               }`}
                               placeholder="0"
-                              min="0"
-                              step="0.01"
                             />
                           </td>
                           <td className="px-4 py-2">
@@ -1006,6 +1098,30 @@ export default function CostPage() {
       }
     >
   >({});
+  // 入力中のproceed_yield_amountを文字列として保持（item.id -> 入力中の文字列）
+  const [yieldAmountInputs, setYieldAmountInputs] = useState<
+    Map<string, string>
+  >(new Map());
+  // 入力中のeach_gramsを文字列として保持（item.id -> 入力中の文字列）
+  const [eachGramsInputs, setEachGramsInputs] = useState<Map<string, string>>(
+    new Map()
+  );
+  // 入力中のwholesaleを文字列として保持（item.id -> 入力中の文字列）
+  const [wholesaleInputs, setWholesaleInputs] = useState<Map<string, string>>(
+    new Map()
+  );
+  // 入力中のretailを文字列として保持（item.id -> 入力中の文字列）
+  const [retailInputs, setRetailInputs] = useState<Map<string, string>>(
+    new Map()
+  );
+  // 入力中のquantityを文字列として保持（line.id -> 入力中の文字列）
+  const [quantityInputs, setQuantityInputs] = useState<Map<string, string>>(
+    new Map()
+  );
+  // 入力中のminutesを文字列として保持（line.id -> 入力中の文字列）
+  const [minutesInputs, setMinutesInputs] = useState<Map<string, string>>(
+    new Map()
+  );
 
   // データ取得
   useEffect(() => {
@@ -3147,22 +3263,47 @@ export default function CostPage() {
                             {isEditMode ? (
                               <div className="flex items-center gap-2 flex-wrap">
                                 <input
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   value={
-                                    item.proceed_yield_amount === 0
+                                    yieldAmountInputs.has(item.id)
+                                      ? yieldAmountInputs.get(item.id)!
+                                      : item.proceed_yield_amount === 0
                                       ? ""
                                       : String(item.proceed_yield_amount)
                                   }
                                   onChange={(e) => {
                                     const value = e.target.value;
-                                    // 空文字列の場合は0、それ以外は数値に変換
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setYieldAmountInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(item.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
                                     const numValue =
-                                      value === "" ? 0 : parseFloat(value) || 0;
+                                      value === "" || value === "."
+                                        ? 0
+                                        : parseFloat(value) || 0;
                                     handleItemChange(
                                       item.id,
                                       "proceed_yield_amount",
                                       numValue
                                     );
+                                    // 入力中の文字列をクリア
+                                    setYieldAmountInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.delete(item.id);
+                                      return newMap;
+                                    });
                                   }}
                                   className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
                                     isDark
@@ -3170,8 +3311,6 @@ export default function CostPage() {
                                       : "bg-white border-gray-300 text-gray-900"
                                   }`}
                                   placeholder="0"
-                                  min="0"
-                                  step="0.01"
                                   style={{
                                     width: "70px",
                                     height: "20px",
@@ -3220,18 +3359,36 @@ export default function CostPage() {
                                 {item.proceed_yield_unit === "each" && (
                                   <>
                                     <input
-                                      type="number"
+                                      type="text"
+                                      inputMode="decimal"
                                       value={
-                                        item.each_grams === null ||
-                                        item.each_grams === undefined ||
-                                        item.each_grams === 0
+                                        eachGramsInputs.has(item.id)
+                                          ? eachGramsInputs.get(item.id)!
+                                          : item.each_grams === null ||
+                                            item.each_grams === undefined ||
+                                            item.each_grams === 0
                                           ? ""
                                           : String(item.each_grams)
                                       }
                                       onChange={(e) => {
                                         const value = e.target.value;
+                                        // 数字と小数点のみを許可（空文字列も許可）
+                                        const numericPattern =
+                                          /^(\d+\.?\d*|\.\d+)?$/;
+                                        if (numericPattern.test(value)) {
+                                          setEachGramsInputs((prev) => {
+                                            const newMap = new Map(prev);
+                                            newMap.set(item.id, value);
+                                            return newMap;
+                                          });
+                                        }
+                                        // マッチしない場合は何もしない（前の値を保持）
+                                      }}
+                                      onBlur={(e) => {
+                                        const value = e.target.value;
+                                        // フォーカスアウト時に数値に変換
                                         const numValue =
-                                          value === ""
+                                          value === "" || value === "."
                                             ? null
                                             : parseFloat(value) || null;
                                         handleItemChange(
@@ -3239,6 +3396,12 @@ export default function CostPage() {
                                           "each_grams",
                                           numValue
                                         );
+                                        // 入力中の文字列をクリア
+                                        setEachGramsInputs((prev) => {
+                                          const newMap = new Map(prev);
+                                          newMap.delete(item.id);
+                                          return newMap;
+                                        });
                                       }}
                                       placeholder={(() => {
                                         const totalIngredientsGrams =
@@ -3258,8 +3421,6 @@ export default function CostPage() {
                                           ? "bg-slate-700 border-slate-600 text-slate-100"
                                           : "bg-white border-gray-300 text-gray-900"
                                       }`}
-                                      min="0"
-                                      step="0.01"
                                       style={{
                                         width: "70px",
                                         height: "20px",
@@ -3382,17 +3543,34 @@ export default function CostPage() {
                           >
                             {isEditMode ? (
                               <input
-                                type="number"
+                                type="text"
+                                inputMode="decimal"
                                 value={
-                                  item.wholesale === null ||
-                                  item.wholesale === undefined
+                                  wholesaleInputs.has(item.id)
+                                    ? wholesaleInputs.get(item.id)!
+                                    : item.wholesale === null ||
+                                      item.wholesale === undefined
                                     ? ""
                                     : String(item.wholesale)
                                 }
                                 onChange={(e) => {
                                   const value = e.target.value;
+                                  // 数字と小数点のみを許可（空文字列も許可）
+                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                                  if (numericPattern.test(value)) {
+                                    setWholesaleInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.set(item.id, value);
+                                      return newMap;
+                                    });
+                                  }
+                                  // マッチしない場合は何もしない（前の値を保持）
+                                }}
+                                onBlur={(e) => {
+                                  const value = e.target.value;
+                                  // フォーカスアウト時に数値に変換
                                   const numValue =
-                                    value === ""
+                                    value === "" || value === "."
                                       ? null
                                       : parseFloat(value) || null;
                                   handleItemChange(
@@ -3400,6 +3578,12 @@ export default function CostPage() {
                                     "wholesale",
                                     numValue
                                   );
+                                  // 入力中の文字列をクリア
+                                  setWholesaleInputs((prev) => {
+                                    const newMap = new Map(prev);
+                                    newMap.delete(item.id);
+                                    return newMap;
+                                  });
                                 }}
                                 className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
                                   isDark
@@ -3407,8 +3591,6 @@ export default function CostPage() {
                                     : "bg-white border-gray-300 text-gray-900"
                                 }`}
                                 placeholder="0.00"
-                                min="0"
-                                step="0.01"
                                 style={{
                                   height: "20px",
                                   minHeight: "20px",
@@ -3467,8 +3649,21 @@ export default function CostPage() {
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {(() => {
+                                // 入力中の値があればそれを使用、なければ既存の値を使用
+                                const currentWholesale = wholesaleInputs.has(
+                                  item.id
+                                )
+                                  ? (() => {
+                                      const value = wholesaleInputs.get(
+                                        item.id
+                                      )!;
+                                      return value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    })()
+                                  : item.wholesale;
                                 const { laborPercent } = calculatePercentages(
-                                  item.wholesale,
+                                  currentWholesale,
                                   item
                                 );
                                 return laborPercent !== null
@@ -3505,8 +3700,21 @@ export default function CostPage() {
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {(() => {
+                                // 入力中の値があればそれを使用、なければ既存の値を使用
+                                const currentWholesale = wholesaleInputs.has(
+                                  item.id
+                                )
+                                  ? (() => {
+                                      const value = wholesaleInputs.get(
+                                        item.id
+                                      )!;
+                                      return value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    })()
+                                  : item.wholesale;
                                 const { cogPercent } = calculatePercentages(
-                                  item.wholesale,
+                                  currentWholesale,
                                   item
                                 );
                                 return cogPercent !== null
@@ -3543,8 +3751,21 @@ export default function CostPage() {
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {(() => {
+                                // 入力中の値があればそれを使用、なければ既存の値を使用
+                                const currentWholesale = wholesaleInputs.has(
+                                  item.id
+                                )
+                                  ? (() => {
+                                      const value = wholesaleInputs.get(
+                                        item.id
+                                      )!;
+                                      return value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    })()
+                                  : item.wholesale;
                                 const { lcogPercent } = calculatePercentages(
-                                  item.wholesale,
+                                  currentWholesale,
                                   item
                                 );
                                 return lcogPercent !== null
@@ -3576,20 +3797,43 @@ export default function CostPage() {
                           >
                             {isEditMode ? (
                               <input
-                                type="number"
+                                type="text"
+                                inputMode="decimal"
                                 value={
-                                  item.retail === null ||
-                                  item.retail === undefined
+                                  retailInputs.has(item.id)
+                                    ? retailInputs.get(item.id)!
+                                    : item.retail === null ||
+                                      item.retail === undefined
                                     ? ""
                                     : String(item.retail)
                                 }
                                 onChange={(e) => {
                                   const value = e.target.value;
+                                  // 数字と小数点のみを許可（空文字列も許可）
+                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                                  if (numericPattern.test(value)) {
+                                    setRetailInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.set(item.id, value);
+                                      return newMap;
+                                    });
+                                  }
+                                  // マッチしない場合は何もしない（前の値を保持）
+                                }}
+                                onBlur={(e) => {
+                                  const value = e.target.value;
+                                  // フォーカスアウト時に数値に変換
                                   const numValue =
-                                    value === ""
+                                    value === "" || value === "."
                                       ? null
                                       : parseFloat(value) || null;
                                   handleItemChange(item.id, "retail", numValue);
+                                  // 入力中の文字列をクリア
+                                  setRetailInputs((prev) => {
+                                    const newMap = new Map(prev);
+                                    newMap.delete(item.id);
+                                    return newMap;
+                                  });
                                 }}
                                 className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
                                   isDark
@@ -3597,8 +3841,6 @@ export default function CostPage() {
                                     : "bg-white border-gray-300 text-gray-900"
                                 }`}
                                 placeholder="0.00"
-                                min="0"
-                                step="0.01"
                                 style={{
                                   height: "20px",
                                   minHeight: "20px",
@@ -3657,8 +3899,17 @@ export default function CostPage() {
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {(() => {
+                                // 入力中の値があればそれを使用、なければ既存の値を使用
+                                const currentRetail = retailInputs.has(item.id)
+                                  ? (() => {
+                                      const value = retailInputs.get(item.id)!;
+                                      return value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    })()
+                                  : item.retail;
                                 const { laborPercent } = calculatePercentages(
-                                  item.retail,
+                                  currentRetail,
                                   item
                                 );
                                 return laborPercent !== null
@@ -3695,8 +3946,17 @@ export default function CostPage() {
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {(() => {
+                                // 入力中の値があればそれを使用、なければ既存の値を使用
+                                const currentRetail = retailInputs.has(item.id)
+                                  ? (() => {
+                                      const value = retailInputs.get(item.id)!;
+                                      return value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    })()
+                                  : item.retail;
                                 const { cogPercent } = calculatePercentages(
-                                  item.retail,
+                                  currentRetail,
                                   item
                                 );
                                 return cogPercent !== null
@@ -3733,8 +3993,17 @@ export default function CostPage() {
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {(() => {
+                                // 入力中の値があればそれを使用、なければ既存の値を使用
+                                const currentRetail = retailInputs.has(item.id)
+                                  ? (() => {
+                                      const value = retailInputs.get(item.id)!;
+                                      return value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    })()
+                                  : item.retail;
                                 const { lcogPercent } = calculatePercentages(
-                                  item.retail,
+                                  currentRetail,
                                   item
                                 );
                                 return lcogPercent !== null
@@ -4259,18 +4528,47 @@ export default function CostPage() {
                                           <td className="px-4 py-2">
                                             {isEditMode ? (
                                               <input
-                                                type="number"
+                                                type="text"
+                                                inputMode="decimal"
                                                 value={
-                                                  line.quantity === 0 ||
-                                                  !line.quantity
+                                                  quantityInputs.has(line.id)
+                                                    ? quantityInputs.get(
+                                                        line.id
+                                                      )!
+                                                    : line.quantity === 0 ||
+                                                      !line.quantity
                                                     ? ""
                                                     : String(line.quantity)
                                                 }
                                                 onChange={(e) => {
                                                   const value = e.target.value;
-                                                  // 空文字列の場合は0、それ以外は数値に変換
+                                                  // 数字と小数点のみを許可（空文字列も許可）
+                                                  const numericPattern =
+                                                    /^(\d+\.?\d*|\.\d+)?$/;
+                                                  if (
+                                                    numericPattern.test(value)
+                                                  ) {
+                                                    setQuantityInputs(
+                                                      (prev) => {
+                                                        const newMap = new Map(
+                                                          prev
+                                                        );
+                                                        newMap.set(
+                                                          line.id,
+                                                          value
+                                                        );
+                                                        return newMap;
+                                                      }
+                                                    );
+                                                  }
+                                                  // マッチしない場合は何もしない（前の値を保持）
+                                                }}
+                                                onBlur={(e) => {
+                                                  const value = e.target.value;
+                                                  // フォーカスアウト時に数値に変換
                                                   const numValue =
-                                                    value === ""
+                                                    value === "" ||
+                                                    value === "."
                                                       ? 0
                                                       : parseFloat(value) || 0;
                                                   handleRecipeLineChange(
@@ -4279,6 +4577,14 @@ export default function CostPage() {
                                                     "quantity",
                                                     numValue
                                                   );
+                                                  // 入力中の文字列をクリア
+                                                  setQuantityInputs((prev) => {
+                                                    const newMap = new Map(
+                                                      prev
+                                                    );
+                                                    newMap.delete(line.id);
+                                                    return newMap;
+                                                  });
                                                 }}
                                                 className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
                                                   isDark
@@ -4286,8 +4592,6 @@ export default function CostPage() {
                                                     : "bg-white border-gray-300 text-gray-900"
                                                 }`}
                                                 placeholder="0"
-                                                min="0"
-                                                step="0.01"
                                               />
                                             ) : (
                                               <div
@@ -4526,25 +4830,60 @@ export default function CostPage() {
                                           <td className="px-4 py-2">
                                             {isEditMode ? (
                                               <input
-                                                type="number"
+                                                type="text"
+                                                inputMode="numeric"
                                                 value={
-                                                  line.minutes === 0
+                                                  minutesInputs.has(line.id)
+                                                    ? minutesInputs.get(
+                                                        line.id
+                                                      )!
+                                                    : line.minutes === 0
                                                     ? ""
                                                     : line.minutes || ""
                                                 }
                                                 onChange={(e) => {
                                                   const value = e.target.value;
-                                                  // 空文字列の場合は0、それ以外は数値に変換
+                                                  // 整数のみを許可（空文字列も許可）
+                                                  const integerPattern =
+                                                    /^\d*$/;
+                                                  if (
+                                                    integerPattern.test(value)
+                                                  ) {
+                                                    setMinutesInputs((prev) => {
+                                                      const newMap = new Map(
+                                                        prev
+                                                      );
+                                                      newMap.set(
+                                                        line.id,
+                                                        value
+                                                      );
+                                                      return newMap;
+                                                    });
+                                                  }
+                                                  // マッチしない場合は何もしない（前の値を保持）
+                                                }}
+                                                onBlur={(e) => {
+                                                  const value = e.target.value;
+                                                  // フォーカスアウト時に整数に変換
                                                   const numValue =
                                                     value === ""
                                                       ? 0
-                                                      : parseFloat(value) || 0;
+                                                      : parseInt(value, 10) ||
+                                                        0;
                                                   handleRecipeLineChange(
                                                     item.id,
                                                     line.id,
                                                     "minutes",
                                                     numValue
                                                   );
+                                                  // 入力中の文字列をクリア
+                                                  setMinutesInputs((prev) => {
+                                                    const newMap = new Map(
+                                                      prev
+                                                    );
+                                                    newMap.delete(line.id);
+                                                    return newMap;
+                                                  });
                                                 }}
                                                 className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
                                                   isDark
@@ -4552,8 +4891,6 @@ export default function CostPage() {
                                                     : "bg-white border-gray-300 text-gray-900"
                                                 }`}
                                                 placeholder="0"
-                                                min="0"
-                                                step="0.01"
                                               />
                                             ) : (
                                               <div

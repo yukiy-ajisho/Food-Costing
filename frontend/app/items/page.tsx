@@ -67,6 +67,14 @@ export default function ItemsPage() {
   const [isEditModeItems, setIsEditModeItems] = useState(false);
   const [loadingItems, setLoadingItems] = useState(false);
   const [hasLoadedItemsOnce, setHasLoadedItemsOnce] = useState(false);
+  // 入力中のpurchase_quantityを文字列として保持（vp.id -> 入力中の文字列）
+  const [purchaseQuantityInputs, setPurchaseQuantityInputs] = useState<
+    Map<string, string>
+  >(new Map());
+  // 入力中のpurchase_costを文字列として保持（vp.id -> 入力中の文字列）
+  const [purchaseCostInputs, setPurchaseCostInputs] = useState<
+    Map<string, string>
+  >(new Map());
 
   // Base Itemsタブ用のstate
   const [baseItemsUI, setBaseItemsUI] = useState<BaseItemUI[]>([]);
@@ -74,6 +82,14 @@ export default function ItemsPage() {
   const [isEditModeBaseItems, setIsEditModeBaseItems] = useState(false);
   const [loadingBaseItems, setLoadingBaseItems] = useState(false);
   const [hasLoadedBaseItemsOnce, setHasLoadedBaseItemsOnce] = useState(false);
+  // 入力中のspecific_weightを文字列として保持（item.id -> 入力中の文字列）
+  const [specificWeightInputs, setSpecificWeightInputs] = useState<
+    Map<string, string>
+  >(new Map());
+  // 入力中のeach_gramsを文字列として保持（item.id -> 入力中の文字列）
+  const [eachGramsInputs, setEachGramsInputs] = useState<Map<string, string>>(
+    new Map()
+  );
 
   // Vendorsタブ用のstate
   const [vendorsUI, setVendorsUI] = useState<VendorUI[]>([]);
@@ -1225,26 +1241,50 @@ export default function ItemsPage() {
                             >
                               {isEditModeItems ? (
                                 <input
-                                  type="number"
+                                  type="text"
+                                  inputMode="decimal"
                                   value={
-                                    vp.purchase_quantity === 0
+                                    purchaseQuantityInputs.has(vp.id)
+                                      ? purchaseQuantityInputs.get(vp.id) || ""
+                                      : vp.purchase_quantity === 0
                                       ? ""
                                       : String(vp.purchase_quantity)
                                   }
                                   onChange={(e) => {
                                     const value = e.target.value;
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setPurchaseQuantityInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(vp.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
                                     const numValue =
-                                      value === "" ? 0 : parseFloat(value) || 0;
+                                      value === "" || value === "."
+                                        ? 0
+                                        : parseFloat(value) || 0;
                                     handleVendorProductChange(
                                       vp.id,
                                       "purchase_quantity",
                                       numValue
                                     );
+                                    // 入力状態をクリア（次回表示時は実際の値から取得）
+                                    setPurchaseQuantityInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.delete(vp.id);
+                                      return newMap;
+                                    });
                                   }}
                                   className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                   placeholder="0"
-                                  min="0"
-                                  step="0.01"
                                   style={{
                                     height: "20px",
                                     minHeight: "20px",
@@ -1297,16 +1337,34 @@ export default function ItemsPage() {
                                     $
                                   </span>
                                   <input
-                                    type="number"
+                                    type="text"
+                                    inputMode="decimal"
                                     value={
-                                      vp.purchase_cost === 0
+                                      purchaseCostInputs.has(vp.id)
+                                        ? purchaseCostInputs.get(vp.id) || ""
+                                        : vp.purchase_cost === 0
                                         ? ""
                                         : String(vp.purchase_cost)
                                     }
                                     onChange={(e) => {
                                       const value = e.target.value;
+                                      // 数字と小数点のみを許可（空文字列も許可）
+                                      const numericPattern =
+                                        /^(\d+\.?\d*|\.\d+)?$/;
+                                      if (numericPattern.test(value)) {
+                                        setPurchaseCostInputs((prev) => {
+                                          const newMap = new Map(prev);
+                                          newMap.set(vp.id, value);
+                                          return newMap;
+                                        });
+                                      }
+                                      // マッチしない場合は何もしない（前の値を保持）
+                                    }}
+                                    onBlur={(e) => {
+                                      const value = e.target.value;
+                                      // フォーカスアウト時に数値に変換
                                       const numValue =
-                                        value === ""
+                                        value === "" || value === "."
                                           ? 0
                                           : parseFloat(value) || 0;
                                       handleVendorProductChange(
@@ -1314,11 +1372,15 @@ export default function ItemsPage() {
                                         "purchase_cost",
                                         numValue
                                       );
+                                      // 入力状態をクリア（次回表示時は実際の値から取得）
+                                      setPurchaseCostInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.delete(vp.id);
+                                        return newMap;
+                                      });
                                     }}
                                     className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     placeholder="0.00"
-                                    min="0"
-                                    step="0.01"
                                     style={{
                                       height: "20px",
                                       minHeight: "20px",
@@ -1528,12 +1590,34 @@ export default function ItemsPage() {
                           >
                             {isEditModeBaseItems ? (
                               <input
-                                type="number"
-                                value={item.specific_weight || ""}
+                                type="text"
+                                inputMode="decimal"
+                                value={
+                                  specificWeightInputs.has(item.id)
+                                    ? specificWeightInputs.get(item.id)!
+                                    : item.specific_weight === null ||
+                                      item.specific_weight === undefined
+                                    ? ""
+                                    : String(item.specific_weight)
+                                }
                                 onChange={(e) => {
                                   const value = e.target.value;
+                                  // 数字と小数点のみを許可（空文字列も許可）
+                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                                  if (numericPattern.test(value)) {
+                                    setSpecificWeightInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.set(item.id, value);
+                                      return newMap;
+                                    });
+                                  }
+                                  // マッチしない場合は何もしない（前の値を保持）
+                                }}
+                                onBlur={(e) => {
+                                  const value = e.target.value;
+                                  // フォーカスアウト時に数値に変換
                                   const numValue =
-                                    value === ""
+                                    value === "" || value === "."
                                       ? null
                                       : parseFloat(value) || null;
                                   handleBaseItemChange(
@@ -1541,11 +1625,15 @@ export default function ItemsPage() {
                                     "specific_weight",
                                     numValue
                                   );
+                                  // 入力中の文字列をクリア
+                                  setSpecificWeightInputs((prev) => {
+                                    const newMap = new Map(prev);
+                                    newMap.delete(item.id);
+                                    return newMap;
+                                  });
                                 }}
                                 className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 placeholder="0.00"
-                                min="0"
-                                step="0.01"
                                 style={{
                                   height: "20px",
                                   minHeight: "20px",
@@ -1590,12 +1678,34 @@ export default function ItemsPage() {
                           >
                             {isEditModeBaseItems ? (
                               <input
-                                type="number"
-                                value={item.each_grams || ""}
+                                type="text"
+                                inputMode="decimal"
+                                value={
+                                  eachGramsInputs.has(item.id)
+                                    ? eachGramsInputs.get(item.id)!
+                                    : item.each_grams === null ||
+                                      item.each_grams === undefined
+                                    ? ""
+                                    : String(item.each_grams)
+                                }
                                 onChange={(e) => {
                                   const value = e.target.value;
+                                  // 数字と小数点のみを許可（空文字列も許可）
+                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                                  if (numericPattern.test(value)) {
+                                    setEachGramsInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.set(item.id, value);
+                                      return newMap;
+                                    });
+                                  }
+                                  // マッチしない場合は何もしない（前の値を保持）
+                                }}
+                                onBlur={(e) => {
+                                  const value = e.target.value;
+                                  // フォーカスアウト時に数値に変換
                                   const numValue =
-                                    value === ""
+                                    value === "" || value === "."
                                       ? null
                                       : parseFloat(value) || null;
                                   handleBaseItemChange(
@@ -1603,11 +1713,15 @@ export default function ItemsPage() {
                                     "each_grams",
                                     numValue
                                   );
+                                  // 入力中の文字列をクリア
+                                  setEachGramsInputs((prev) => {
+                                    const newMap = new Map(prev);
+                                    newMap.delete(item.id);
+                                    return newMap;
+                                  });
                                 }}
                                 className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 placeholder="0"
-                                min="0"
-                                step="0.01"
                                 style={{
                                   height: "20px",
                                   minHeight: "20px",

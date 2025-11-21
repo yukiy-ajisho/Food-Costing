@@ -17,6 +17,10 @@ export default function SettingsPage() {
   );
   const [isEditMode, setIsEditMode] = useState(false);
   const [loading, setLoading] = useState(true);
+  // hourly_wage入力用の文字列状態を保持（role.idをキーとする）
+  const [hourlyWageInputs, setHourlyWageInputs] = useState<Map<string, string>>(
+    new Map()
+  );
 
   // データ取得
   useEffect(() => {
@@ -309,27 +313,49 @@ export default function SettingsPage() {
                               $
                             </span>
                             <input
-                              type="number"
+                              type="text"
+                              inputMode="decimal"
                               value={
-                                role.hourly_wage === 0
+                                hourlyWageInputs.has(role.id)
+                                  ? hourlyWageInputs.get(role.id) || ""
+                                  : role.hourly_wage === 0
                                   ? ""
-                                  : role.hourly_wage || ""
+                                  : String(role.hourly_wage)
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
-                                // 空文字列の場合は0、それ以外は数値に変換
+                                // 数字と小数点のみを許可（空文字列も許可）
+                                const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
+                                if (numericPattern.test(value)) {
+                                  setHourlyWageInputs((prev) => {
+                                    const newMap = new Map(prev);
+                                    newMap.set(role.id, value);
+                                    return newMap;
+                                  });
+                                }
+                                // マッチしない場合は何もしない（前の値を保持）
+                              }}
+                              onBlur={(e) => {
+                                const value = e.target.value;
+                                // フォーカスアウト時に数値に変換
                                 const numValue =
-                                  value === "" ? 0 : parseFloat(value) || 0;
+                                  value === "" || value === "."
+                                    ? 0
+                                    : parseFloat(value) || 0;
                                 handleLaborRoleChange(
                                   role.id,
                                   "hourly_wage",
                                   numValue
                                 );
+                                // 入力状態をクリア（次回表示時は実際の値から取得）
+                                setHourlyWageInputs((prev) => {
+                                  const newMap = new Map(prev);
+                                  newMap.delete(role.id);
+                                  return newMap;
+                                });
                               }}
                               className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                               placeholder="0.00"
-                              min="0"
-                              step="0.01"
                               style={{
                                 height: "20px",
                                 minHeight: "20px",
