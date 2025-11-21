@@ -2,9 +2,9 @@
 
 import { createClient } from "@/lib/supabase-client";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
@@ -100,5 +100,23 @@ export default function LoginPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-slate-900">
+          <div className="w-full max-w-md bg-white dark:bg-slate-800 p-8 rounded-lg shadow-md">
+            <div className="text-center text-gray-600 dark:text-gray-400">
+              読み込み中...
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   );
 }
