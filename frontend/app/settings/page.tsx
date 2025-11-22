@@ -2,7 +2,15 @@
 
 import { useState, useEffect } from "react";
 import { Edit, Save, Plus, Trash2, X } from "lucide-react";
-import { laborRolesAPI, saveChangeHistory, type LaborRole } from "@/lib/api";
+import {
+  laborRolesAPI,
+  proceedValidationSettingsAPI,
+  saveChangeHistory,
+  type LaborRole,
+  type ProceedValidationSettings,
+} from "@/lib/api";
+
+type TabType = "labor" | "overweight";
 
 // UI用の型（isMarkedForDeletionを追加）
 interface LaborRoleUI extends LaborRole {
@@ -10,55 +18,120 @@ interface LaborRoleUI extends LaborRole {
 }
 
 export default function SettingsPage() {
-  // const [activeTab, setActiveTab] = useState<TabType>("labor"); // 未使用のためコメントアウト
+  const [activeTab, setActiveTab] = useState<TabType>("labor");
+
+  // Laborタブ用のstate
   const [laborRoles, setLaborRoles] = useState<LaborRoleUI[]>([]);
   const [originalLaborRoles, setOriginalLaborRoles] = useState<LaborRoleUI[]>(
     []
   );
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [isEditModeLabor, setIsEditModeLabor] = useState(false);
+  const [loadingLabor, setLoadingLabor] = useState(false);
+  const [hasLoadedLaborOnce, setHasLoadedLaborOnce] = useState(false);
   // hourly_wage入力用の文字列状態を保持（role.idをキーとする）
   const [hourlyWageInputs, setHourlyWageInputs] = useState<Map<string, string>>(
     new Map()
   );
 
-  // データ取得
+  // Overweightタブ用のstate
+  const [proceedValidationSettings, setProceedValidationSettings] =
+    useState<ProceedValidationSettings | null>(null);
+  const [
+    originalProceedValidationSettings,
+    setOriginalProceedValidationSettings,
+  ] = useState<ProceedValidationSettings | null>(null);
+  const [isEditModeOverweight, setIsEditModeOverweight] = useState(false);
+  const [loadingOverweight, setLoadingOverweight] = useState(false);
+  const [hasLoadedOverweightOnce, setHasLoadedOverweightOnce] = useState(false);
+
+  // =========================================================
+  // Laborタブのデータ取得
+  // =========================================================
   useEffect(() => {
+    if (activeTab !== "labor") return;
+
+    // 既にデータが存在する場合は再取得をスキップ
+    if (laborRoles.length > 0) {
+      return;
+    }
+
+    // 初回ロード時のみローディング状態を表示
+    const isFirstLoad = !hasLoadedLaborOnce;
+
     const fetchData = async () => {
       try {
-        setLoading(true);
+        if (isFirstLoad) {
+          setLoadingLabor(true);
+        }
         const roles = await laborRolesAPI.getAll();
         setLaborRoles(roles);
         setOriginalLaborRoles(JSON.parse(JSON.stringify(roles)));
+        setHasLoadedLaborOnce(true);
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        alert("Failed to fetch data");
       } finally {
-        setLoading(false);
+        setLoadingLabor(false);
       }
     };
 
     fetchData();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
-  // Editモード切り替え
-  const handleEditClick = () => {
-    // 現在の状態を保存
+  // =========================================================
+  // Overweightタブのデータ取得
+  // =========================================================
+  useEffect(() => {
+    if (activeTab !== "overweight") return;
+
+    // 既にデータが存在する場合は再取得をスキップ
+    if (proceedValidationSettings !== null) {
+      return;
+    }
+
+    // 初回ロード時のみローディング状態を表示
+    const isFirstLoad = !hasLoadedOverweightOnce;
+
+    const fetchData = async () => {
+      try {
+        if (isFirstLoad) {
+          setLoadingOverweight(true);
+        }
+        const settings = await proceedValidationSettingsAPI.get();
+        setProceedValidationSettings(settings);
+        setOriginalProceedValidationSettings(
+          JSON.parse(JSON.stringify(settings))
+        );
+        setHasLoadedOverweightOnce(true);
+      } catch (error) {
+        console.error("Failed to fetch data:", error);
+        alert("Failed to fetch data");
+      } finally {
+        setLoadingOverweight(false);
+      }
+    };
+
+    fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  // =========================================================
+  // Laborタブのハンドラー
+  // =========================================================
+  const handleEditClickLabor = () => {
     setOriginalLaborRoles(JSON.parse(JSON.stringify(laborRoles)));
-    setIsEditMode(true);
+    setIsEditModeLabor(true);
   };
 
-  // Cancel処理
-  const handleCancelClick = () => {
-    // 元の状態に戻す
+  const handleCancelClickLabor = () => {
     setLaborRoles(JSON.parse(JSON.stringify(originalLaborRoles)));
-    setIsEditMode(false);
+    setIsEditModeLabor(false);
   };
 
-  // Save処理
-  const handleSaveClick = async () => {
+  const handleSaveClickLabor = async () => {
     try {
-      setLoading(true);
+      setLoadingLabor(true);
 
       // 削除予定のアイテムと空の新規レコードをフィルター
       const filteredRoles = laborRoles.filter((role) => {
@@ -112,17 +185,16 @@ export default function SettingsPage() {
       const roles = await laborRolesAPI.getAll();
       setLaborRoles(roles);
       setOriginalLaborRoles(JSON.parse(JSON.stringify(roles)));
-      setIsEditMode(false);
+      setIsEditModeLabor(false);
     } catch (error: unknown) {
       console.error("Failed to save:", error);
       const message = error instanceof Error ? error.message : String(error);
-      alert(`保存に失敗しました: ${message}`);
+      alert(`Failed to save: ${message}`);
     } finally {
-      setLoading(false);
+      setLoadingLabor(false);
     }
   };
 
-  // Labor Role更新
   const handleLaborRoleChange = (
     id: string,
     field: keyof LaborRoleUI,
@@ -135,7 +207,6 @@ export default function SettingsPage() {
     );
   };
 
-  // Labor Role削除クリック
   const handleLaborRoleDeleteClick = (id: string) => {
     setLaborRoles(
       laborRoles.map((role) =>
@@ -146,7 +217,6 @@ export default function SettingsPage() {
     );
   };
 
-  // Labor Role追加
   const handleAddLaborRole = () => {
     const newRole: LaborRoleUI = {
       id: `new-${Date.now()}`,
@@ -157,7 +227,95 @@ export default function SettingsPage() {
     setLaborRoles([...laborRoles, newRole]);
   };
 
-  if (loading) {
+  // =========================================================
+  // Overweightタブのハンドラー
+  // =========================================================
+  const handleEditClickOverweight = () => {
+    if (proceedValidationSettings) {
+      setOriginalProceedValidationSettings(
+        JSON.parse(JSON.stringify(proceedValidationSettings))
+      );
+    }
+    setIsEditModeOverweight(true);
+  };
+
+  const handleCancelClickOverweight = () => {
+    if (originalProceedValidationSettings) {
+      setProceedValidationSettings(
+        JSON.parse(JSON.stringify(originalProceedValidationSettings))
+      );
+    }
+    setIsEditModeOverweight(false);
+  };
+
+  const handleSaveClickOverweight = async () => {
+    try {
+      setLoadingOverweight(true);
+
+      if (!proceedValidationSettings) {
+        alert("Settings not found");
+        return;
+      }
+
+      await proceedValidationSettingsAPI.update({
+        validation_mode: proceedValidationSettings.validation_mode,
+      });
+
+      // データを再取得
+      const settings = await proceedValidationSettingsAPI.get();
+      setProceedValidationSettings(settings);
+      setOriginalProceedValidationSettings(
+        JSON.parse(JSON.stringify(settings))
+      );
+      setIsEditModeOverweight(false);
+    } catch (error: unknown) {
+      console.error("Failed to save:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`Failed to save: ${message}`);
+    } finally {
+      setLoadingOverweight(false);
+    }
+  };
+
+  const handleValidationModeChange = (mode: "permit" | "block" | "notify") => {
+    if (proceedValidationSettings) {
+      setProceedValidationSettings({
+        ...proceedValidationSettings,
+        validation_mode: mode,
+      });
+    }
+  };
+
+  // =========================================================
+  // レンダリング
+  // =========================================================
+  // 現在のタブのEditモード
+  const isEditMode =
+    (activeTab === "labor" && isEditModeLabor) ||
+    (activeTab === "overweight" && isEditModeOverweight);
+
+  // Edit/Save/Cancelボタンのハンドラー
+  const handleEditClick = () => {
+    if (activeTab === "labor") handleEditClickLabor();
+    else if (activeTab === "overweight") handleEditClickOverweight();
+  };
+
+  const handleCancelClick = () => {
+    if (activeTab === "labor") handleCancelClickLabor();
+    else if (activeTab === "overweight") handleCancelClickOverweight();
+  };
+
+  const handleSaveClick = () => {
+    if (activeTab === "labor") handleSaveClickLabor();
+    else if (activeTab === "overweight") handleSaveClickOverweight();
+  };
+
+  // ローディング状態
+  const loading =
+    (activeTab === "labor" && loadingLabor) ||
+    (activeTab === "overweight" && loadingOverweight);
+
+  if (loading && !hasLoadedLaborOnce && !hasLoadedOverweightOnce) {
     return (
       <div className="p-8">
         <div className="max-w-7xl mx-auto text-center">Loading...</div>
@@ -168,6 +326,32 @@ export default function SettingsPage() {
   return (
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
+        {/* タブ */}
+        <div className="mb-6 border-b border-gray-200">
+          <nav className="flex space-x-8">
+            <button
+              onClick={() => setActiveTab("labor")}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === "labor"
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              Labor
+            </button>
+            <button
+              onClick={() => setActiveTab("overweight")}
+              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                activeTab === "overweight"
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              Overweight
+            </button>
+          </nav>
+        </div>
+
         {/* ヘッダーとEdit/Save/Cancelボタン */}
         <div className="flex justify-end items-center mb-6 gap-2">
           {isEditMode ? (
@@ -198,249 +382,371 @@ export default function SettingsPage() {
           )}
         </div>
 
-        {/* Labor Rolesセクション */}
-        <div className="mb-8">
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Name
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Hourly Wage ($)
-                  </th>
-                  {isEditMode && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
-                      {/* ゴミ箱列のヘッダー */}
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {laborRoles.map((role) => (
-                  <tr
-                    key={role.id}
-                    className={`${
-                      role.isMarkedForDeletion ? "bg-red-50" : ""
-                    } hover:bg-gray-50`}
-                    style={{
-                      height: "52px",
-                      minHeight: "52px",
-                      maxHeight: "52px",
-                    }}
-                  >
-                    {/* Name */}
-                    <td
-                      className="px-6 whitespace-nowrap"
-                      style={{
-                        paddingTop: "16px",
-                        paddingBottom: "16px",
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      <div
+        {/* Laborタブ */}
+        {activeTab === "labor" && (
+          <>
+            {loadingLabor ? (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+                Loading...
+              </div>
+            ) : (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Name
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Hourly Wage ($)
+                      </th>
+                      {isEditModeLabor && (
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                          {/* ゴミ箱列のヘッダー */}
+                        </th>
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {laborRoles.map((role) => (
+                      <tr
+                        key={role.id}
+                        className={`${
+                          role.isMarkedForDeletion ? "bg-red-50" : ""
+                        } hover:bg-gray-50`}
                         style={{
-                          height: "20px",
-                          minHeight: "20px",
-                          maxHeight: "20px",
-                          display: "flex",
-                          alignItems: "center",
+                          height: "52px",
+                          minHeight: "52px",
+                          maxHeight: "52px",
                         }}
                       >
-                        {isEditMode ? (
-                          <input
-                            type="text"
-                            value={role.name}
-                            onChange={(e) =>
-                              handleLaborRoleChange(
-                                role.id,
-                                "name",
-                                e.target.value
-                              )
-                            }
-                            className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            placeholder="Role name (e.g., Prep Cook)"
+                        {/* Name */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
                             style={{
                               height: "20px",
                               minHeight: "20px",
                               maxHeight: "20px",
-                              lineHeight: "20px",
-                              padding: "0 4px",
-                              fontSize: "0.875rem",
-                              boxSizing: "border-box",
-                              margin: 0,
+                              display: "flex",
+                              alignItems: "center",
                             }}
-                          />
-                        ) : (
-                          <div
-                            className="text-sm text-gray-900"
-                            style={{ height: "20px", lineHeight: "20px" }}
                           >
-                            {role.name}
-                          </div>
-                        )}
-                      </div>
-                    </td>
-
-                    {/* Hourly Wage */}
-                    <td
-                      className="px-6 whitespace-nowrap"
-                      style={{
-                        paddingTop: "16px",
-                        paddingBottom: "16px",
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      <div
-                        style={{
-                          height: "20px",
-                          minHeight: "20px",
-                          maxHeight: "20px",
-                          display: "flex",
-                          alignItems: "center",
-                        }}
-                      >
-                        {isEditMode ? (
-                          <div
-                            className="flex items-center gap-1"
-                            style={{ height: "20px" }}
-                          >
-                            <span
-                              className="text-gray-500"
-                              style={{ lineHeight: "20px" }}
-                            >
-                              $
-                            </span>
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={
-                                hourlyWageInputs.has(role.id)
-                                  ? hourlyWageInputs.get(role.id) || ""
-                                  : role.hourly_wage === 0
-                                  ? ""
-                                  : String(role.hourly_wage)
-                              }
-                              onChange={(e) => {
-                                const value = e.target.value;
-                                // 数字と小数点のみを許可（空文字列も許可）
-                                const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
-                                if (numericPattern.test(value)) {
-                                  setHourlyWageInputs((prev) => {
-                                    const newMap = new Map(prev);
-                                    newMap.set(role.id, value);
-                                    return newMap;
-                                  });
+                            {isEditModeLabor ? (
+                              <input
+                                type="text"
+                                value={role.name}
+                                onChange={(e) =>
+                                  handleLaborRoleChange(
+                                    role.id,
+                                    "name",
+                                    e.target.value
+                                  )
                                 }
-                                // マッチしない場合は何もしない（前の値を保持）
-                              }}
-                              onBlur={(e) => {
-                                const value = e.target.value;
-                                // フォーカスアウト時に数値に変換
-                                const numValue =
-                                  value === "" || value === "."
-                                    ? 0
-                                    : parseFloat(value) || 0;
-                                handleLaborRoleChange(
-                                  role.id,
-                                  "hourly_wage",
-                                  numValue
-                                );
-                                // 入力状態をクリア（次回表示時は実際の値から取得）
-                                setHourlyWageInputs((prev) => {
-                                  const newMap = new Map(prev);
-                                  newMap.delete(role.id);
-                                  return newMap;
-                                });
-                              }}
-                              className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                              placeholder="0.00"
+                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Role name (e.g., Prep Cook)"
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  lineHeight: "20px",
+                                  padding: "0 4px",
+                                  fontSize: "0.875rem",
+                                  boxSizing: "border-box",
+                                  margin: 0,
+                                }}
+                              />
+                            ) : (
+                              <div
+                                className="text-sm text-gray-900"
+                                style={{ height: "20px", lineHeight: "20px" }}
+                              >
+                                {role.name}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Hourly Wage */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            {isEditModeLabor ? (
+                              <div
+                                className="flex items-center gap-1"
+                                style={{ height: "20px" }}
+                              >
+                                <span
+                                  className="text-gray-500"
+                                  style={{ lineHeight: "20px" }}
+                                >
+                                  $
+                                </span>
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={
+                                    hourlyWageInputs.has(role.id)
+                                      ? hourlyWageInputs.get(role.id) || ""
+                                      : role.hourly_wage === 0
+                                      ? ""
+                                      : String(role.hourly_wage)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setHourlyWageInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(role.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
+                                    const numValue =
+                                      value === "" || value === "."
+                                        ? 0
+                                        : parseFloat(value) || 0;
+                                    handleLaborRoleChange(
+                                      role.id,
+                                      "hourly_wage",
+                                      numValue
+                                    );
+                                    // 入力状態をクリア（次回表示時は実際の値から取得）
+                                    setHourlyWageInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.delete(role.id);
+                                      return newMap;
+                                    });
+                                  }}
+                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="0.00"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              </div>
+                            ) : (
+                              <div
+                                className="text-sm text-gray-900"
+                                style={{ height: "20px", lineHeight: "20px" }}
+                              >
+                                ${role.hourly_wage.toFixed(2)}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* ゴミ箱（Editモード時のみ） */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          {isEditModeLabor && (
+                            <button
+                              onClick={() =>
+                                handleLaborRoleDeleteClick(role.id)
+                              }
+                              className={`p-2 rounded-md transition-colors ${
+                                role.isMarkedForDeletion
+                                  ? "bg-red-500 text-white hover:bg-red-600"
+                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                              }`}
                               style={{
                                 height: "20px",
                                 minHeight: "20px",
                                 maxHeight: "20px",
-                                lineHeight: "20px",
-                                padding: "0 4px",
-                                fontSize: "0.875rem",
                                 boxSizing: "border-box",
-                                margin: 0,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: "0",
                               }}
-                            />
-                          </div>
-                        ) : (
-                          <div
-                            className="text-sm text-gray-900"
-                            style={{ height: "20px", lineHeight: "20px" }}
-                          >
-                            ${role.hourly_wage.toFixed(2)}
-                          </div>
-                        )}
-                      </div>
-                    </td>
+                              title="Mark for deletion"
+                            >
+                              <Trash2 className="w-5 h-5" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
 
-                    {/* ゴミ箱（Editモード時のみ） */}
-                    <td
-                      className="px-6 whitespace-nowrap"
-                      style={{
-                        paddingTop: "16px",
-                        paddingBottom: "16px",
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      {isEditMode && (
-                        <button
-                          onClick={() => handleLaborRoleDeleteClick(role.id)}
-                          className={`p-2 rounded-md transition-colors ${
-                            role.isMarkedForDeletion
-                              ? "bg-red-500 text-white hover:bg-red-600"
-                              : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                          }`}
+                    {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
+                    {isEditModeLabor && (
+                      <tr>
+                        <td
+                          colSpan={isEditModeLabor ? 3 : 2}
+                          className="px-6"
                           style={{
-                            height: "20px",
-                            minHeight: "20px",
-                            maxHeight: "20px",
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
                             boxSizing: "border-box",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            padding: "0",
                           }}
-                          title="Mark for deletion"
                         >
-                          <Trash2 className="w-5 h-5" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                          <button
+                            onClick={handleAddLaborRole}
+                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                          >
+                            <Plus className="w-5 h-5" />
+                            <span>Add new labor role</span>
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
 
-                {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
-                {isEditMode && (
-                  <tr>
-                    <td
-                      colSpan={isEditMode ? 3 : 2}
-                      className="px-6"
-                      style={{
-                        paddingTop: "16px",
-                        paddingBottom: "16px",
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      <button
-                        onClick={handleAddLaborRole}
-                        className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                      >
-                        <Plus className="w-5 h-5" />
-                        <span>Add new labor role</span>
-                      </button>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        {/* Overweightタブ */}
+        {activeTab === "overweight" && (
+          <>
+            {loadingOverweight ? (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+                Loading...
+              </div>
+            ) : (
+              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+                <h2 className="text-lg font-semibold mb-4">
+                  Proceed Validation Settings
+                </h2>
+                <p className="text-sm text-gray-600 mb-6">
+                  When proceed_yield_amount exceeds total ingredients:
+                </p>
+                <div className="space-y-4">
+                  <label
+                    className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
+                      isEditModeOverweight
+                        ? "hover:bg-gray-50"
+                        : "cursor-not-allowed opacity-60"
+                    } ${
+                      proceedValidationSettings?.validation_mode === "permit"
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-gray-200"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="validation_mode"
+                      value="permit"
+                      checked={
+                        proceedValidationSettings?.validation_mode === "permit"
+                      }
+                      onChange={() => handleValidationModeChange("permit")}
+                      disabled={!isEditModeOverweight}
+                      className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div>
+                      <div className="font-medium">Permit</div>
+                      <div className="text-sm text-gray-500">
+                        Allow saving without error
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
+                      isEditModeOverweight
+                        ? "hover:bg-gray-50"
+                        : "cursor-not-allowed opacity-60"
+                    } ${
+                      proceedValidationSettings?.validation_mode === "block"
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-gray-200"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="validation_mode"
+                      value="block"
+                      checked={
+                        proceedValidationSettings?.validation_mode === "block"
+                      }
+                      onChange={() => handleValidationModeChange("block")}
+                      disabled={!isEditModeOverweight}
+                      className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div>
+                      <div className="font-medium">Block</div>
+                      <div className="text-sm text-gray-500">
+                        Show error and prevent saving
+                      </div>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
+                      isEditModeOverweight
+                        ? "hover:bg-gray-50"
+                        : "cursor-not-allowed opacity-60"
+                    } ${
+                      proceedValidationSettings?.validation_mode === "notify"
+                        ? "border-blue-500 bg-blue-50"
+                        : "border-gray-200"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="validation_mode"
+                      value="notify"
+                      checked={
+                        proceedValidationSettings?.validation_mode === "notify"
+                      }
+                      onChange={() => handleValidationModeChange("notify")}
+                      disabled={!isEditModeOverweight}
+                      className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div>
+                      <div className="font-medium">Notify</div>
+                      <div className="text-sm text-gray-500">
+                        Allow saving but show warning popup
+                      </div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

@@ -96,3 +96,11 @@ export interface ItemUnitProfile {
   created_at?: string;
   updated_at?: string;
 }
+
+export interface ProceedValidationSettings {
+  id: string;
+  user_id: string; // FK to users
+  validation_mode: "permit" | "block" | "notify";
+  created_at?: string;
+  updated_at?: string;
+}

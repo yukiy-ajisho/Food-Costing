@@ -192,24 +192,12 @@ router.put("/:id", async (req, res) => {
                 }
               }
 
-              // Yieldをグラムに変換
+              // Yieldをグラムに変換（バリデーションはフロントエンドで実施）
               const yieldMultiplier =
                 MASS_UNIT_CONVERSIONS[item.proceed_yield_unit];
               if (yieldMultiplier) {
                 const yieldGrams = item.proceed_yield_amount * yieldMultiplier;
-
-                // バリデーション: Yieldが材料の総合計を超えないかチェック
-                if (yieldGrams > totalIngredientsGrams) {
-                  return res.status(400).json({
-                    error: `Yield (${item.proceed_yield_amount} ${
-                      item.proceed_yield_unit
-                    } = ${yieldGrams.toFixed(
-                      2
-                    )}g) exceeds total ingredients (${totalIngredientsGrams.toFixed(
-                      2
-                    )}g). Yield must be less than or equal to total ingredients.`,
-                  });
-                }
+                // バリデーションはフロントエンドで実施するため、ここではチェックしない
               }
             }
           }

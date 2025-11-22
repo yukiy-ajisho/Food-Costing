@@ -1430,6 +1430,10 @@ export default function CostPage() {
 
   // Save処理（内部実装用）
   const performSave = async (itemsToSave: PreppedItem[]) => {
+    console.log("[DEBUG] performSave開始", {
+      itemsToSaveCount: itemsToSave.length,
+      timestamp: new Date().toISOString(),
+    });
     try {
       setLoading(true);
 
@@ -1449,8 +1453,25 @@ export default function CostPage() {
       const validationSettings = await proceedValidationSettingsAPI.get();
       const validationMode = validationSettings.validation_mode || "block";
 
+      // デバッグログ: バリデーション開始
+      console.log("[DEBUG] バリデーション開始", {
+        filteredItemsCount: filteredItems.length,
+        validationMode,
+        filteredItems: filteredItems.map((item) => ({
+          id: item.id,
+          name: item.name,
+          proceed_yield_amount: item.proceed_yield_amount,
+          proceed_yield_unit: item.proceed_yield_unit,
+        })),
+      });
+
       // バリデーション: Yieldが材料の総合計を超えないかチェック
       for (const item of filteredItems) {
+        console.log("[DEBUG] アイテムをチェック中:", {
+          id: item.id,
+          name: item.name,
+          proceed_yield_unit: item.proceed_yield_unit,
+        });
         const totalIngredientsGrams = calculateTotalIngredientsGrams(
           item.recipe_lines
         );
@@ -1486,9 +1507,18 @@ export default function CostPage() {
               setLoading(false);
               return;
             } else if (validationMode === "notify") {
+              console.log("[DEBUG] notifyモード: ポップアップ表示（each）", {
+                itemId: item.id,
+                itemName: item.name,
+              });
               const confirmed = window.confirm(
                 `${errorMessage}\n\nContinue saving anyway?`
               );
+              console.log("[DEBUG] notifyモード: ユーザー応答（each）", {
+                itemId: item.id,
+                itemName: item.name,
+                confirmed,
+              });
               if (!confirmed) {
                 setLoading(false);
                 return;
@@ -1524,9 +1554,21 @@ export default function CostPage() {
               setLoading(false);
               return;
             } else if (validationMode === "notify") {
+              console.log(
+                "[DEBUG] notifyモード: ポップアップ表示（質量単位）",
+                {
+                  itemId: item.id,
+                  itemName: item.name,
+                }
+              );
               const confirmed = window.confirm(
                 `${errorMessage}\n\nContinue saving anyway?`
               );
+              console.log("[DEBUG] notifyモード: ユーザー応答（質量単位）", {
+                itemId: item.id,
+                itemName: item.name,
+                confirmed,
+              });
               if (!confirmed) {
                 setLoading(false);
                 return;
@@ -1536,6 +1578,8 @@ export default function CostPage() {
           }
         }
       }
+
+      console.log("[DEBUG] バリデーション完了");
 
       // 循環参照チェック（保存前）
       // フロントエンドのcycle detectionを停止 - バックエンドのcycle detectionに依存
@@ -2145,6 +2189,10 @@ export default function CostPage() {
 
   // Save処理（ボタン用）
   const handleSaveClick = async () => {
+    console.log("[DEBUG] handleSaveClick呼び出し", {
+      itemsCount: items.length,
+      timestamp: new Date().toISOString(),
+    });
     await performSave(items);
   };
 
