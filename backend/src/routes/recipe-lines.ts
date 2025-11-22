@@ -70,6 +70,36 @@ async function validateRecipeLineNotDeprecated(
   return { valid: true };
 }
 
+/**
+ * Labor Roleのバリデーション: labor_roleが存在するかチェック
+ */
+async function validateLaborRoleExists(
+  laborRole: string | null | undefined,
+  userId: string
+): Promise<{ valid: boolean; error?: string }> {
+  // labor_roleが指定されていない場合はスキップ
+  if (!laborRole) {
+    return { valid: true };
+  }
+
+  // labor_rolesテーブルに、同じuser_idで、同じnameが存在するかチェック
+  const { data: laborRoleData, error } = await supabase
+    .from("labor_roles")
+    .select("name")
+    .eq("name", laborRole)
+    .eq("user_id", userId)
+    .single();
+
+  if (error || !laborRoleData) {
+    return {
+      valid: false,
+      error: `Labor role "${laborRole}" does not exist. Please create it first in Settings.`,
+    };
+  }
+
+  return { valid: true };
+}
+
 const router = Router();
 
 /**
@@ -98,6 +128,16 @@ router.post("/", async (req, res) => {
         return res.status(400).json({
           error: "labor line requires minutes > 0",
         });
+      }
+      // labor_roleの存在チェック
+      if (line.labor_role) {
+        const laborRoleValidation = await validateLaborRoleExists(
+          line.labor_role,
+          req.user!.id
+        );
+        if (!laborRoleValidation.valid) {
+          return res.status(400).json({ error: laborRoleValidation.error });
+        }
       }
     }
 
@@ -282,6 +322,20 @@ router.put("/:id", async (req, res) => {
         return res.status(400).json({
           error: message,
         });
+      }
+    }
+
+    // labor_roleの存在チェック（labor lineの場合、labor_roleが設定される場合）
+    if (
+      (existingLine.line_type === "labor" || line.line_type === "labor") &&
+      line.labor_role
+    ) {
+      const laborRoleValidation = await validateLaborRoleExists(
+        line.labor_role,
+        req.user!.id
+      );
+      if (!laborRoleValidation.valid) {
+        return res.status(400).json({ error: laborRoleValidation.error });
       }
     }
 
@@ -477,6 +531,16 @@ router.post("/batch", async (req, res) => {
             error: "labor line requires minutes > 0",
           });
         }
+        // labor_roleの存在チェック
+        if (create.labor_role) {
+          const laborRoleValidation = await validateLaborRoleExists(
+            create.labor_role,
+            req.user!.id
+          );
+          if (!laborRoleValidation.valid) {
+            return res.status(400).json({ error: laborRoleValidation.error });
+          }
+        }
       }
     }
 
@@ -500,6 +564,16 @@ router.post("/batch", async (req, res) => {
           return res.status(400).json({
             error: "labor line requires minutes > 0",
           });
+        }
+        // labor_roleの存在チェック
+        if (update.labor_role) {
+          const laborRoleValidation = await validateLaborRoleExists(
+            update.labor_role,
+            req.user!.id
+          );
+          if (!laborRoleValidation.valid) {
+            return res.status(400).json({ error: laborRoleValidation.error });
+          }
         }
       }
     }
