@@ -182,7 +182,7 @@ router.put("/:id", async (req, res) => {
                     baseItemsMap,
                     vendorProductsMap
                   );
-                  totalIngredientsGrams += grams;
+                  void (totalIngredientsGrams += grams);
                 } catch (error) {
                   // 変換エラーは無視（バリデーションをスキップ）
                   console.error(
@@ -196,8 +196,8 @@ router.put("/:id", async (req, res) => {
               const yieldMultiplier =
                 MASS_UNIT_CONVERSIONS[item.proceed_yield_unit];
               if (yieldMultiplier) {
-                const yieldGrams = item.proceed_yield_amount * yieldMultiplier;
                 // バリデーションはフロントエンドで実施するため、ここではチェックしない
+                void (item.proceed_yield_amount * yieldMultiplier);
               }
             }
           }
