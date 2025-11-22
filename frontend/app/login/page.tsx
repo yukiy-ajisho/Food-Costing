@@ -8,6 +8,7 @@ function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const [isChecking, setIsChecking] = useState(true);
   const supabase = createClient();
 
   useEffect(() => {
@@ -23,9 +24,12 @@ function LoginPageContent() {
         // セッションの有効性はmiddlewareで検証されるため、ここでは検証しない
         if (session) {
           router.replace("/cost");
+          return; // リダイレクト中は何も表示しない
         }
       } catch {
         // エラーは無視（ログインページを表示）
+      } finally {
+        setIsChecking(false);
       }
     };
     checkUser();
@@ -35,18 +39,16 @@ function LoginPageContent() {
     if (errorParam) {
       switch (errorParam) {
         case "auth_failed":
-          setError("認証に失敗しました。もう一度お試しください。");
+          setError("Authentication failed. Please try again.");
           break;
         case "session_failed":
-          setError("セッションの確認に失敗しました。もう一度お試しください。");
+          setError("Session verification failed. Please try again.");
           break;
         case "no_code":
-          setError(
-            "認証コードが提供されませんでした。もう一度お試しください。"
-          );
+          setError("Authentication code was not provided. Please try again.");
           break;
         default:
-          setError("エラーが発生しました。もう一度お試しください。");
+          setError("An error occurred. Please try again.");
       }
     }
   }, [router, supabase, searchParams]);
@@ -62,31 +64,60 @@ function LoginPageContent() {
 
     if (error) {
       console.error("Login error:", error);
-      setError("ログインに失敗しました。もう一度お試しください。");
+      setError("Login failed. Please try again.");
     }
   };
 
+  // 認証チェック中はローディング画面を表示
+  if (isChecking) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
+        <div className="w-full max-w-md bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm p-10 rounded-2xl shadow-xl border border-gray-200/50 dark:border-slate-700/50">
+          <div className="flex flex-col items-center justify-center space-y-4">
+            <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Loading...
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-slate-900">
-      <div className="w-full max-w-md bg-white dark:bg-slate-800 p-8 rounded-lg shadow-md">
-        <h1 className="text-2xl font-bold text-center mb-6 text-gray-900 dark:text-white">
-          Food Costing
-        </h1>
-        <p className="text-gray-600 dark:text-gray-400 text-center mb-8">
-          Googleアカウントでサインインして続行してください
+    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-4">
+      <div className="w-full max-w-md bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm p-10 rounded-2xl shadow-xl border border-gray-200/50 dark:border-slate-700/50 transition-all duration-300 hover:shadow-2xl">
+        {/* ロゴ・タイトル */}
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-600 to-blue-800 dark:from-blue-400 dark:to-blue-600 bg-clip-text text-transparent">
+            Food Costing
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400 text-sm">
+            Restaurant Recipe Costing System
+          </p>
+        </div>
+
+        {/* 説明文 */}
+        <p className="text-gray-700 dark:text-gray-300 text-center mb-8 text-base">
+          Please sign in with your Google account to continue
         </p>
 
+        {/* エラーメッセージ */}
         {error && (
-          <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-400 rounded">
-            {error}
+          <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 dark:border-red-400 rounded-r-lg">
+            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
           </div>
         )}
 
+        {/* Googleサインインボタン */}
         <button
           onClick={handleGoogleLogin}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-white dark:bg-slate-700 border border-gray-300 dark:border-slate-600 rounded-lg hover:bg-gray-50 dark:hover:bg-slate-600 transition text-gray-900 dark:text-white"
+          className="w-full flex items-center justify-center gap-3 px-6 py-3.5 bg-white dark:bg-slate-700 border-2 border-gray-300 dark:border-slate-600 rounded-xl hover:bg-gray-50 dark:hover:bg-slate-600 hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-200 shadow-sm hover:shadow-md active:scale-[0.98] group"
         >
-          <svg className="w-5 h-5" viewBox="0 0 24 24">
+          <svg
+            className="w-5 h-5 transition-transform group-hover:scale-110"
+            viewBox="0 0 24 24"
+          >
             <path
               fill="#4285F4"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -104,7 +135,9 @@ function LoginPageContent() {
               d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
             />
           </svg>
-          Googleでサインイン
+          <span className="text-gray-900 dark:text-white font-medium text-base">
+            Sign in with Google
+          </span>
         </button>
       </div>
     </div>
@@ -115,10 +148,13 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-slate-900">
-          <div className="w-full max-w-md bg-white dark:bg-slate-800 p-8 rounded-lg shadow-md">
-            <div className="text-center text-gray-600 dark:text-gray-400">
-              読み込み中...
+        <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
+          <div className="w-full max-w-md bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm p-10 rounded-2xl shadow-xl border border-gray-200/50 dark:border-slate-700/50">
+            <div className="flex flex-col items-center justify-center space-y-4">
+              <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Loading...
+              </p>
             </div>
           </div>
         </div>

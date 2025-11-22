@@ -88,6 +88,17 @@ router.post("/", async (req, res) => {
       .single();
 
     if (vpError) {
+      // unique constraint違反の場合、より分かりやすいメッセージに変換
+      if (
+        vpError.code === "23505" ||
+        vpError.message.includes("duplicate key") ||
+        vpError.message.includes("unique constraint")
+      ) {
+        return res.status(400).json({
+          error:
+            "A vendor product with the same item, supplier, and product name already exists for your account.",
+        });
+      }
       return res.status(400).json({ error: vpError.message });
     }
 
@@ -134,6 +145,17 @@ router.put("/:id", async (req, res) => {
       .single();
 
     if (error) {
+      // unique constraint違反の場合、より分かりやすいメッセージに変換
+      if (
+        error.code === "23505" ||
+        error.message.includes("duplicate key") ||
+        error.message.includes("unique constraint")
+      ) {
+        return res.status(400).json({
+          error:
+            "A vendor product with the same item, supplier, and product name already exists for your account.",
+        });
+      }
       return res.status(400).json({ error: error.message });
     }
 

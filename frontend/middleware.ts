@@ -4,6 +4,9 @@ import { createServerClient } from "@supabase/ssr";
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
 
+  // パス名をヘッダーに追加（レイアウトで使用）
+  res.headers.set("x-pathname", req.nextUrl.pathname);
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -55,5 +58,6 @@ export const config = {
     "/items/:path*",
     "/settings",
     "/settings/:path*",
+    "/login",
   ],
 };
