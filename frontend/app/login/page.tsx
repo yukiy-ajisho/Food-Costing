@@ -13,11 +13,19 @@ function LoginPageContent() {
   useEffect(() => {
     // 既にログイン済みかチェック
     const checkUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user) {
-        router.replace("/cost"); // ログイン済みなら/costにリダイレクト
+      try {
+        // ローカルのセッションをチェック（サーバーにリクエストしない）
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        // セッションがある場合は/costにリダイレクト
+        // セッションの有効性はmiddlewareで検証されるため、ここでは検証しない
+        if (session) {
+          router.replace("/cost");
+        }
+      } catch {
+        // エラーは無視（ログインページを表示）
       }
     };
     checkUser();
