@@ -204,6 +204,14 @@ export interface LaborRole {
   user_id: string; // FK to users
 }
 
+export interface ProceedValidationSettings {
+  id: string;
+  user_id: string; // FK to users
+  validation_mode: "permit" | "block" | "notify";
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface NonMassUnit {
   id: string;
   name: string;
@@ -490,6 +498,17 @@ export const laborRolesAPI = {
   delete: (id: string) =>
     fetchAPI<void>(`/labor-roles/${id}`, {
       method: "DELETE",
+    }),
+};
+
+// Proceed Validation Settings API
+export const proceedValidationSettingsAPI = {
+  get: () =>
+    fetchAPI<ProceedValidationSettings>("/proceed-validation-settings"),
+  update: (settings: Partial<ProceedValidationSettings>) =>
+    fetchAPI<ProceedValidationSettings>("/proceed-validation-settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
     }),
 };
 

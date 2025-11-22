@@ -20,6 +20,7 @@ import {
   baseItemsAPI,
   vendorProductsAPI,
   vendorsAPI,
+  proceedValidationSettingsAPI,
   saveChangeHistory,
   getAndClearChangeHistory,
   type Item,
@@ -1444,6 +1445,10 @@ export default function CostPage() {
         return true;
       });
 
+      // バリデーション設定を取得
+      const validationSettings = await proceedValidationSettingsAPI.get();
+      const validationMode = validationSettings.validation_mode || "block";
+
       // バリデーション: Yieldが材料の総合計を超えないかチェック
       for (const item of filteredItems) {
         const totalIngredientsGrams = calculateTotalIngredientsGrams(
@@ -1466,17 +1471,30 @@ export default function CostPage() {
           const totalYieldGrams = eachGrams * yieldAmount;
 
           if (totalYieldGrams > totalIngredientsGrams) {
-            alert(
-              `"${item.name}"のeach_grams (${eachGrams.toFixed(
-                2
-              )}g) × yield_amount (${yieldAmount}) = ${totalYieldGrams.toFixed(
-                2
-              )}g が材料の総合計（${totalIngredientsGrams.toFixed(
-                2
-              )}g）を超えています。each_grams × yield_amountは材料の総合計以下である必要があります。`
-            );
-            setLoading(false);
-            return;
+            const errorMessage = `"${
+              item.name
+            }"のeach_grams (${eachGrams.toFixed(
+              2
+            )}g) × yield_amount (${yieldAmount}) = ${totalYieldGrams.toFixed(
+              2
+            )}g が材料の総合計（${totalIngredientsGrams.toFixed(
+              2
+            )}g）を超えています。each_grams × yield_amountは材料の総合計以下である必要があります。`;
+
+            if (validationMode === "block") {
+              alert(errorMessage);
+              setLoading(false);
+              return;
+            } else if (validationMode === "notify") {
+              const confirmed = window.confirm(
+                `${errorMessage}\n\nContinue saving anyway?`
+              );
+              if (!confirmed) {
+                setLoading(false);
+                return;
+              }
+            }
+            // validationMode === "permit" の場合は何もしない（保存を続行）
           }
         } else {
           // Yieldが質量単位（"g"または"kg"など）の場合
@@ -1493,17 +1511,28 @@ export default function CostPage() {
           }
 
           if (yieldGrams > totalIngredientsGrams) {
-            alert(
-              `"${item.name}"のProceed（${item.proceed_yield_amount} ${
-                item.proceed_yield_unit
-              } = ${yieldGrams.toFixed(
-                2
-              )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
-                2
-              )}g）を超えています。Proceedは材料の総合計以下である必要があります。`
-            );
-            setLoading(false);
-            return;
+            const errorMessage = `"${item.name}"のProceed（${
+              item.proceed_yield_amount
+            } ${item.proceed_yield_unit} = ${yieldGrams.toFixed(
+              2
+            )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
+              2
+            )}g）を超えています。Proceedは材料の総合計以下である必要があります。`;
+
+            if (validationMode === "block") {
+              alert(errorMessage);
+              setLoading(false);
+              return;
+            } else if (validationMode === "notify") {
+              const confirmed = window.confirm(
+                `${errorMessage}\n\nContinue saving anyway?`
+              );
+              if (!confirmed) {
+                setLoading(false);
+                return;
+              }
+            }
+            // validationMode === "permit" の場合は何もしない（保存を続行）
           }
         }
       }
@@ -2095,6 +2124,8 @@ export default function CostPage() {
             isExpanded: false,
             cost_per_gram: costPerGram,
             each_grams: item.each_grams || null,
+            wholesale: item.wholesale || null,
+            retail: item.retail || null,
             deprecated: item.deprecated || null,
             deprecation_reason: item.deprecation_reason || null,
           };
