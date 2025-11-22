@@ -15,6 +15,7 @@ import vendorProductsRouter from "./routes/vendor-products";
 import laborRolesRouter from "./routes/labor-roles";
 import nonMassUnitsRouter from "./routes/non-mass-units";
 import itemUnitProfilesRouter from "./routes/item-unit-profiles";
+import proceedValidationSettingsRouter from "./routes/proceed-validation-settings";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -46,6 +47,11 @@ app.use("/vendor-products", authMiddleware, vendorProductsRouter);
 app.use("/labor-roles", authMiddleware, laborRolesRouter);
 app.use("/non-mass-units", authMiddleware, nonMassUnitsRouter);
 app.use("/item-unit-profiles", authMiddleware, itemUnitProfilesRouter);
+app.use(
+  "/proceed-validation-settings",
+  authMiddleware,
+  proceedValidationSettingsRouter
+);
 
 // サーバー起動
 app.listen(PORT, () => {
