@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 import { Layout } from "@/components/Layout";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -8,16 +9,20 @@ export const metadata: Metadata = {
   description: "Restaurant Recipe Costing System",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const headersList = await headers();
+  const pathname = headersList.get("x-pathname") || "";
+  const isLoginPage = pathname === "/login";
+
   return (
     <html lang="en">
       <body>
         <ThemeProvider>
-          <Layout>{children}</Layout>
+          {isLoginPage ? children : <Layout>{children}</Layout>}
         </ThemeProvider>
       </body>
     </html>

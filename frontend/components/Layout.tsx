@@ -57,7 +57,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
       >
         {/* ロゴ・アプリ名 */}
         <div className="p-6">
-          <div className="flex items-center" style={{ gap: "8px" }}>
+          <div className="flex items-center gap-3">
+            <img
+              src="/app_icon.png"
+              alt="Food Costing"
+              width={32}
+              height={32}
+              className="object-contain flex-shrink-0"
+            />
             <h1
               className={`text-2xl font-bold transition-colors ${
                 isDark ? "text-slate-100" : "text-gray-900"

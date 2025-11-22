@@ -2179,8 +2179,14 @@ export default function CostPage() {
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
       setIsEditMode(false);
     } catch (error: unknown) {
-      console.error("Failed to save:", error);
       const message = error instanceof Error ? error.message : String(error);
+      // サイクル検出エラーはユーザーに既に通知済みのため、コンソール出力をスキップ
+      if (
+        !message.includes("Cycle detected") &&
+        !message.includes("circular dependency")
+      ) {
+        console.error("Failed to save:", error);
+      }
       alert(`保存に失敗しました: ${message}`);
     } finally {
       setLoading(false);
