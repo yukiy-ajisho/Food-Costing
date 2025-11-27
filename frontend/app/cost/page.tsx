@@ -1081,6 +1081,7 @@ export default function CostPage() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
   const [costUnit, setCostUnit] = useState<"g" | "kg">("kg"); // Cost表示単位
+  const [eachMode, setEachMode] = useState(false); // eachモード選択状態
   const [loading, setLoading] = useState(true);
   // 展開されたアイテムの色を管理（item.id -> 色のインデックス 0-3）
   const [expandedItemColors, setExpandedItemColors] = useState<
@@ -1129,28 +1130,44 @@ export default function CostPage() {
     const fetchData = async () => {
       try {
         setLoading(true);
-        // Prepped/Menu Itemsを取得
-        const preppedItems = await itemsAPI.getAll({ item_kind: "prepped" });
-        // 全アイテムを取得（ingredient選択用）
-        const allItems = await itemsAPI.getAll();
+
+        // 変更履歴をlocalStorageから取得してクリア（並列実行前に取得）
+        const changeHistory = getAndClearChangeHistory();
+
+        // 並列実行可能なAPI呼び出しを同時に実行（パフォーマンス最適化）
+        const [
+          preppedItems,
+          allItems,
+          baseItemsData,
+          vendorProductsData,
+          vendorsData,
+          roles,
+          breakdownData,
+        ] = await Promise.all([
+          itemsAPI.getAll({ item_kind: "prepped" }),
+          itemsAPI.getAll(),
+          baseItemsAPI.getAll(),
+          vendorProductsAPI.getAll(),
+          vendorsAPI.getAll(),
+          laborRolesAPI.getAll(),
+          costAPI.getCostsBreakdown().catch((error) => {
+            console.error("Failed to fetch cost breakdown:", error);
+            return { costs: {} };
+          }),
+        ]);
+
+        // 状態を更新
         setAvailableItems(allItems);
-        // Base Itemsを取得（バリデーション用）
-        const baseItemsData = await baseItemsAPI.getAll();
         setBaseItems(baseItemsData);
-        // Vendor Productsを取得（バリデーション用）
-        const vendorProductsData = await vendorProductsAPI.getAll();
         setVendorProducts(vendorProductsData);
-        // Vendorsを取得（Vendor列の表示用）
-        const vendorsData = await vendorsAPI.getAll();
         setVendors(vendorsData);
-        // Labor Rolesを取得
-        const roles = await laborRolesAPI.getAll();
         setLaborRoles(roles);
+        setCostBreakdown(breakdownData.costs);
 
         // 全アイテムのIDを取得
         const itemIds = preppedItems.map((item) => item.id);
 
-        // 全アイテムのレシピを一度に取得（最適化）
+        // 全アイテムのレシピを一度に取得（itemIdsに依存）
         let recipesMap: Record<string, APIRecipeLine[]> = {};
         try {
           if (itemIds.length > 0) {
@@ -1161,10 +1178,7 @@ export default function CostPage() {
           console.error("Failed to fetch recipes:", error);
         }
 
-        // 変更履歴をlocalStorageから取得してクリア
-        const changeHistory = getAndClearChangeHistory();
-
-        // 差分更新でコストを計算（変更があった場合のみ）
+        // 差分更新でコストを計算（変更があった場合のみ、itemIdsに依存）
         let costsMap: Record<string, number> = {};
         const hasChanges = changeHistory
           ? (changeHistory.changed_item_ids?.length ?? 0) > 0 ||
@@ -1206,14 +1220,6 @@ export default function CostPage() {
               fallbackError
             );
           }
-        }
-
-        // コスト内訳データを取得（Food Cost / Labor Cost）
-        try {
-          const breakdownData = await costAPI.getCostsBreakdown();
-          setCostBreakdown(breakdownData.costs);
-        } catch (error) {
-          console.error("Failed to fetch cost breakdown:", error);
         }
 
         // 各アイテムのデータを構築
@@ -1387,8 +1393,12 @@ export default function CostPage() {
       return { laborPercent: null, cogPercent: null, lcogPercent: null };
     }
 
-    // Wholesale/Retailは1kgあたりの価格として入力されるため、1グラムあたりに変換
-    const pricePerGram = price / 1000;
+    // eachモード選択時、proceed_yield_unit === "each"のアイテムは$/eachで入力されているため、$/gに変換
+    // それ以外は$/kgで入力されているため、$/gに変換
+    const pricePerGram =
+      eachMode && item.proceed_yield_unit === "each" && item.each_grams
+        ? price / item.each_grams // $/each → $/g
+        : price / 1000; // $/kg → $/g
     const laborPercent =
       pricePerGram > 0
         ? (breakdown.labor_cost_per_gram / pricePerGram) * 100
@@ -2921,7 +2931,7 @@ export default function CostPage() {
                     className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
-                    style={{ width: "300px" }}
+                    style={{ width: "250px" }}
                   >
                     Finish Amount
                   </th>
@@ -2929,7 +2939,7 @@ export default function CostPage() {
                     className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
-                    style={{ width: "180px" }}
+                    style={{ width: "230px" }}
                   >
                     <div className="flex items-center gap-3">
                       <span className="min-w-[70px]">Cost</span>
@@ -2966,6 +2976,18 @@ export default function CostPage() {
                           kg
                         </span>
                       </div>
+                      <button
+                        onClick={() => setEachMode(!eachMode)}
+                        className={`px-2 py-1 text-xs rounded transition-colors ${
+                          eachMode
+                            ? "bg-blue-500 text-white font-semibold"
+                            : isDark
+                            ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                            : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        }`}
+                      >
+                        each
+                      </button>
                     </div>
                   </th>
                   {/* Wholesale */}
@@ -3330,7 +3352,7 @@ export default function CostPage() {
                         <td
                           className="px-6 whitespace-nowrap"
                           style={{
-                            width: "300px",
+                            width: "250px",
                             paddingTop: "16px",
                             paddingBottom: "16px",
                             boxSizing: "border-box",
@@ -3577,7 +3599,7 @@ export default function CostPage() {
                         <td
                           className="px-6 whitespace-nowrap"
                           style={{
-                            width: "180px",
+                            width: "230px",
                             paddingTop: "16px",
                             paddingBottom: "16px",
                             boxSizing: "border-box",
@@ -3597,7 +3619,13 @@ export default function CostPage() {
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {item.cost_per_gram !== undefined
-                                ? costUnit === "g"
+                                ? eachMode &&
+                                  item.proceed_yield_unit === "each" &&
+                                  item.each_grams
+                                  ? `$${(
+                                      item.cost_per_gram * item.each_grams
+                                    ).toFixed(2)}/each`
+                                  : costUnit === "g"
                                   ? `$${item.cost_per_gram.toFixed(6)}/g`
                                   : `$${(item.cost_per_gram * 1000).toFixed(
                                       2
@@ -3636,6 +3664,13 @@ export default function CostPage() {
                                     : item.wholesale === null ||
                                       item.wholesale === undefined
                                     ? ""
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams
+                                    ? String(
+                                        (item.wholesale / 1000) *
+                                          item.each_grams
+                                      ) // $/kg → $/each
                                     : String(item.wholesale)
                                 }
                                 onChange={(e) => {
@@ -3654,10 +3689,21 @@ export default function CostPage() {
                                 onBlur={(e) => {
                                   const value = e.target.value;
                                   // フォーカスアウト時に数値に変換
-                                  const numValue =
+                                  let numValue =
                                     value === "" || value === "."
                                       ? null
                                       : parseFloat(value) || null;
+                                  // eachモード選択時、proceed_yield_unit === "each"のアイテムは$/eachで入力されているため、$/kgに変換
+                                  if (
+                                    numValue !== null &&
+                                    eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.each_grams > 0
+                                  ) {
+                                    numValue =
+                                      (numValue / item.each_grams) * 1000; // $/each → $/kg
+                                  }
                                   handleItemChange(
                                     item.id,
                                     "wholesale",
@@ -3701,7 +3747,14 @@ export default function CostPage() {
                               >
                                 {item.wholesale !== null &&
                                 item.wholesale !== undefined
-                                  ? `$${item.wholesale.toFixed(2)}/kg`
+                                  ? eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams
+                                    ? `$${(
+                                        (item.wholesale / 1000) *
+                                        item.each_grams
+                                      ).toFixed(2)}/each`
+                                    : `$${item.wholesale.toFixed(2)}/kg`
                                   : "-"}
                               </div>
                             )}
@@ -3746,6 +3799,12 @@ export default function CostPage() {
                                         ? null
                                         : parseFloat(value) || null;
                                     })()
+                                  : eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.wholesale !== null &&
+                                    item.wholesale !== undefined
+                                  ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
                                   : item.wholesale;
                                 const { laborPercent } = calculatePercentages(
                                   currentWholesale,
@@ -3797,6 +3856,12 @@ export default function CostPage() {
                                         ? null
                                         : parseFloat(value) || null;
                                     })()
+                                  : eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.wholesale !== null &&
+                                    item.wholesale !== undefined
+                                  ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
                                   : item.wholesale;
                                 const { cogPercent } = calculatePercentages(
                                   currentWholesale,
@@ -3848,6 +3913,12 @@ export default function CostPage() {
                                         ? null
                                         : parseFloat(value) || null;
                                     })()
+                                  : eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.wholesale !== null &&
+                                    item.wholesale !== undefined
+                                  ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
                                   : item.wholesale;
                                 const { lcogPercent } = calculatePercentages(
                                   currentWholesale,
@@ -3890,6 +3961,12 @@ export default function CostPage() {
                                     : item.retail === null ||
                                       item.retail === undefined
                                     ? ""
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams
+                                    ? String(
+                                        (item.retail / 1000) * item.each_grams
+                                      ) // $/kg → $/each
                                     : String(item.retail)
                                 }
                                 onChange={(e) => {
@@ -3908,10 +3985,21 @@ export default function CostPage() {
                                 onBlur={(e) => {
                                   const value = e.target.value;
                                   // フォーカスアウト時に数値に変換
-                                  const numValue =
+                                  let numValue =
                                     value === "" || value === "."
                                       ? null
                                       : parseFloat(value) || null;
+                                  // eachモード選択時、proceed_yield_unit === "each"のアイテムは$/eachで入力されているため、$/kgに変換
+                                  if (
+                                    numValue !== null &&
+                                    eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.each_grams > 0
+                                  ) {
+                                    numValue =
+                                      (numValue / item.each_grams) * 1000; // $/each → $/kg
+                                  }
                                   handleItemChange(item.id, "retail", numValue);
                                   // 入力中の文字列をクリア
                                   setRetailInputs((prev) => {
@@ -3951,7 +4039,14 @@ export default function CostPage() {
                               >
                                 {item.retail !== null &&
                                 item.retail !== undefined
-                                  ? `$${item.retail.toFixed(2)}/kg`
+                                  ? eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams
+                                    ? `$${(
+                                        (item.retail / 1000) *
+                                        item.each_grams
+                                      ).toFixed(2)}/each`
+                                    : `$${item.retail.toFixed(2)}/kg`
                                   : "-"}
                               </div>
                             )}
@@ -3992,6 +4087,12 @@ export default function CostPage() {
                                         ? null
                                         : parseFloat(value) || null;
                                     })()
+                                  : eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.retail !== null &&
+                                    item.retail !== undefined
+                                  ? (item.retail / 1000) * item.each_grams // $/kg → $/each
                                   : item.retail;
                                 const { laborPercent } = calculatePercentages(
                                   currentRetail,
@@ -4039,6 +4140,12 @@ export default function CostPage() {
                                         ? null
                                         : parseFloat(value) || null;
                                     })()
+                                  : eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.retail !== null &&
+                                    item.retail !== undefined
+                                  ? (item.retail / 1000) * item.each_grams // $/kg → $/each
                                   : item.retail;
                                 const { cogPercent } = calculatePercentages(
                                   currentRetail,
@@ -4086,6 +4193,12 @@ export default function CostPage() {
                                         ? null
                                         : parseFloat(value) || null;
                                     })()
+                                  : eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams &&
+                                    item.retail !== null &&
+                                    item.retail !== undefined
+                                  ? (item.retail / 1000) * item.each_grams // $/kg → $/each
                                   : item.retail;
                                 const { lcogPercent } = calculatePercentages(
                                   currentRetail,
