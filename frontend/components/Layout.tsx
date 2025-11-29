@@ -44,13 +44,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div
-      className={`h-screen flex transition-colors duration-300 ${
+      className={`h-full flex transition-colors duration-300 ${
         isDark ? "bg-slate-900" : "bg-gray-50"
       }`}
     >
       {/* ナビゲーションバー（左側270px固定、スライドアウト効果） */}
       <div
-        className={`w-0 xl:w-[270px] h-screen shadow-lg flex flex-col border-r transition-[width,transform] duration-300 ease-in-out transform -translate-x-full xl:translate-x-0 overflow-hidden ${
+        className={`w-0 xl:w-[270px] h-full shadow-lg flex flex-col border-r transition-[width,transform] duration-300 ease-in-out transform -translate-x-full xl:translate-x-0 overflow-hidden ${
           isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"
         }`}
         style={{ flexShrink: 0 }}
