@@ -3073,7 +3073,7 @@ export default function CostPage() {
                     : "bg-white divide-gray-200"
                 }`}
               >
-                {filteredItems.map((item) => {
+                {filteredItems.map((item, index) => {
                   // 新規アイテムのインデックスを計算（isNew: trueのアイテムのみをカウント）
                   const newItemIndex =
                     filteredItems
@@ -5145,6 +5145,28 @@ export default function CostPage() {
                               </div>
                             </div>
                           </td>
+                        </tr>
+                      )}
+                      {/* 間隔用の空の行（最後のアイテムでない場合のみ） */}
+                      {index < filteredItems.length - 1 && (
+                        <tr
+                          style={{
+                            height: "12px",
+                            lineHeight: "12px",
+                            border: "none",
+                            borderTop: "none",
+                            borderBottom: "none",
+                          }}
+                        >
+                          <td
+                            colSpan={14}
+                            style={{
+                              height: "12px",
+                              padding: 0,
+                              border: "none",
+                              backgroundColor: isDark ? "#0f172a" : "#f9fafb",
+                            }}
+                          ></td>
                         </tr>
                       )}
                     </Fragment>
