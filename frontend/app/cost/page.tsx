@@ -2187,6 +2187,19 @@ export default function CostPage() {
 
       setItems(itemsWithRecipes);
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
+
+      // costBreakdownを更新（Labor%、COG%、LCOG%の計算に必要）
+      try {
+        const breakdownData = await costAPI.getCostsBreakdown();
+        setCostBreakdown(breakdownData.costs);
+      } catch (breakdownError) {
+        console.error(
+          "Failed to fetch cost breakdown after save:",
+          breakdownError
+        );
+        // costBreakdownの更新失敗は警告のみ（コスト表示には影響しないが、パーセンテージ計算に影響する）
+      }
+
       setIsEditMode(false);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2222,8 +2235,8 @@ export default function CostPage() {
       items.map((i) => (i.id === id ? { ...i, isExpanded: !i.isExpanded } : i))
     );
 
-    // 展開時に色を割り当て（新規追加アイテムは除外）
     if (isExpanding && !item.isNew) {
+      // 展開時に色を割り当て（新規追加アイテムは除外）
       // 既に色が割り当てられている場合は再計算しない
       setExpandedItemColors((prevColors) => {
         if (prevColors.has(id)) {
@@ -2238,8 +2251,15 @@ export default function CostPage() {
         setExpandedOrder((prev) => [...prev, id]);
         return newMap;
       });
+    } else if (!isExpanding) {
+      // 閉じる時は色を削除して元の背景色に戻す
+      setExpandedItemColors((prevColors) => {
+        const newMap = new Map(prevColors);
+        newMap.delete(id);
+        return newMap;
+      });
+      setExpandedOrder((prev) => prev.filter((itemId) => itemId !== id));
     }
-    // 閉じる時は色を削除しない（維持する）
   };
 
   // アイテム更新
@@ -3069,8 +3089,8 @@ export default function CostPage() {
               <tbody
                 className={`divide-y transition-colors ${
                   isDark
-                    ? "bg-slate-800 divide-slate-700"
-                    : "bg-white divide-gray-200"
+                    ? "bg-slate-800 divide-slate-600"
+                    : "bg-white divide-gray-300"
                 }`}
               >
                 {filteredItems.map((item) => {
@@ -3142,9 +3162,9 @@ export default function CostPage() {
                         onMouseLeave={() => setHoveredItemId(null)}
                         onClick={() => !isEditMode && toggleExpand(item.id)}
                         style={{
-                          height: "52px",
-                          minHeight: "52px",
-                          maxHeight: "52px",
+                          height: "51px",
+                          minHeight: "51px",
+                          maxHeight: "51px",
                           ...(item.isExpanded
                             ? {
                                 borderBottomWidth: 0,
