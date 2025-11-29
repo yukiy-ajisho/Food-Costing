@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment, useEffect, useRef, useLayoutEffect } from "react";
+import { useState, Fragment, useEffect, useRef } from "react";
 import {
   Edit,
   Save,
@@ -2642,15 +2642,28 @@ export default function CostPage() {
   };
 
   // 固定ヘッダーセクションの高さを取得
-  useLayoutEffect(() => {
+  useEffect(() => {
+    // loadingが終わってから実行
+    if (loading) {
+      return;
+    }
+
     const updateFixedHeaderHeight = () => {
       if (fixedHeaderRef.current) {
         const height = fixedHeaderRef.current.offsetHeight;
         setFixedHeaderHeight(height);
+      } else {
+        // 少し遅延させて再試行
+        setTimeout(() => {
+          if (fixedHeaderRef.current) {
+            const height = fixedHeaderRef.current.offsetHeight;
+            setFixedHeaderHeight(height);
+          }
+        }, 100);
       }
     };
 
-    // 初回実行（同期的に実行）
+    // 初回実行（DOM更新後に実行）
     updateFixedHeaderHeight();
 
     // リサイズ時に更新
@@ -2688,7 +2701,7 @@ export default function CostPage() {
       }
       mutationObserver.disconnect();
     };
-  }, [isEditMode, searchTerm, typeFilter]);
+  }, [loading, isEditMode, searchTerm, typeFilter]);
 
   // availableItemsをSearchableSelect用の形式に変換
   // Ingredient選択用のフィルタリング関数
