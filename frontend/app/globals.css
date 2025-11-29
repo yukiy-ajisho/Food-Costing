@@ -3,6 +3,7 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --ui-scale: 0.67; /* MacBook Air 13インチ相当（1920px以下）: 67%の見た目を維持 */
 }
 
 @theme inline {
@@ -17,7 +18,28 @@
   --foreground: #f1f5f9;
 }
 
+/* 解像度に応じたスケーリング設定 */
+html {
+  height: 100vh; /* ビューポート全体を使う */
+}
+
+/* 2K解像度（2560px以上、3840px未満）: 少し大きく表示 */
+@media (min-width: 2560px) and (max-width: 3839px) {
+  :root {
+    --ui-scale: 0.75;
+  }
+}
+
+/* 4K解像度（3840px以上）: さらに大きく表示 */
+@media (min-width: 3840px) {
+  :root {
+    --ui-scale: 0.85;
+  }
+}
+
 body {
+  height: 100%; /* htmlの高さに合わせる */
+  zoom: var(--ui-scale); /* bodyにzoomを適用してスケーリング */
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
