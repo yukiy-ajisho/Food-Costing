@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment, useEffect } from "react";
+import { useState, Fragment, useEffect, useRef, useLayoutEffect } from "react";
 import {
   Edit,
   Save,
@@ -1124,6 +1124,9 @@ export default function CostPage() {
   const [minutesInputs, setMinutesInputs] = useState<Map<string, string>>(
     new Map()
   );
+  // 固定ヘッダーセクションの高さを取得するためのref
+  const fixedHeaderRef = useRef<HTMLDivElement>(null);
+  const [fixedHeaderHeight, setFixedHeaderHeight] = useState(0);
 
   // データ取得
   useEffect(() => {
@@ -2638,6 +2641,55 @@ export default function CostPage() {
     setAppliedSearchTerm(searchTerm);
   };
 
+  // 固定ヘッダーセクションの高さを取得
+  useLayoutEffect(() => {
+    const updateFixedHeaderHeight = () => {
+      if (fixedHeaderRef.current) {
+        const height = fixedHeaderRef.current.offsetHeight;
+        setFixedHeaderHeight(height);
+      }
+    };
+
+    // 初回実行（同期的に実行）
+    updateFixedHeaderHeight();
+
+    // リサイズ時に更新
+    const handleResize = () => {
+      updateFixedHeaderHeight();
+    };
+    window.addEventListener("resize", handleResize);
+
+    // レイアウト変更を監視（ResizeObserverを使用）
+    let resizeObserver: ResizeObserver | null = null;
+    if (fixedHeaderRef.current && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        updateFixedHeaderHeight();
+      });
+      resizeObserver.observe(fixedHeaderRef.current);
+    }
+
+    // レイアウト変更を監視（MutationObserver）
+    const mutationObserver = new MutationObserver(() => {
+      updateFixedHeaderHeight();
+    });
+    if (fixedHeaderRef.current) {
+      mutationObserver.observe(fixedHeaderRef.current, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "style"],
+      });
+    }
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      mutationObserver.disconnect();
+    };
+  }, [isEditMode, searchTerm, typeFilter]);
+
   // availableItemsをSearchableSelect用の形式に変換
   // Ingredient選択用のフィルタリング関数
   const getAvailableItemsForSelect = (currentChildItemId?: string) => {
@@ -2734,6 +2786,7 @@ export default function CostPage() {
       <div className="w-full">
         {/* 固定ヘッダーセクション（Add、Edit、Filter） */}
         <div
+          ref={fixedHeaderRef}
           className={`sticky top-0 z-50 -mx-8 px-8 py-4 ${
             isDark ? "bg-slate-900" : "bg-gray-50"
           }`}
@@ -2902,23 +2955,26 @@ export default function CostPage() {
 
         {/* アイテムリスト */}
         <div
-          className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+          className={`rounded-lg shadow-sm border transition-colors ${
             isDark
               ? "bg-slate-800 border-slate-700"
               : "bg-white border-gray-200"
           }`}
         >
-          <div className="overflow-x-auto w-full">
+          <div className="w-full">
             <table
               className="w-full"
               style={{ tableLayout: "fixed", width: "100%" }}
             >
               <thead
-                className={`border-b transition-colors sticky top-0 z-20 ${
+                className={`border-b transition-colors sticky z-50 ${
                   isDark
                     ? "bg-slate-700 border-slate-600"
                     : "bg-gray-50 border-gray-200"
                 }`}
+                style={{
+                  top: `${fixedHeaderHeight}px`,
+                }}
               >
                 <tr>
                   <th
