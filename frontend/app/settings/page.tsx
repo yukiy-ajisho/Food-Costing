@@ -347,7 +347,7 @@ export default function SettingsPage() {
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
-              Overweight
+              Recipe Settings
             </button>
           </nav>
         </div>
@@ -646,102 +646,83 @@ export default function SettingsPage() {
               </div>
             ) : (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <h2 className="text-lg font-semibold mb-4">
-                  Proceed Validation Settings
+                <h2 className="text-lg font-semibold mb-6">
+                  Final Amount Validation Setting
                 </h2>
-                <p className="text-sm text-gray-600 mb-6">
-                  When proceed_yield_amount exceeds total ingredients:
-                </p>
-                <div className="space-y-4">
-                  <label
-                    className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
-                      isEditModeOverweight
-                        ? "hover:bg-gray-50"
-                        : "cursor-not-allowed opacity-60"
-                    } ${
-                      proceedValidationSettings?.validation_mode === "permit"
-                        ? "border-blue-500 bg-blue-50"
-                        : "border-gray-200"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="validation_mode"
-                      value="permit"
-                      checked={
-                        proceedValidationSettings?.validation_mode === "permit"
-                      }
-                      onChange={() => handleValidationModeChange("permit")}
-                      disabled={!isEditModeOverweight}
-                      className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div>
-                      <div className="font-medium">Permit</div>
-                      <div className="text-sm text-gray-500">
-                        Allow saving without error
-                      </div>
-                    </div>
-                  </label>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-gray-600">
+                    Allow <span className="font-bold">Final Amount</span> to
+                    exceed{" "}
+                    <span className="font-bold">total ingredient weight</span>
+                  </p>
+                  <div className="flex items-center gap-8 ml-8">
+                    <label
+                      className={`flex items-center gap-2 cursor-pointer ${
+                        isEditModeOverweight
+                          ? ""
+                          : "cursor-not-allowed opacity-60"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="validation_mode"
+                        value="permit"
+                        checked={
+                          proceedValidationSettings?.validation_mode ===
+                          "permit"
+                        }
+                        onChange={() => handleValidationModeChange("permit")}
+                        disabled={!isEditModeOverweight}
+                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="font-medium">Allow</span>
+                    </label>
 
-                  <label
-                    className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
-                      isEditModeOverweight
-                        ? "hover:bg-gray-50"
-                        : "cursor-not-allowed opacity-60"
-                    } ${
-                      proceedValidationSettings?.validation_mode === "block"
-                        ? "border-blue-500 bg-blue-50"
-                        : "border-gray-200"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="validation_mode"
-                      value="block"
-                      checked={
-                        proceedValidationSettings?.validation_mode === "block"
-                      }
-                      onChange={() => handleValidationModeChange("block")}
-                      disabled={!isEditModeOverweight}
-                      className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div>
-                      <div className="font-medium">Block</div>
-                      <div className="text-sm text-gray-500">
-                        Show error and prevent saving
-                      </div>
-                    </div>
-                  </label>
+                    <label
+                      className={`flex items-center gap-2 cursor-pointer ${
+                        isEditModeOverweight
+                          ? ""
+                          : "cursor-not-allowed opacity-60"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="validation_mode"
+                        value="notify"
+                        checked={
+                          proceedValidationSettings?.validation_mode ===
+                          "notify"
+                        }
+                        onChange={() => handleValidationModeChange("notify")}
+                        disabled={!isEditModeOverweight}
+                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="font-medium">
+                        Allowed with Notification
+                      </span>
+                    </label>
 
-                  <label
-                    className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors ${
-                      isEditModeOverweight
-                        ? "hover:bg-gray-50"
-                        : "cursor-not-allowed opacity-60"
-                    } ${
-                      proceedValidationSettings?.validation_mode === "notify"
-                        ? "border-blue-500 bg-blue-50"
-                        : "border-gray-200"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="validation_mode"
-                      value="notify"
-                      checked={
-                        proceedValidationSettings?.validation_mode === "notify"
-                      }
-                      onChange={() => handleValidationModeChange("notify")}
-                      disabled={!isEditModeOverweight}
-                      className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div>
-                      <div className="font-medium">Notify</div>
-                      <div className="text-sm text-gray-500">
-                        Allow saving but show warning popup
-                      </div>
-                    </div>
-                  </label>
+                    <label
+                      className={`flex items-center gap-2 cursor-pointer ${
+                        isEditModeOverweight
+                          ? ""
+                          : "cursor-not-allowed opacity-60"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="validation_mode"
+                        value="block"
+                        checked={
+                          proceedValidationSettings?.validation_mode === "block"
+                        }
+                        onChange={() => handleValidationModeChange("block")}
+                        disabled={!isEditModeOverweight}
+                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="font-medium">Not Allowed</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}
