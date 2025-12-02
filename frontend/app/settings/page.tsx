@@ -391,13 +391,22 @@ export default function SettingsPage() {
               </div>
             ) : (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <table className="w-full">
+                <table
+                  className="w-full"
+                  style={{ tableLayout: "fixed", width: "100%" }}
+                >
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "60%" }}
+                      >
                         Name
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "40%" }}
+                      >
                         Hourly Wage ($)
                       </th>
                       {isEditModeLabor && (

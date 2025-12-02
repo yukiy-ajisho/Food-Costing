@@ -3081,23 +3081,23 @@ export default function CostPage() {
                   </th>
                   {/* Wholesale */}
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider whitespace-nowrap ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider whitespace-nowrap ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "140px" }}
                   >
-                    Wholesale ($/kg)
+                    WHOLESALE ($/kg)
                   </th>
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "100px" }}
                   >
-                    Labor%
+                    LABOR%
                   </th>
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "100px" }}
@@ -3105,7 +3105,7 @@ export default function CostPage() {
                     COG%
                   </th>
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "100px" }}
@@ -3114,23 +3114,23 @@ export default function CostPage() {
                   </th>
                   {/* Retail */}
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "120px" }}
                   >
-                    Retail ($/kg)
+                    RETAIL ($/kg)
                   </th>
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "100px" }}
                   >
-                    Labor%
+                    LABOR%
                   </th>
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "100px" }}
@@ -3138,7 +3138,7 @@ export default function CostPage() {
                     COG%
                   </th>
                   <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                       isDark ? "text-slate-300" : "text-gray-500"
                     }`}
                     style={{ width: "100px" }}
