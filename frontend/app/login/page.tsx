@@ -71,7 +71,7 @@ function LoginPageContent() {
   // 認証チェック中はローディング画面を表示
   if (isChecking) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
+      <div className="flex items-center justify-center h-full bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
         <div className="w-full max-w-md bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm p-10 rounded-2xl shadow-xl border border-gray-200/50 dark:border-slate-700/50">
           <div className="flex flex-col items-center justify-center space-y-4">
             <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -85,7 +85,7 @@ function LoginPageContent() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-4">
+    <div className="flex items-center justify-center h-full bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 p-4">
       <div className="w-full max-w-md bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm p-10 rounded-2xl shadow-xl border border-gray-200/50 dark:border-slate-700/50 transition-all duration-300 hover:shadow-2xl">
         {/* ロゴ・タイトル */}
         <div className="text-center mb-8">
@@ -148,7 +148,7 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
+        <div className="flex items-center justify-center h-full bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900">
           <div className="w-full max-w-md bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm p-10 rounded-2xl shadow-xl border border-gray-200/50 dark:border-slate-700/50">
             <div className="flex flex-col items-center justify-center space-y-4">
               <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
