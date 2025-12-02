@@ -42,6 +42,7 @@ interface BaseItemUI {
   name: string;
   specific_weight?: number | null;
   each_grams?: number | null; // itemsテーブルのeach_grams（base_item_idで対応するitemsレコードから取得）
+  selectedType?: "specific_weight" | "each" | null; // ラジオボタンの選択状態
   isMarkedForDeletion?: boolean;
   isNew?: boolean;
 }
@@ -222,11 +223,21 @@ export default function ItemsPage() {
             const correspondingItem = itemsData.find(
               (item) => item.base_item_id === baseItem.id
             );
+            const specificWeight = baseItem.specific_weight || null;
+            const eachGrams = correspondingItem?.each_grams || null;
+            // 既存の値から選択状態を判定
+            let selectedType: "specific_weight" | "each" | null = null;
+            if (specificWeight !== null && specificWeight !== undefined) {
+              selectedType = "specific_weight";
+            } else if (eachGrams !== null && eachGrams !== undefined) {
+              selectedType = "each";
+            }
             return {
               id: baseItem.id,
               name: baseItem.name,
-              specific_weight: baseItem.specific_weight || null,
-              each_grams: correspondingItem?.each_grams || null,
+              specific_weight: specificWeight,
+              each_grams: eachGrams,
+              selectedType: selectedType,
               isNew: false,
               isMarkedForDeletion: false,
             };
@@ -508,6 +519,70 @@ export default function ItemsPage() {
     try {
       setLoadingBaseItems(true);
 
+      // ============================================================
+      // バリデーション: specific_weightやeach_gramsを削除しようとしている場合、
+      // Vendor Productsで使用されていないかチェック
+      // ============================================================
+      const allVendorProducts = await vendorProductsAPI.getAll();
+
+      for (const item of baseItemsUI) {
+        if (item.isNew) continue; // 新規追加は対象外
+
+        // オリジナルを取得
+        const original = originalBaseItems.find((o) => o.id === item.id);
+        if (!original) continue;
+
+        // specific_weightが削除されようとしている場合
+        const isRemovingSpecificWeight =
+          original.specific_weight !== null &&
+          original.specific_weight !== undefined &&
+          (item.specific_weight === null || item.specific_weight === undefined);
+
+        if (isRemovingSpecificWeight) {
+          // このBase Itemを使用しているVendor Productsを取得
+          const usedVendorProducts = allVendorProducts.filter(
+            (vp) =>
+              vp.base_item_id === item.id &&
+              ["gallon", "liter", "floz", "ml"].includes(vp.purchase_unit)
+          );
+
+          if (usedVendorProducts.length > 0) {
+            const productNames = usedVendorProducts
+              .map((vp) => vp.product_name || "(no name)")
+              .join(", ");
+            alert(
+              `Cannot remove specific_weight for "${item.name}".\n\nIt is used by Vendor Products with non-mass units (gallon, liter, floz, ml):\n${productNames}\n\nPlease change the purchase_unit of these products first.`
+            );
+            setLoadingBaseItems(false);
+            return;
+          }
+        }
+
+        // each_gramsが削除されようとしている場合
+        const isRemovingEachGrams =
+          original.each_grams !== null &&
+          original.each_grams !== undefined &&
+          (item.each_grams === null || item.each_grams === undefined);
+
+        if (isRemovingEachGrams) {
+          // このBase Itemを使用しているVendor Productsを取得
+          const usedVendorProducts = allVendorProducts.filter(
+            (vp) => vp.base_item_id === item.id && vp.purchase_unit === "each"
+          );
+
+          if (usedVendorProducts.length > 0) {
+            const productNames = usedVendorProducts
+              .map((vp) => vp.product_name || "(no name)")
+              .join(", ");
+            alert(
+              `Cannot remove each_grams for "${item.name}".\n\nIt is used by Vendor Products with "each" unit:\n${productNames}\n\nPlease change the purchase_unit of these products first.`
+            );
+            setLoadingBaseItems(false);
+            return;
+          }
+        }
+      }
+
       const filteredBaseItems = baseItemsUI.filter((item) => {
         if (item.isMarkedForDeletion) return false;
         if (item.isNew && item.name.trim() === "") return false;
@@ -596,11 +671,21 @@ export default function ItemsPage() {
           const correspondingItem = itemsData.find(
             (item) => item.base_item_id === baseItem.id
           );
+          const specificWeight = baseItem.specific_weight || null;
+          const eachGrams = correspondingItem?.each_grams || null;
+          // 既存の値から選択状態を判定
+          let selectedType: "specific_weight" | "each" | null = null;
+          if (specificWeight !== null && specificWeight !== undefined) {
+            selectedType = "specific_weight";
+          } else if (eachGrams !== null && eachGrams !== undefined) {
+            selectedType = "each";
+          }
           return {
             id: baseItem.id,
             name: baseItem.name,
-            specific_weight: baseItem.specific_weight,
-            each_grams: correspondingItem?.each_grams || null,
+            specific_weight: specificWeight,
+            each_grams: eachGrams,
+            selectedType: selectedType,
           };
         });
 
@@ -630,6 +715,54 @@ export default function ItemsPage() {
     );
   };
 
+  const handleBaseItemTypeChange = (
+    id: string,
+    type: "specific_weight" | "each"
+  ) => {
+    setBaseItemsUI(
+      baseItemsUI.map((item) => {
+        if (item.id !== id) return item;
+
+        // 既に選択されているタイプの場合
+        if (item.selectedType === type) {
+          // 現在の値を確認
+          const currentValue =
+            type === "specific_weight" ? item.specific_weight : item.each_grams;
+
+          // 値が空の場合のみ選択解除を許可
+          if (currentValue === null || currentValue === undefined) {
+            return {
+              ...item,
+              selectedType: null,
+            };
+          }
+
+          // 値がある場合は何もしない（選択解除を拒否）
+          return item;
+        }
+
+        // 別のタイプに切り替える場合、現在の値が空でないとダメ
+        const currentValue =
+          item.selectedType === "specific_weight"
+            ? item.specific_weight
+            : item.selectedType === "each"
+            ? item.each_grams
+            : null;
+
+        // 現在の値が空でない場合は切り替えを許可しない
+        if (currentValue !== null && currentValue !== undefined) {
+          return item;
+        }
+
+        // 値が空の場合のみ切り替えを許可
+        return {
+          ...item,
+          selectedType: type,
+        };
+      })
+    );
+  };
+
   const handleDeleteClickBaseItems = (id: string) => {
     setBaseItemsUI(
       baseItemsUI.map((item) =>
@@ -646,6 +779,7 @@ export default function ItemsPage() {
       name: "",
       specific_weight: null,
       each_grams: null,
+      selectedType: null,
       isNew: true,
     };
     setBaseItemsUI([...baseItemsUI, newItem]);
@@ -869,28 +1003,52 @@ export default function ItemsPage() {
               </div>
             ) : (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <table className="w-full">
+                <table
+                  className="w-full"
+                  style={{ tableLayout: "fixed", width: "100%" }}
+                >
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "15%" }}
+                      >
                         Base Item Name
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "15%" }}
+                      >
                         Vendor Name
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "20%" }}
+                      >
                         Product Name
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "15%" }}
+                      >
                         Brand Name
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "10%" }}
+                      >
                         Unit
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "10%" }}
+                      >
                         Quantity
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        style={{ width: "15%" }}
+                      >
                         Cost
                       </th>
                       {isEditModeItems && (
@@ -1158,31 +1316,54 @@ export default function ItemsPage() {
                                   >
                                     {unitOptions.map((unit) => {
                                       // eachの場合、対応するitemsレコードのeach_gramsを確認
-                                      let isEachDisabled = false;
+                                      let isDisabled = false;
+                                      let disabledReason = "";
+
                                       if (unit === "each" && vp.base_item_id) {
                                         const correspondingItem = items.find(
                                           (i) =>
                                             i.base_item_id === vp.base_item_id
                                         );
-                                        isEachDisabled =
+                                        isDisabled =
                                           !correspondingItem?.each_grams ||
                                           correspondingItem.each_grams === 0;
+                                        if (isDisabled) {
+                                          disabledReason =
+                                            "Please set each_grams in the Base Items tab";
+                                        }
+                                      } else if (
+                                        [
+                                          "gallon",
+                                          "liter",
+                                          "floz",
+                                          "ml",
+                                        ].includes(unit) &&
+                                        vp.base_item_id
+                                      ) {
+                                        // 非質量単位の場合、base_itemのspecific_weightを確認
+                                        const correspondingBaseItem =
+                                          baseItems.find(
+                                            (bi) => bi.id === vp.base_item_id
+                                          );
+                                        isDisabled =
+                                          !correspondingBaseItem?.specific_weight ||
+                                          correspondingBaseItem.specific_weight ===
+                                            0;
+                                        if (isDisabled) {
+                                          disabledReason =
+                                            "Please set specific_weight in the Base Items tab";
+                                        }
                                       }
 
                                       return (
                                         <option
                                           key={unit}
                                           value={unit}
-                                          disabled={isEachDisabled}
-                                          title={
-                                            isEachDisabled
-                                              ? "Please set each_grams in the Base Items tab"
-                                              : ""
-                                          }
+                                          disabled={isDisabled}
+                                          title={disabledReason}
                                         >
                                           {unit}
-                                          {isEachDisabled &&
-                                            " (setup required)"}
+                                          {isDisabled && " (setup required)"}
                                         </option>
                                       );
                                     })}
@@ -1485,20 +1666,55 @@ export default function ItemsPage() {
               </div>
             ) : (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <table className="w-full">
+                <table
+                  className="w-full"
+                  style={{ tableLayout: "fixed", width: "100%" }}
+                >
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Name
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider"
+                        style={{ width: "50%" }}
+                      >
+                        NAME
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Specific Weight (g/ml)
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider"
+                        style={{ width: "25%" }}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>SPECIFIC WEIGHT (g/ml)</span>
+                          <div className="relative group">
+                            <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center text-gray-400 text-xs cursor-help">
+                              ?
+                            </div>
+                            <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
+                              Specific weight for volume-based items (e.g.,
+                              liquids, powders). Used to convert ml to grams.
+                            </div>
+                          </div>
+                        </div>
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Each (g)
+                      <th
+                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider"
+                        style={{ width: "25%" }}
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>EACH (g)</span>
+                          <div className="relative group">
+                            <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center text-gray-400 text-xs cursor-help">
+                              ?
+                            </div>
+                            <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
+                              Weight per piece for count-based items (e.g.,
+                              eggs, fruits). Used to convert &apos;each&apos; to
+                              grams.
+                            </div>
+                          </div>
+                        </div>
                       </th>
                       {isEditModeBaseItems && (
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider w-16">
                           {/* ゴミ箱列のヘッダー */}
                         </th>
                       )}
@@ -1586,65 +1802,93 @@ export default function ItemsPage() {
                               maxHeight: "20px",
                               display: "flex",
                               alignItems: "center",
+                              gap: "8px",
                             }}
                           >
                             {isEditModeBaseItems ? (
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={
-                                  specificWeightInputs.has(item.id)
-                                    ? specificWeightInputs.get(item.id)!
-                                    : item.specific_weight === null ||
-                                      item.specific_weight === undefined
-                                    ? ""
-                                    : String(item.specific_weight)
-                                }
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  // 数字と小数点のみを許可（空文字列も許可）
-                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
-                                  if (numericPattern.test(value)) {
+                              <>
+                                <input
+                                  type="radio"
+                                  name={`type-${item.id}`}
+                                  checked={
+                                    item.selectedType === "specific_weight"
+                                  }
+                                  onClick={() =>
+                                    handleBaseItemTypeChange(
+                                      item.id,
+                                      "specific_weight"
+                                    )
+                                  }
+                                  onChange={() =>
+                                    handleBaseItemTypeChange(
+                                      item.id,
+                                      "specific_weight"
+                                    )
+                                  }
+                                  className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                                />
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={
+                                    specificWeightInputs.has(item.id)
+                                      ? specificWeightInputs.get(item.id)!
+                                      : item.specific_weight === null ||
+                                        item.specific_weight === undefined
+                                      ? ""
+                                      : String(item.specific_weight)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setSpecificWeightInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(item.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
+                                    const numValue =
+                                      value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    handleBaseItemChange(
+                                      item.id,
+                                      "specific_weight",
+                                      numValue
+                                    );
+                                    // selectedTypeは保持する（空にしても選択状態は維持）
+                                    // 入力中の文字列をクリア
                                     setSpecificWeightInputs((prev) => {
                                       const newMap = new Map(prev);
-                                      newMap.set(item.id, value);
+                                      newMap.delete(item.id);
                                       return newMap;
                                     });
+                                  }}
+                                  disabled={
+                                    item.selectedType !== "specific_weight"
                                   }
-                                  // マッチしない場合は何もしない（前の値を保持）
-                                }}
-                                onBlur={(e) => {
-                                  const value = e.target.value;
-                                  // フォーカスアウト時に数値に変換
-                                  const numValue =
-                                    value === "" || value === "."
-                                      ? null
-                                      : parseFloat(value) || null;
-                                  handleBaseItemChange(
-                                    item.id,
-                                    "specific_weight",
-                                    numValue
-                                  );
-                                  // 入力中の文字列をクリア
-                                  setSpecificWeightInputs((prev) => {
-                                    const newMap = new Map(prev);
-                                    newMap.delete(item.id);
-                                    return newMap;
-                                  });
-                                }}
-                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="0.00"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              />
+                                  className="flex-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                  placeholder="0.00"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              </>
                             ) : (
                               <div
                                 className="text-sm text-gray-900"
@@ -1674,65 +1918,83 @@ export default function ItemsPage() {
                               maxHeight: "20px",
                               display: "flex",
                               alignItems: "center",
+                              gap: "8px",
                             }}
                           >
                             {isEditModeBaseItems ? (
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={
-                                  eachGramsInputs.has(item.id)
-                                    ? eachGramsInputs.get(item.id)!
-                                    : item.each_grams === null ||
-                                      item.each_grams === undefined
-                                    ? ""
-                                    : String(item.each_grams)
-                                }
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  // 数字と小数点のみを許可（空文字列も許可）
-                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
-                                  if (numericPattern.test(value)) {
+                              <>
+                                <input
+                                  type="radio"
+                                  name={`type-${item.id}`}
+                                  checked={item.selectedType === "each"}
+                                  onClick={() =>
+                                    handleBaseItemTypeChange(item.id, "each")
+                                  }
+                                  onChange={() =>
+                                    handleBaseItemTypeChange(item.id, "each")
+                                  }
+                                  className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                                />
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={
+                                    eachGramsInputs.has(item.id)
+                                      ? eachGramsInputs.get(item.id)!
+                                      : item.each_grams === null ||
+                                        item.each_grams === undefined
+                                      ? ""
+                                      : String(item.each_grams)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setEachGramsInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(item.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
+                                    const numValue =
+                                      value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    handleBaseItemChange(
+                                      item.id,
+                                      "each_grams",
+                                      numValue
+                                    );
+                                    // selectedTypeは保持する（空にしても選択状態は維持）
+                                    // 入力中の文字列をクリア
                                     setEachGramsInputs((prev) => {
                                       const newMap = new Map(prev);
-                                      newMap.set(item.id, value);
+                                      newMap.delete(item.id);
                                       return newMap;
                                     });
-                                  }
-                                  // マッチしない場合は何もしない（前の値を保持）
-                                }}
-                                onBlur={(e) => {
-                                  const value = e.target.value;
-                                  // フォーカスアウト時に数値に変換
-                                  const numValue =
-                                    value === "" || value === "."
-                                      ? null
-                                      : parseFloat(value) || null;
-                                  handleBaseItemChange(
-                                    item.id,
-                                    "each_grams",
-                                    numValue
-                                  );
-                                  // 入力中の文字列をクリア
-                                  setEachGramsInputs((prev) => {
-                                    const newMap = new Map(prev);
-                                    newMap.delete(item.id);
-                                    return newMap;
-                                  });
-                                }}
-                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="0"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              />
+                                  }}
+                                  disabled={item.selectedType !== "each"}
+                                  className="flex-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                  placeholder="0"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              </>
                             ) : (
                               <div
                                 className="text-sm text-gray-900"
@@ -1822,7 +2084,10 @@ export default function ItemsPage() {
               </div>
             ) : (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-                <table className="w-full">
+                <table
+                  className="w-full"
+                  style={{ tableLayout: "fixed", width: "100%" }}
+                >
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
