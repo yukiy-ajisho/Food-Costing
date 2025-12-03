@@ -18,6 +18,7 @@ import {
   NON_MASS_UNITS_ORDERED,
   isNonMassUnit,
 } from "@/lib/constants";
+import { useTheme } from "@/contexts/ThemeContext";
 
 type TabType = "items" | "raw-items" | "vendors";
 
@@ -55,6 +56,8 @@ interface VendorUI {
 }
 
 export default function ItemsPage() {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [activeTab, setActiveTab] = useState<TabType>("items");
 
   // Itemsタブ用のstate（vendor_productsテーブルを操作）
@@ -929,13 +932,19 @@ export default function ItemsPage() {
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
         {/* タブ */}
-        <div className="mb-6 border-b border-gray-200">
+        <div
+          className={`mb-6 border-b transition-colors ${
+            isDark ? "border-slate-700" : "border-gray-200"
+          }`}
+        >
           <nav className="flex space-x-8">
             <button
               onClick={() => setActiveTab("items")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === "items"
                   ? "border-blue-500 text-blue-600"
+                  : isDark
+                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
@@ -943,9 +952,11 @@ export default function ItemsPage() {
             </button>
             <button
               onClick={() => setActiveTab("raw-items")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === "raw-items"
                   ? "border-blue-500 text-blue-600"
+                  : isDark
+                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
@@ -953,9 +964,11 @@ export default function ItemsPage() {
             </button>
             <button
               onClick={() => setActiveTab("vendors")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === "vendors"
                   ? "border-blue-500 text-blue-600"
+                  : isDark
+                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
@@ -970,7 +983,11 @@ export default function ItemsPage() {
             <>
               <button
                 onClick={handleCancelClick}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                  isDark
+                    ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
               >
                 <X className="w-5 h-5" />
                 Cancel
@@ -986,7 +1003,11 @@ export default function ItemsPage() {
           ) : (
             <button
               onClick={handleEditClick}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+              className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
+                isDark
+                  ? "bg-slate-600 hover:bg-slate-500"
+                  : "bg-gray-600 hover:bg-gray-700"
+              }`}
             >
               <Edit className="w-5 h-5" />
               Edit
@@ -998,73 +1019,119 @@ export default function ItemsPage() {
         {activeTab === "items" && (
           <>
             {loadingItems ? (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+              <div
+                className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700 text-slate-300"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 Loading...
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+              <div
+                className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 <table
                   className="w-full"
                   style={{ tableLayout: "fixed", width: "100%" }}
                 >
-                  <thead className="bg-gray-50 border-b border-gray-200">
+                  <thead
+                    className={`border-b transition-colors ${
+                      isDark
+                        ? "bg-slate-700 border-slate-600"
+                        : "bg-gray-50 border-gray-200"
+                    }`}
+                  >
                     <tr>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "15%" }}
                       >
                         Base Item Name
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "15%" }}
                       >
                         Vendor Name
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "20%" }}
                       >
                         Product Name
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "15%" }}
                       >
                         Brand Name
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "10%" }}
                       >
                         Unit
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "10%" }}
                       >
                         Quantity
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "15%" }}
                       >
                         Cost
                       </th>
                       {isEditModeItems && (
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                        >
                           {/* ゴミ箱列のヘッダー */}
                         </th>
                       )}
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody
+                    className={`divide-y transition-colors ${
+                      isDark ? "divide-slate-700" : "divide-gray-200"
+                    }`}
+                  >
                     {vendorProducts.map((vp) => (
                       <Fragment key={vp.id}>
                         <tr
-                          className={`${
-                            vp.isMarkedForDeletion ? "bg-red-50" : ""
-                          } hover:bg-gray-50`}
+                          className={`transition-colors ${
+                            vp.isMarkedForDeletion
+                              ? isDark
+                                ? "bg-red-900/30"
+                                : "bg-red-50"
+                              : ""
+                          } ${
+                            isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
+                          }`}
                           style={{
                             height: "52px",
                             minHeight: "52px",
@@ -1107,7 +1174,9 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className="text-sm text-gray-900"
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
                                 >
                                   {baseItems.find(
@@ -1154,7 +1223,9 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className="text-sm text-gray-900"
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
                                 >
                                   {vendors.find((v) => v.id === vp.vendor_id)
@@ -1193,7 +1264,11 @@ export default function ItemsPage() {
                                       e.target.value
                                     )
                                   }
-                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                      : "border-gray-300"
+                                  }`}
                                   placeholder="Product name"
                                   style={{
                                     height: "20px",
@@ -1208,7 +1283,9 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className="text-sm text-gray-900"
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
                                 >
                                   {vp.product_name}
@@ -1246,7 +1323,11 @@ export default function ItemsPage() {
                                       e.target.value || null
                                     )
                                   }
-                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                      : "border-gray-300"
+                                  }`}
                                   placeholder="Brand name (optional)"
                                   style={{
                                     height: "20px",
@@ -1261,7 +1342,9 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className="text-sm text-gray-900"
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
                                 >
                                   {vp.brand_name || "-"}
@@ -1374,7 +1457,11 @@ export default function ItemsPage() {
                                     style={{ height: "20px" }}
                                   >
                                     <span
-                                      className="text-sm text-gray-900"
+                                      className={`text-sm ${
+                                        isDark
+                                          ? "text-slate-100"
+                                          : "text-gray-900"
+                                      }`}
                                       style={{
                                         height: "20px",
                                         lineHeight: "20px",
@@ -1479,7 +1566,9 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className="text-sm text-gray-900"
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
                                 >
                                   {vp.purchase_quantity}
@@ -1576,7 +1665,9 @@ export default function ItemsPage() {
                                 </div>
                               ) : (
                                 <div
-                                  className="text-sm text-gray-900"
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
                                 >
                                   ${vp.purchase_cost.toFixed(2)}
@@ -1661,25 +1752,47 @@ export default function ItemsPage() {
         {activeTab === "raw-items" && (
           <>
             {loadingBaseItems ? (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+              <div
+                className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700 text-slate-300"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 Loading...
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+              <div
+                className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 <table
                   className="w-full"
                   style={{ tableLayout: "fixed", width: "100%" }}
                 >
-                  <thead className="bg-gray-50 border-b border-gray-200">
+                  <thead
+                    className={`border-b transition-colors ${
+                      isDark
+                        ? "bg-slate-700 border-slate-600"
+                        : "bg-gray-50 border-gray-200"
+                    }`}
+                  >
                     <tr>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "50%" }}
                       >
                         NAME
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "25%" }}
                       >
                         <div className="flex items-center gap-1">
@@ -1696,13 +1809,21 @@ export default function ItemsPage() {
                         </div>
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "25%" }}
                       >
                         <div className="flex items-center gap-1">
                           <span>EACH (g)</span>
                           <div className="relative group">
-                            <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center text-gray-400 text-xs cursor-help">
+                            <div
+                              className={`w-4 h-4 rounded-full border flex items-center justify-center text-xs cursor-help ${
+                                isDark
+                                  ? "border-slate-500 text-slate-400"
+                                  : "border-gray-400 text-gray-400"
+                              }`}
+                            >
                               ?
                             </div>
                             <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
@@ -1714,19 +1835,33 @@ export default function ItemsPage() {
                         </div>
                       </th>
                       {isEditModeBaseItems && (
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 tracking-wider w-16">
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium tracking-wider w-16 ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                        >
                           {/* ゴミ箱列のヘッダー */}
                         </th>
                       )}
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody
+                    className={`divide-y transition-colors ${
+                      isDark ? "divide-slate-700" : "divide-gray-200"
+                    }`}
+                  >
                     {baseItemsUI.map((item) => (
                       <tr
                         key={item.id}
-                        className={`${
-                          item.isMarkedForDeletion ? "bg-red-50" : ""
-                        } hover:bg-gray-50`}
+                        className={`transition-colors ${
+                          item.isMarkedForDeletion
+                            ? isDark
+                              ? "bg-red-900/30"
+                              : "bg-red-50"
+                            : ""
+                        } ${
+                          isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
+                        }`}
                         style={{
                           height: "52px",
                           minHeight: "52px",
@@ -1762,7 +1897,11 @@ export default function ItemsPage() {
                                     e.target.value
                                   )
                                 }
-                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                  isDark
+                                    ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                    : "border-gray-300"
+                                }`}
                                 placeholder="Base item name"
                                 style={{
                                   height: "20px",
@@ -1777,7 +1916,9 @@ export default function ItemsPage() {
                               />
                             ) : (
                               <div
-                                className="text-sm text-gray-900"
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
                                 style={{ height: "20px", lineHeight: "20px" }}
                               >
                                 {item.name}
@@ -1875,7 +2016,11 @@ export default function ItemsPage() {
                                   disabled={
                                     item.selectedType !== "specific_weight"
                                   }
-                                  className="flex-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                  className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
+                                      : "border-gray-300 disabled:bg-gray-100"
+                                  }`}
                                   placeholder="0.00"
                                   style={{
                                     height: "20px",
@@ -1891,7 +2036,9 @@ export default function ItemsPage() {
                               </>
                             ) : (
                               <div
-                                className="text-sm text-gray-900"
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
                                 style={{ height: "20px", lineHeight: "20px" }}
                               >
                                 {item.specific_weight
@@ -1981,7 +2128,11 @@ export default function ItemsPage() {
                                     });
                                   }}
                                   disabled={item.selectedType !== "each"}
-                                  className="flex-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                  className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
+                                      : "border-gray-300 disabled:bg-gray-100"
+                                  }`}
                                   placeholder="0"
                                   style={{
                                     height: "20px",
@@ -2079,34 +2230,71 @@ export default function ItemsPage() {
         {activeTab === "vendors" && (
           <>
             {loadingVendors ? (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+              <div
+                className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700 text-slate-300"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 Loading...
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+              <div
+                className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 <table
                   className="w-full"
                   style={{ tableLayout: "fixed", width: "100%" }}
                 >
-                  <thead className="bg-gray-50 border-b border-gray-200">
+                  <thead
+                    className={`border-b transition-colors ${
+                      isDark
+                        ? "bg-slate-700 border-slate-600"
+                        : "bg-gray-50 border-gray-200"
+                    }`}
+                  >
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "100%" }}
+                      >
                         Name
                       </th>
                       {isEditModeVendors && (
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                        >
                           {/* ゴミ箱列のヘッダー */}
                         </th>
                       )}
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody
+                    className={`divide-y transition-colors ${
+                      isDark ? "divide-slate-700" : "divide-gray-200"
+                    }`}
+                  >
                     {vendorsUI.map((vendor) => (
                       <tr
                         key={vendor.id}
-                        className={`${
-                          vendor.isMarkedForDeletion ? "bg-red-50" : ""
-                        } hover:bg-gray-50`}
+                        className={`transition-colors ${
+                          vendor.isMarkedForDeletion
+                            ? isDark
+                              ? "bg-red-900/30"
+                              : "bg-red-50"
+                            : ""
+                        } ${
+                          isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
+                        }`}
                         style={{
                           height: "52px",
                           minHeight: "52px",
@@ -2142,7 +2330,11 @@ export default function ItemsPage() {
                                     e.target.value
                                   )
                                 }
-                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                  isDark
+                                    ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                    : "border-gray-300"
+                                }`}
                                 placeholder="Vendor name"
                                 style={{
                                   height: "20px",
@@ -2157,7 +2349,9 @@ export default function ItemsPage() {
                               />
                             ) : (
                               <div
-                                className="text-sm text-gray-900"
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
                                 style={{ height: "20px", lineHeight: "20px" }}
                               >
                                 {vendor.name}

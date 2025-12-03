@@ -9,6 +9,7 @@ import {
   type LaborRole,
   type ProceedValidationSettings,
 } from "@/lib/api";
+import { useTheme } from "@/contexts/ThemeContext";
 
 type TabType = "labor" | "overweight";
 
@@ -18,6 +19,8 @@ interface LaborRoleUI extends LaborRole {
 }
 
 export default function SettingsPage() {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [activeTab, setActiveTab] = useState<TabType>("labor");
 
   // Laborタブ用のstate
@@ -327,13 +330,19 @@ export default function SettingsPage() {
     <div className="p-8">
       <div className="max-w-7xl mx-auto">
         {/* タブ */}
-        <div className="mb-6 border-b border-gray-200">
+        <div
+          className={`mb-6 border-b transition-colors ${
+            isDark ? "border-slate-700" : "border-gray-200"
+          }`}
+        >
           <nav className="flex space-x-8">
             <button
               onClick={() => setActiveTab("labor")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === "labor"
                   ? "border-blue-500 text-blue-600"
+                  : isDark
+                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
@@ -341,9 +350,11 @@ export default function SettingsPage() {
             </button>
             <button
               onClick={() => setActiveTab("overweight")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === "overweight"
                   ? "border-blue-500 text-blue-600"
+                  : isDark
+                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
                   : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
               }`}
             >
@@ -358,7 +369,11 @@ export default function SettingsPage() {
             <>
               <button
                 onClick={handleCancelClick}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                  isDark
+                    ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
               >
                 <X className="w-5 h-5" />
                 Cancel
@@ -374,7 +389,11 @@ export default function SettingsPage() {
           ) : (
             <button
               onClick={handleEditClick}
-              className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+              className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
+                isDark
+                  ? "bg-slate-600 hover:bg-slate-500"
+                  : "bg-gray-600 hover:bg-gray-700"
+              }`}
             >
               <Edit className="w-5 h-5" />
               Edit
@@ -386,43 +405,79 @@ export default function SettingsPage() {
         {activeTab === "labor" && (
           <>
             {loadingLabor ? (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+              <div
+                className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700 text-slate-300"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 Loading...
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+              <div
+                className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 <table
                   className="w-full"
                   style={{ tableLayout: "fixed", width: "100%" }}
                 >
-                  <thead className="bg-gray-50 border-b border-gray-200">
+                  <thead
+                    className={`border-b transition-colors ${
+                      isDark
+                        ? "bg-slate-700 border-slate-600"
+                        : "bg-gray-50 border-gray-200"
+                    }`}
+                  >
                     <tr>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "60%" }}
                       >
                         Name
                       </th>
                       <th
-                        className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
                         style={{ width: "40%" }}
                       >
                         Hourly Wage ($)
                       </th>
                       {isEditModeLabor && (
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                        >
                           {/* ゴミ箱列のヘッダー */}
                         </th>
                       )}
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody
+                    className={`divide-y transition-colors ${
+                      isDark ? "divide-slate-700" : "divide-gray-200"
+                    }`}
+                  >
                     {laborRoles.map((role) => (
                       <tr
                         key={role.id}
-                        className={`${
-                          role.isMarkedForDeletion ? "bg-red-50" : ""
-                        } hover:bg-gray-50`}
+                        className={`transition-colors ${
+                          role.isMarkedForDeletion
+                            ? isDark
+                              ? "bg-red-900/30"
+                              : "bg-red-50"
+                            : ""
+                        } ${
+                          isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
+                        }`}
                         style={{
                           height: "52px",
                           minHeight: "52px",
@@ -458,7 +513,11 @@ export default function SettingsPage() {
                                     e.target.value
                                   )
                                 }
-                                className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                  isDark
+                                    ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                    : "border-gray-300"
+                                }`}
                                 placeholder="Role name (e.g., Prep Cook)"
                                 style={{
                                   height: "20px",
@@ -473,7 +532,9 @@ export default function SettingsPage() {
                               />
                             ) : (
                               <div
-                                className="text-sm text-gray-900"
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
                                 style={{ height: "20px", lineHeight: "20px" }}
                               >
                                 {role.name}
@@ -554,7 +615,11 @@ export default function SettingsPage() {
                                       return newMap;
                                     });
                                   }}
-                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                      : "border-gray-300"
+                                  }`}
                                   placeholder="0.00"
                                   style={{
                                     height: "20px",
@@ -570,7 +635,9 @@ export default function SettingsPage() {
                               </div>
                             ) : (
                               <div
-                                className="text-sm text-gray-900"
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
                                 style={{ height: "20px", lineHeight: "20px" }}
                               >
                                 ${role.hourly_wage.toFixed(2)}
@@ -650,16 +717,36 @@ export default function SettingsPage() {
         {activeTab === "overweight" && (
           <>
             {loadingOverweight ? (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+              <div
+                className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700 text-slate-300"
+                    : "bg-white border-gray-200"
+                }`}
+              >
                 Loading...
               </div>
             ) : (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <h2 className="text-lg font-semibold mb-6">
+              <div
+                className={`rounded-lg shadow-sm border p-8 transition-colors ${
+                  isDark
+                    ? "bg-slate-800 border-slate-700"
+                    : "bg-white border-gray-200"
+                }`}
+              >
+                <h2
+                  className={`text-lg font-semibold mb-6 ${
+                    isDark ? "text-slate-100" : "text-gray-900"
+                  }`}
+                >
                   Final Amount Validation Setting
                 </h2>
                 <div className="flex items-center justify-between">
-                  <p className="text-sm text-gray-600">
+                  <p
+                    className={`text-sm ${
+                      isDark ? "text-slate-400" : "text-gray-600"
+                    }`}
+                  >
                     Allow <span className="font-bold">Final Amount</span> to
                     exceed{" "}
                     <span className="font-bold">total ingredient weight</span>

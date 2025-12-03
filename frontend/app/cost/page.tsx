@@ -242,7 +242,11 @@ function AddItemModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+    <div
+      className={`fixed inset-0 z-60 flex items-center justify-center ${
+        isDark ? "bg-black/70" : "bg-black/50"
+      }`}
+    >
       <div
         className={`w-full max-w-6xl rounded-lg shadow-xl p-6 transition-colors ${
           isDark ? "bg-slate-800" : "bg-white"
@@ -3173,10 +3177,10 @@ export default function CostPage() {
                     isNewItem && newItemIndex >= 0
                       ? newItemIndex % 2 === 0
                         ? isDark
-                          ? "bg-blue-900/30"
+                          ? "bg-blue-900"
                           : "bg-blue-100"
                         : isDark
-                        ? "bg-blue-900/20"
+                        ? "bg-blue-800"
                         : "bg-blue-50"
                       : "";
 
@@ -3189,13 +3193,13 @@ export default function CostPage() {
                       ? (() => {
                           const colors = [
                             // 色1: 緑
-                            isDark ? "bg-green-900/30" : "bg-green-100",
+                            isDark ? "bg-green-900" : "bg-green-100",
                             // 色2: 黄
-                            isDark ? "bg-yellow-900/30" : "bg-yellow-100",
+                            isDark ? "bg-yellow-900" : "bg-yellow-100",
                             // 色3: 紫
-                            isDark ? "bg-purple-900/30" : "bg-purple-100",
+                            isDark ? "bg-purple-900" : "bg-purple-100",
                             // 色4: オレンジ
-                            isDark ? "bg-orange-900/30" : "bg-orange-100",
+                            isDark ? "bg-orange-900" : "bg-orange-100",
                           ];
                           return colors[expandedColorIndex] || "";
                         })()
@@ -3207,7 +3211,7 @@ export default function CostPage() {
                         className={`${item.isExpanded ? "peer" : ""} ${
                           item.isMarkedForDeletion
                             ? isDark
-                              ? "bg-red-900/30"
+                              ? "bg-red-900"
                               : "bg-red-50"
                             : isNewItem
                             ? newItemBgClass
@@ -3647,7 +3651,9 @@ export default function CostPage() {
                                 style={{ height: "20px" }}
                               >
                                 <span
-                                  className="text-sm text-gray-900"
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
                                   style={{ lineHeight: "20px" }}
                                 >
                                   {item.proceed_yield_amount}{" "}
@@ -3704,7 +3710,9 @@ export default function CostPage() {
                             }}
                           >
                             <div
-                              className="text-sm text-gray-900"
+                              className={`text-sm ${
+                                isDark ? "text-slate-100" : "text-gray-900"
+                              }`}
                               style={{ lineHeight: "20px", height: "20px" }}
                             >
                               {item.cost_per_gram !== undefined
@@ -4387,17 +4395,6 @@ export default function CostPage() {
                               width: "100%",
                               paddingLeft: 0,
                               paddingRight: 0,
-                              backgroundColor: expandedBgClass
-                                ? undefined
-                                : isNewItem
-                                ? undefined
-                                : isDark
-                                ? hoveredItemId === item.id
-                                  ? "#475569"
-                                  : "#1e293b"
-                                : hoveredItemId === item.id
-                                ? "#f9fafb"
-                                : "#ffffff",
                             }}
                           >
                             <div
@@ -4407,44 +4404,24 @@ export default function CostPage() {
                               style={{
                                 width: "100%",
                                 minWidth: "100%",
-                                backgroundColor: expandedBgClass
-                                  ? (() => {
-                                      // 展開色のRGB値を取得
-                                      const colorMap: Record<string, string> = {
-                                        "bg-green-100": "#dcfce7",
-                                        "bg-green-900/30":
-                                          "rgba(20, 83, 45, 0.3)",
-                                        "bg-yellow-100": "#fef9c3",
-                                        "bg-yellow-900/30":
-                                          "rgba(113, 63, 18, 0.3)",
-                                        "bg-purple-100": "#f3e8ff",
-                                        "bg-purple-900/30":
-                                          "rgba(88, 28, 135, 0.3)",
-                                        "bg-orange-100": "#ffedd5",
-                                        "bg-orange-900/30":
-                                          "rgba(154, 52, 18, 0.3)",
-                                      };
-                                      return (
-                                        colorMap[expandedBgClass] || undefined
-                                      );
-                                    })()
-                                  : isNewItem
-                                  ? undefined
-                                  : isDark
-                                  ? hoveredItemId === item.id
-                                    ? "#475569"
-                                    : "#1e293b"
-                                  : hoveredItemId === item.id
-                                  ? "#f9fafb"
-                                  : "#ffffff",
                               }}
                             >
                               {/* Recipeセクション */}
                               <div>
-                                <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                                <h3
+                                  className={`text-sm font-semibold mb-3 ${
+                                    isDark ? "text-slate-300" : "text-gray-700"
+                                  }`}
+                                >
                                   Ingredients:
                                   {isEditMode && (
-                                    <span className="ml-4 text-sm font-normal text-gray-600">
+                                    <span
+                                      className={`ml-4 text-sm font-normal ${
+                                        isDark
+                                          ? "text-slate-400"
+                                          : "text-gray-600"
+                                      }`}
+                                    >
                                       Total:{" "}
                                       {calculateTotalIngredientsGrams(
                                         item.recipe_lines
@@ -4457,30 +4434,68 @@ export default function CostPage() {
                                   className={`w-full ${expandedBgClass || ""}`}
                                 >
                                   <thead
-                                    className={expandedBgClass || "bg-gray-100"}
+                                    className={
+                                      expandedBgClass ||
+                                      (isDark ? "bg-slate-700" : "bg-gray-100")
+                                    }
                                   >
                                     <tr>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         Item
                                       </th>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         Vendor Selection
                                       </th>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         Quantity
                                       </th>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         Unit
                                       </th>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 w-16">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium w-16 ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         {/* ゴミ箱列 */}
                                       </th>
                                     </tr>
                                   </thead>
                                   <tbody
                                     className={`${
-                                      expandedBgClass || "bg-white"
-                                    } divide-y divide-gray-200`}
+                                      expandedBgClass ||
+                                      (isDark ? "bg-slate-800" : "bg-white")
+                                    } divide-y ${
+                                      isDark
+                                        ? "divide-slate-700"
+                                        : "divide-gray-200"
+                                    }`}
                                   >
                                     {item.recipe_lines
                                       .filter(
@@ -5025,31 +5040,61 @@ export default function CostPage() {
 
                               {/* Laborセクション */}
                               <div>
-                                <h3 className="text-sm font-semibold text-gray-700 mb-3">
+                                <h3
+                                  className={`text-sm font-semibold mb-3 ${
+                                    isDark ? "text-slate-300" : "text-gray-700"
+                                  }`}
+                                >
                                   Labor:
                                 </h3>
                                 <table
                                   className={`w-full ${expandedBgClass || ""}`}
                                 >
                                   <thead
-                                    className={expandedBgClass || "bg-gray-100"}
+                                    className={
+                                      expandedBgClass ||
+                                      (isDark ? "bg-slate-700" : "bg-gray-100")
+                                    }
                                   >
                                     <tr>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         Role
                                       </th>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         Minutes
                                       </th>
-                                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-600 w-16">
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium w-16 ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
                                         {/* ゴミ箱列 */}
                                       </th>
                                     </tr>
                                   </thead>
                                   <tbody
                                     className={`${
-                                      expandedBgClass || "bg-white"
-                                    } divide-y divide-gray-200`}
+                                      expandedBgClass ||
+                                      (isDark ? "bg-slate-800" : "bg-white")
+                                    } divide-y ${
+                                      isDark
+                                        ? "divide-slate-700"
+                                        : "divide-gray-200"
+                                    }`}
                                   >
                                     {item.recipe_lines
                                       .filter(
