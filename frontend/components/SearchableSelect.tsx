@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Search, ChevronDown } from "lucide-react";
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface SearchableSelectProps {
   options: {
@@ -23,6 +24,8 @@ export function SearchableSelect({
   placeholder = "Search and select...",
   disabled = false,
 }: SearchableSelectProps) {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -88,8 +91,14 @@ export function SearchableSelect({
           type="button"
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
-          className={`w-full text-left border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between ${
-            disabled ? "bg-gray-100 cursor-not-allowed" : "bg-white"
+          className={`w-full text-left border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between transition-colors ${
+            disabled
+              ? isDark
+                ? "bg-slate-800 cursor-not-allowed border-slate-600"
+                : "bg-gray-100 cursor-not-allowed border-gray-300"
+              : isDark
+              ? "bg-slate-700 border-slate-600"
+              : "bg-white border-gray-300"
           }`}
           style={{
             height: "20px",
@@ -102,13 +111,23 @@ export function SearchableSelect({
             margin: 0,
           }}
         >
-          <span className={selectedItem ? "text-gray-900" : "text-gray-500"}>
+          <span
+            className={
+              selectedItem
+                ? isDark
+                  ? "text-slate-100"
+                  : "text-gray-900"
+                : isDark
+                ? "text-slate-400"
+                : "text-gray-500"
+            }
+          >
             {selectedItem ? selectedItem.name : placeholder}
           </span>
           <ChevronDown
-            className={`w-4 h-4 text-gray-400 transition-transform ${
-              isOpen ? "transform rotate-180" : ""
-            }`}
+            className={`w-4 h-4 transition-transform ${
+              isDark ? "text-slate-400" : "text-gray-400"
+            } ${isOpen ? "transform rotate-180" : ""}`}
           />
         </button>
       </div>
@@ -116,7 +135,11 @@ export function SearchableSelect({
       {isOpen && (
         <div
           ref={menuRef}
-          className="fixed z-50 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto"
+          className={`fixed z-50 border rounded-md shadow-lg max-h-60 overflow-auto transition-colors ${
+            isDark
+              ? "bg-slate-800 border-slate-600"
+              : "bg-white border-gray-300"
+          }`}
           style={{
             top: `${menuPosition.top}px`,
             left: `${menuPosition.left}px`,
@@ -124,15 +147,27 @@ export function SearchableSelect({
             minWidth: "200px",
           }}
         >
-          <div className="p-2 border-b border-gray-200">
+          <div
+            className={`p-2 border-b transition-colors ${
+              isDark ? "border-slate-600" : "border-gray-200"
+            }`}
+          >
             <div className="relative">
-              <Search className="absolute left-2 top-2.5 w-4 h-4 text-gray-400" />
+              <Search
+                className={`absolute left-2 top-2.5 w-4 h-4 ${
+                  isDark ? "text-slate-400" : "text-gray-400"
+                }`}
+              />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Search items..."
-                className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className={`w-full pl-8 pr-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                  isDark
+                    ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                    : "border-gray-300"
+                }`}
                 autoFocus
               />
             </div>
@@ -147,16 +182,30 @@ export function SearchableSelect({
                   disabled={option.disabled}
                   className={`block w-full px-4 py-2 text-left transition-colors ${
                     option.disabled || option.deprecated
-                      ? "opacity-50 cursor-not-allowed text-gray-400"
+                      ? isDark
+                        ? "opacity-50 cursor-not-allowed text-slate-500"
+                        : "opacity-50 cursor-not-allowed text-gray-400"
+                      : isDark
+                      ? "hover:bg-slate-700 text-slate-100"
                       : "hover:bg-blue-50"
-                  } ${value === option.id ? "bg-blue-100 font-semibold" : ""}`}
+                  } ${
+                    value === option.id
+                      ? isDark
+                        ? "bg-slate-700 font-semibold"
+                        : "bg-blue-100 font-semibold"
+                      : ""
+                  }`}
                 >
                   {option.deprecated && "[Deprecated] "}
                   {option.name}
                 </button>
               ))
             ) : (
-              <div className="px-4 py-2 text-gray-500 text-sm">
+              <div
+                className={`px-4 py-2 text-sm ${
+                  isDark ? "text-slate-400" : "text-gray-500"
+                }`}
+              >
                 No items found
               </div>
             )}
