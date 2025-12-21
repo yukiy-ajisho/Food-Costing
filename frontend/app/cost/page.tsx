@@ -22,7 +22,7 @@ import {
   vendorsAPI,
   proceedValidationSettingsAPI,
   saveChangeHistory,
-  getAndClearChangeHistory,
+  // getAndClearChangeHistory, // フル計算に統一するため、不要
   type Item,
   type RecipeLine as APIRecipeLine,
   type LaborRole,
@@ -1138,10 +1138,8 @@ export default function CostPage() {
       try {
         setLoading(true);
 
-        // 変更履歴をlocalStorageから取得してクリア（並列実行前に取得）
-        const changeHistory = getAndClearChangeHistory();
-
         // 並列実行可能なAPI呼び出しを同時に実行（パフォーマンス最適化）
+        // 注意: 変更履歴は使用せず、常にフル計算を行います
         const [
           preppedItems,
           allItems,
@@ -1185,48 +1183,16 @@ export default function CostPage() {
           console.error("Failed to fetch recipes:", error);
         }
 
-        // 差分更新でコストを計算（変更があった場合のみ、itemIdsに依存）
+        // 全アイテムのコストを計算（フル計算）
+        // 注意: 差分更新は使用せず、常に全アイテムのコストを計算します
         let costsMap: Record<string, number> = {};
-        const hasChanges = changeHistory
-          ? (changeHistory.changed_item_ids?.length ?? 0) > 0 ||
-            (changeHistory.changed_vendor_product_ids?.length ?? 0) > 0 ||
-            (changeHistory.changed_base_item_ids?.length ?? 0) > 0 ||
-            (changeHistory.changed_labor_role_names?.length ?? 0) > 0
-          : false;
-
         try {
-          if (hasChanges && changeHistory) {
-            // 差分更新
-            const costsData = await costAPI.getCostsDifferential({
-              changed_item_ids: changeHistory.changed_item_ids || [],
-              changed_vendor_product_ids:
-                changeHistory.changed_vendor_product_ids || [],
-              changed_base_item_ids: changeHistory.changed_base_item_ids || [],
-              changed_labor_role_names:
-                changeHistory.changed_labor_role_names || [],
-            });
+          if (itemIds.length > 0) {
+            const costsData = await costAPI.getCosts(itemIds);
             costsMap = costsData.costs;
-          } else {
-            // 変更がない場合は全アイテムのコストを計算
-            if (itemIds.length > 0) {
-              const costsData = await costAPI.getCosts(itemIds);
-              costsMap = costsData.costs;
-            }
           }
         } catch (error) {
           console.error("Failed to calculate costs:", error);
-          // フォールバック: 全アイテムのコストを計算
-          try {
-            if (itemIds.length > 0) {
-              const costsData = await costAPI.getCosts(itemIds);
-              costsMap = costsData.costs;
-            }
-          } catch (fallbackError) {
-            console.error(
-              "Failed to calculate costs (fallback):",
-              fallbackError
-            );
-          }
         }
 
         // 各アイテムのデータを構築
@@ -2076,31 +2042,19 @@ export default function CostPage() {
       const allItems = await itemsAPI.getAll();
       setAvailableItems(allItems);
 
-      // 差分更新でコストを計算（変更されたアイテムとその依存関係のみ）
+      // 全アイテムのコストを計算（フル計算）
+      // 注意: 差分更新は使用せず、常に全アイテムのコストを計算します
       let costsMap: Record<string, number> = {};
       let affectedItemIds: string[] = [];
       try {
-        if (changedItemIds.size > 0) {
-          const costsData = await costAPI.getCostsDifferential({
-            changed_item_ids: Array.from(changedItemIds),
-          });
+        const itemIds = preppedItems.map((item) => item.id);
+        if (itemIds.length > 0) {
+          const costsData = await costAPI.getCosts(itemIds);
           costsMap = costsData.costs;
-          // 影響を受けるアイテムIDを取得（コストが計算されたアイテム = 変更されたアイテムとその依存関係）
-          affectedItemIds = Object.keys(costsData.costs);
+          affectedItemIds = itemIds; // 全アイテム
         }
       } catch (error) {
-        console.error("Failed to calculate costs (differential):", error);
-        // フォールバック: 全アイテムのコストを計算
-        try {
-          const itemIds = preppedItems.map((item) => item.id);
-          if (itemIds.length > 0) {
-            const costsData = await costAPI.getCosts(itemIds);
-            costsMap = costsData.costs;
-            affectedItemIds = itemIds; // フォールバック時は全アイテム
-          }
-        } catch (fallbackError) {
-          console.error("Failed to calculate costs (fallback):", fallbackError);
-        }
+        console.error("Failed to calculate costs:", error);
       }
 
       // 影響を受けるアイテムのレシピのみを取得（最適化）

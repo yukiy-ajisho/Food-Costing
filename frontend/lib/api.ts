@@ -377,6 +377,9 @@ export const costAPI = {
       body: JSON.stringify({ item_ids: itemIds }),
     });
   },
+  // getCostsDifferential: フル計算に統一するため、コメントアウト
+  // 将来的に差分更新が必要になった場合は、この関数を再実装してください
+  /*
   getCostsDifferential: (params: {
     changed_item_ids?: string[];
     changed_vendor_product_ids?: string[];
@@ -396,6 +399,7 @@ export const costAPI = {
       }
     );
   },
+  */
   getCostsBreakdown: () => {
     return fetchAPI<{
       costs: Record<

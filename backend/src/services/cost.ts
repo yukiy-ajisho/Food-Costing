@@ -924,12 +924,18 @@ function findItemsAffectedByLaborRoleChanges(
 
 /**
  * すべての変更を統合して、影響を受けるアイテムを特定し、差分更新でコストを計算
+ *
+ * 【注意】この関数は現在コメントアウトされています。
+ * フル計算に統一するため、この関数は使用されていません。
+ * 将来的に差分更新が必要になった場合は、この関数を再実装してください。
+ *
  * @param changedItemIds - 変更されたアイテムIDの配列（recipe_linesの変更による）
  * @param changedVendorProductIds - 変更されたvendor_productのIDの配列
  * @param changedBaseItemIds - 変更されたbase_itemのIDの配列
  * @param changedLaborRoleNames - 変更されたlabor_roleのnameの配列
  * @returns アイテムIDをキー、コスト（1グラムあたり）を値とするMap
  */
+/*
 export async function calculateCostsForAllChanges(
   changedItemIds: string[] = [],
   changedVendorProductIds: string[] = [],
@@ -1050,3 +1056,4 @@ export async function calculateCostsForAllChanges(
 
   return results;
 }
+*/
