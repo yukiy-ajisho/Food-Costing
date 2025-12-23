@@ -1,8 +1,8 @@
 import { Router } from "express";
 import {
   calculateCost,
-  calculateCosts,
-  calculateCostsForAllChanges,
+  // calculateCosts, // PostgreSQL関数を使用するため、不要
+  // calculateCostsForAllChanges, // 差分更新はコメントアウト
   clearCostCache,
 } from "../services/cost";
 import { supabase } from "../config/supabase";
@@ -36,7 +36,7 @@ router.get("/items/:id/cost", async (req, res) => {
 
 /**
  * POST /items/costs
- * 複数アイテムのコストを一度に計算（最適化版）
+ * 複数アイテムのコストを一度に計算（PostgreSQL関数を使用）
  * Request body: { item_ids: string[] }
  * Response: { costs: { [itemId: string]: number } }
  */
@@ -54,14 +54,25 @@ router.post("/items/costs", async (req, res) => {
       return res.json({ costs: {} });
     }
 
-    // 複数アイテムのコストを一度に計算
-    const costsMap = await calculateCosts(item_ids, req.user!.id);
-
-    // Mapをオブジェクトに変換
-    const costs: Record<string, number> = {};
-    costsMap.forEach((cost, itemId) => {
-      costs[itemId] = cost;
+    // PostgreSQL関数を呼び出し
+    const { data, error } = await supabase.rpc("calculate_item_costs", {
+      p_user_id: req.user!.id,
+      p_item_ids: item_ids.length > 0 ? item_ids : null,
     });
+
+    if (error) {
+      throw new Error(`Database error: ${error.message}`);
+    }
+
+    if (!data || !Array.isArray(data)) {
+      throw new Error("Invalid response from database function");
+    }
+
+    // 結果をオブジェクトに変換
+    const costs: Record<string, number> = {};
+    for (const row of data) {
+      costs[row.item_id] = parseFloat(row.cost_per_gram) || 0;
+    }
 
     res.json({ costs });
   } catch (error: unknown) {
@@ -73,6 +84,11 @@ router.post("/items/costs", async (req, res) => {
 /**
  * POST /items/costs/differential
  * 差分更新: 変更されたアイテムとその依存関係のみコストを計算
+ *
+ * 【注意】このエンドポイントは現在コメントアウトされています。
+ * フル計算に統一するため、このエンドポイントは使用されていません。
+ * 将来的に差分更新が必要になった場合は、このエンドポイントを再実装してください。
+ *
  * Request body: {
  *   changed_item_ids?: string[],
  *   changed_vendor_product_ids?: string[],
@@ -81,6 +97,7 @@ router.post("/items/costs", async (req, res) => {
  * }
  * Response: { costs: { [itemId: string]: number } }
  */
+/*
 router.post("/items/costs/differential", async (req, res) => {
   try {
     const {
@@ -122,6 +139,7 @@ router.post("/items/costs/differential", async (req, res) => {
     res.status(500).json({ error: message });
   }
 });
+*/
 
 /**
  * GET /items/costs/breakdown

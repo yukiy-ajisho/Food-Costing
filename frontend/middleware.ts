@@ -30,9 +30,13 @@ export async function middleware(req: NextRequest) {
 
   // 保護されたルートをチェック
   const protectedPaths = ["/cost", "/items", "/settings"];
-  const isProtectedPath = protectedPaths.some((path) =>
-    req.nextUrl.pathname.startsWith(path)
-  );
+  const isProtectedPath =
+    req.nextUrl.pathname === "/" ||
+    protectedPaths.some(
+      (path) =>
+        req.nextUrl.pathname === path ||
+        req.nextUrl.pathname.startsWith(path + "/")
+    );
 
   if (isProtectedPath) {
     const {
@@ -52,6 +56,7 @@ export async function middleware(req: NextRequest) {
 
 export const config = {
   matcher: [
+    "/",
     "/cost",
     "/cost/:path*",
     "/items",

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { RecipeLine } from "../types/database";
 
 const router = Router();
 
@@ -61,7 +62,7 @@ router.post("/items/recipes", async (req, res) => {
     }
 
     // アイテムIDごとにグループ化
-    const recipes: Record<string, any[]> = {};
+    const recipes: Record<string, RecipeLine[]> = {};
     if (data) {
       for (const line of data) {
         const itemId = line.parent_item_id;
