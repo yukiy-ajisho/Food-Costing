@@ -8,6 +8,8 @@ declare global {
     interface Request {
       user?: {
         id: string;
+        tenant_id: string | null; // GET /tenantsの場合はnullになる可能性がある
+        role: "admin" | "manager" | "staff" | null; // GET /tenantsの場合はnullになる可能性がある
       };
     }
   }
@@ -60,10 +62,58 @@ export async function authMiddleware(
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
-    // リクエストオブジェクトにユーザー情報を追加
-    req.user = {
-      id: user.id,
-    };
+    // リクエストヘッダーからtenant_idを取得
+    const tenantId = req.headers["x-tenant-id"] as string | undefined;
+
+    // GET /tenants エンドポイントではX-Tenant-IDをオプショナルにする
+    // req.originalUrlからクエリパラメータを除去してパス部分のみを取得
+    const pathWithoutQuery = req.originalUrl.split("?")[0];
+    const isTenantsListEndpoint =
+      req.method === "GET" && pathWithoutQuery === "/tenants";
+
+    if (!tenantId && !isTenantsListEndpoint) {
+      return res.status(400).json({
+        error: "X-Tenant-ID header is required",
+      });
+    }
+
+    // X-Tenant-IDが指定されている場合、ユーザーがそのテナントに属しているか確認
+    if (tenantId) {
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("user_id", user.id)
+        .eq("tenant_id", tenantId)
+        .single();
+
+      if (profileError || !profile) {
+        console.error(
+          "Profile not found for user:",
+          user.id,
+          "tenant:",
+          tenantId,
+          profileError
+        );
+        return res.status(403).json({
+          error:
+            "User does not belong to this tenant or profile not found. Please contact administrator.",
+        });
+      }
+
+      // リクエストオブジェクトにユーザー情報を追加
+      req.user = {
+        id: user.id,
+        tenant_id: tenantId,
+        role: profile.role as "admin" | "manager" | "staff",
+      };
+    } else {
+      // GET /tenants の場合、tenant_idとroleはnullにする
+      req.user = {
+        id: user.id,
+        tenant_id: null,
+        role: null,
+      };
+    }
 
     next();
   } catch (error) {

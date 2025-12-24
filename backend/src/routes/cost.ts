@@ -22,7 +22,7 @@ router.get("/items/:id/cost", async (req, res) => {
       clearCostCache();
     }
 
-    const costPerGram = await calculateCost(id, req.user!.id);
+    const costPerGram = await calculateCost(id, req.user!.tenant_id);
 
     res.json({
       item_id: id,
@@ -56,7 +56,7 @@ router.post("/items/costs", async (req, res) => {
 
     // PostgreSQL関数を呼び出し
     const { data, error } = await supabase.rpc("calculate_item_costs", {
-      p_user_id: req.user!.id,
+      p_tenant_id: req.user!.tenant_id,
       p_item_ids: item_ids.length > 0 ? item_ids : null,
     });
 
@@ -156,10 +156,10 @@ router.post("/items/costs/differential", async (req, res) => {
  */
 router.get("/items/costs/breakdown", async (req, res) => {
   try {
-    // PostgreSQL関数を呼び出し（user_idをパラメータとして渡す）
+    // PostgreSQL関数を呼び出し（tenant_idをパラメータとして渡す）
     const { data, error } = await supabase.rpc(
       "calculate_item_costs_with_breakdown",
-      { p_user_id: req.user!.id }
+      { p_tenant_id: req.user!.tenant_id }
     );
 
     if (error) {

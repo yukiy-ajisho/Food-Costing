@@ -5,6 +5,53 @@ import { ItemUnitProfile } from "../types/database";
 const router = Router();
 
 /**
+ * GET /item-unit-profiles
+ * 全単位プロファイルを取得
+ */
+router.get("/", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("item_unit_profiles")
+      .select("*")
+      .eq("tenant_id", req.user!.tenant_id)
+      .order("item_id");
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json(data || []);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /item-unit-profiles/:id
+ * 単位プロファイルをIDで取得
+ */
+router.get("/:id", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("item_unit_profiles")
+      .select("*")
+      .eq("id", req.params.id)
+      .eq("tenant_id", req.user!.tenant_id)
+      .single();
+
+    if (error) {
+      return res.status(404).json({ error: error.message });
+    }
+
+    res.json(data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * POST /item-unit-profiles
  * 単位プロファイルを作成
  */
@@ -29,15 +76,15 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // user_idを自動設定
-    const profileWithUserId = {
+    // tenant_idを自動設定
+    const profileWithTenantId = {
       ...profile,
-      user_id: req.user!.id,
+      tenant_id: req.user!.tenant_id,
     };
 
     const { data, error } = await supabase
       .from("item_unit_profiles")
-      .insert([profileWithUserId])
+      .insert([profileWithTenantId])
       .select()
       .single();
 
@@ -61,14 +108,19 @@ router.put("/:id", async (req, res) => {
     const profile: Partial<ItemUnitProfile> = req.body;
     const { id } = req.params;
 
-    // user_idを更新から除外（セキュリティのため）
+    // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, ...profileWithoutUserId } = profile;
+    const {
+      user_id: _user_id,
+      tenant_id: _tenant_id,
+      id: _id,
+      ...profileWithoutIds
+    } = profile;
     const { data, error } = await supabase
       .from("item_unit_profiles")
-      .update(profileWithoutUserId)
+      .update(profileWithoutIds)
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .select()
       .single();
 
@@ -97,7 +149,7 @@ router.delete("/:id", async (req, res) => {
       .from("item_unit_profiles")
       .delete()
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
 
     if (error) {
       return res.status(400).json({ error: error.message });

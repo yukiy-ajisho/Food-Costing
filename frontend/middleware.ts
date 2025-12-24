@@ -29,7 +29,7 @@ export async function middleware(req: NextRequest) {
   );
 
   // 保護されたルートをチェック
-  const protectedPaths = ["/cost", "/items", "/settings"];
+  const protectedPaths = ["/cost", "/items", "/settings", "/team"];
   const isProtectedPath =
     req.nextUrl.pathname === "/" ||
     protectedPaths.some(
@@ -63,6 +63,8 @@ export const config = {
     "/items/:path*",
     "/settings",
     "/settings/:path*",
+    "/team",
+    "/team/:path*",
     "/login",
   ],
 };

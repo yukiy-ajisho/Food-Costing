@@ -13,7 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("labor_roles")
       .select("*")
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .order("name");
 
     if (error) {
@@ -37,7 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("labor_roles")
       .select("*")
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .single();
 
     if (error) {
@@ -72,15 +72,15 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // user_idを自動設定
-    const roleWithUserId = {
+    // tenant_idを自動設定
+    const roleWithTenantId = {
       ...role,
-      user_id: req.user!.id,
+      tenant_id: req.user!.tenant_id,
     };
 
     const { data, error } = await supabase
       .from("labor_roles")
-      .insert([roleWithUserId])
+      .insert([roleWithTenantId])
       .select()
       .single();
 
@@ -104,14 +104,14 @@ router.put("/:id", async (req, res) => {
     const role: Partial<LaborRole> = req.body;
     const { id } = req.params;
 
-    // user_idを更新から除外（セキュリティのため）
+    // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, ...roleWithoutUserId } = role;
+    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...roleWithoutIds } = role;
     const { data, error } = await supabase
       .from("labor_roles")
-      .update(roleWithoutUserId)
+      .update(roleWithoutIds)
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .select()
       .single();
 
@@ -140,7 +140,7 @@ router.delete("/:id", async (req, res) => {
       .from("labor_roles")
       .delete()
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
 
     if (error) {
       return res.status(400).json({ error: error.message });

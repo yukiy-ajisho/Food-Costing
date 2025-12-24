@@ -14,7 +14,7 @@ router.get("/items/:id/recipe", async (req, res) => {
       .from("recipe_lines")
       .select("*")
       .eq("parent_item_id", req.params.id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .order("created_at");
 
     if (error) {
@@ -53,7 +53,7 @@ router.post("/items/recipes", async (req, res) => {
       .from("recipe_lines")
       .select("*")
       .in("parent_item_id", item_ids)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .order("parent_item_id")
       .order("created_at");
 

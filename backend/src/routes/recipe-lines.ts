@@ -8,7 +8,7 @@ import { checkCycle } from "../services/cycle-detection";
  */
 async function validateRecipeLineNotDeprecated(
   line: Partial<RecipeLine>,
-  userId: string
+  tenantId: string
 ): Promise<{ valid: boolean; error?: string }> {
   // ingredientのみチェック（laborはチェック不要）
   if (line.line_type !== "ingredient" || !line.child_item_id) {
@@ -20,7 +20,7 @@ async function validateRecipeLineNotDeprecated(
     .from("items")
     .select("*")
     .eq("id", line.child_item_id)
-    .eq("user_id", userId)
+    .eq("tenant_id", tenantId)
     .single();
 
   if (itemError || !childItem) {
@@ -47,7 +47,7 @@ async function validateRecipeLineNotDeprecated(
         .from("vendor_products")
         .select("*")
         .eq("id", line.specific_child)
-        .eq("user_id", userId)
+        .eq("tenant_id", tenantId)
         .single();
 
       if (vpError || !vendorProduct) {
@@ -75,19 +75,19 @@ async function validateRecipeLineNotDeprecated(
  */
 async function validateLaborRoleExists(
   laborRole: string | null | undefined,
-  userId: string
+  tenantId: string
 ): Promise<{ valid: boolean; error?: string }> {
   // labor_roleが指定されていない場合はスキップ
   if (!laborRole) {
     return { valid: true };
   }
 
-  // labor_rolesテーブルに、同じuser_idで、同じnameが存在するかチェック
+  // labor_rolesテーブルに、同じtenant_idで、同じnameが存在するかチェック
   const { data: laborRoleData, error } = await supabase
     .from("labor_roles")
     .select("name")
     .eq("name", laborRole)
-    .eq("user_id", userId)
+    .eq("tenant_id", tenantId)
     .single();
 
   if (error || !laborRoleData) {
@@ -133,7 +133,7 @@ router.post("/", async (req, res) => {
       if (line.labor_role) {
         const laborRoleValidation = await validateLaborRoleExists(
           line.labor_role,
-          req.user!.id
+          req.user!.tenant_id
         );
         if (!laborRoleValidation.valid) {
           return res.status(400).json({ error: laborRoleValidation.error });
@@ -147,7 +147,7 @@ router.post("/", async (req, res) => {
       const { data: allItems } = await supabase
         .from("items")
         .select("*")
-        .eq("user_id", req.user!.id);
+        .eq("tenant_id", req.user!.tenant_id);
 
       // マップを作成
       const itemsMap = new Map<string, Item>();
@@ -158,7 +158,7 @@ router.post("/", async (req, res) => {
         .from("recipe_lines")
         .select("*")
         .eq("line_type", "ingredient")
-        .eq("user_id", req.user!.id);
+        .eq("tenant_id", req.user!.tenant_id);
 
       // 新しいレシピラインを含むマップを作成
       const recipeLinesMap = new Map<string, RecipeLine[]>();
@@ -177,7 +177,7 @@ router.post("/", async (req, res) => {
         quantity: line.quantity || null,
         unit: line.unit || null,
         labor_role: null,
-        user_id: req.user!.id,
+        tenant_id: req.user!.tenant_id,
         minutes: null,
       };
       const existing = recipeLinesMap.get(line.parent_item_id!) || [];
@@ -188,7 +188,7 @@ router.post("/", async (req, res) => {
       try {
         await checkCycle(
           line.parent_item_id!,
-          req.user!.id,
+          req.user!.tenant_id,
           new Set(),
           itemsMap,
           recipeLinesMap,
@@ -206,21 +206,21 @@ router.post("/", async (req, res) => {
     // Deprecatedバリデーション
     const validation = await validateRecipeLineNotDeprecated(
       line,
-      req.user!.id
+      req.user!.tenant_id
     );
     if (!validation.valid) {
       return res.status(400).json({ error: validation.error });
     }
 
-    // user_idを自動設定
-    const lineWithUserId = {
+    // tenant_idを自動設定
+    const lineWithTenantId = {
       ...line,
-      user_id: req.user!.id,
+      tenant_id: req.user!.tenant_id,
     };
 
     const { data, error } = await supabase
       .from("recipe_lines")
-      .insert([lineWithUserId])
+      .insert([lineWithTenantId])
       .select()
       .single();
 
@@ -235,7 +235,7 @@ router.post("/", async (req, res) => {
       );
       await autoUndeprecateAfterRecipeLineUpdate(
         line.parent_item_id,
-        req.user!.id
+        req.user!.tenant_id
       );
     }
 
@@ -260,7 +260,7 @@ router.put("/:id", async (req, res) => {
       .from("recipe_lines")
       .select("*")
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .single();
 
     if (!existingLine) {
@@ -277,7 +277,7 @@ router.put("/:id", async (req, res) => {
       const { data: allItems } = await supabase
         .from("items")
         .select("*")
-        .eq("user_id", req.user!.id);
+        .eq("tenant_id", req.user!.tenant_id);
 
       // マップを作成
       const itemsMap = new Map<string, Item>();
@@ -288,7 +288,7 @@ router.put("/:id", async (req, res) => {
         .from("recipe_lines")
         .select("*")
         .eq("line_type", "ingredient")
-        .eq("user_id", req.user!.id);
+        .eq("tenant_id", req.user!.tenant_id);
 
       // 更新後のレシピラインを含むマップを作成
       const recipeLinesMap = new Map<string, RecipeLine[]>();
@@ -310,7 +310,7 @@ router.put("/:id", async (req, res) => {
       try {
         await checkCycle(
           existingLine.parent_item_id,
-          req.user!.id,
+          req.user!.tenant_id,
           new Set(),
           itemsMap,
           recipeLinesMap,
@@ -332,21 +332,21 @@ router.put("/:id", async (req, res) => {
     ) {
       const laborRoleValidation = await validateLaborRoleExists(
         line.labor_role,
-        req.user!.id
+        req.user!.tenant_id
       );
       if (!laborRoleValidation.valid) {
         return res.status(400).json({ error: laborRoleValidation.error });
       }
     }
 
-    // user_idを更新から除外（セキュリティのため）
+    // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, ...lineWithoutUserId } = line;
+    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...lineWithoutIds } = line;
     const { data, error } = await supabase
       .from("recipe_lines")
-      .update(lineWithoutUserId)
+      .update(lineWithoutIds)
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .select()
       .single();
 
@@ -364,7 +364,7 @@ router.put("/:id", async (req, res) => {
       );
       await autoUndeprecateAfterRecipeLineUpdate(
         existingLine.parent_item_id,
-        req.user!.id
+        req.user!.tenant_id
       );
     }
 
@@ -385,7 +385,7 @@ router.delete("/:id", async (req, res) => {
       .from("recipe_lines")
       .delete()
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
 
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -421,7 +421,7 @@ router.post("/batch", async (req, res) => {
     const { data: allItems } = await supabase
       .from("items")
       .select("*")
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
     const itemsMap = new Map<string, Item>();
     allItems?.forEach((i) => itemsMap.set(i.id, i));
 
@@ -430,13 +430,13 @@ router.post("/batch", async (req, res) => {
       .from("recipe_lines")
       .select("*")
       .eq("line_type", "ingredient")
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
 
     // 更新対象を探す用: すべてのレシピライン（ingredientとlaborの両方）を取得
     const { data: allRecipeLines } = await supabase
       .from("recipe_lines")
       .select("*")
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
 
     // 既存のレシピラインのマップを作成（循環参照チェック用）
     const recipeLinesMap = new Map<string, RecipeLine[]>();
@@ -492,7 +492,7 @@ router.post("/batch", async (req, res) => {
         quantity: create.quantity || null,
         unit: create.unit || null,
         specific_child: create.specific_child ?? null, // nullish coalescing: null/undefinedのみnullに
-        user_id: req.user!.id,
+        tenant_id: req.user!.tenant_id,
         labor_role: create.labor_role || null,
         minutes: create.minutes || null,
         created_at: undefined,
@@ -520,7 +520,7 @@ router.post("/batch", async (req, res) => {
         // Deprecatedバリデーション
         const validation = await validateRecipeLineNotDeprecated(
           create,
-          req.user!.id
+          req.user!.tenant_id
         );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
@@ -535,7 +535,7 @@ router.post("/batch", async (req, res) => {
         if (create.labor_role) {
           const laborRoleValidation = await validateLaborRoleExists(
             create.labor_role,
-            req.user!.id
+            req.user!.tenant_id
           );
           if (!laborRoleValidation.valid) {
             return res.status(400).json({ error: laborRoleValidation.error });
@@ -554,7 +554,7 @@ router.post("/batch", async (req, res) => {
         // Deprecatedバリデーション
         const validation = await validateRecipeLineNotDeprecated(
           update,
-          req.user!.id
+          req.user!.tenant_id
         );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
@@ -569,7 +569,7 @@ router.post("/batch", async (req, res) => {
         if (update.labor_role) {
           const laborRoleValidation = await validateLaborRoleExists(
             update.labor_role,
-            req.user!.id
+            req.user!.tenant_id
           );
           if (!laborRoleValidation.valid) {
             return res.status(400).json({ error: laborRoleValidation.error });
@@ -607,7 +607,7 @@ router.post("/batch", async (req, res) => {
       try {
         await checkCycle(
           parentId,
-          req.user!.id,
+          req.user!.tenant_id,
           new Set(),
           itemsMap,
           updatedRecipeLinesMap,
@@ -648,7 +648,7 @@ router.post("/batch", async (req, res) => {
         .from("recipe_lines")
         .delete()
         .in("id", deletes)
-        .eq("user_id", req.user!.id);
+        .eq("tenant_id", req.user!.tenant_id);
 
       if (deleteError) {
         return res.status(400).json({ error: deleteError.message });
@@ -668,12 +668,12 @@ router.post("/batch", async (req, res) => {
     if (updates.length > 0) {
       for (const update of updates) {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { id, user_id: _user_id, ...lineData } = update;
+        const { id, user_id: _user_id, tenant_id: _tenant_id, ...lineData } = update;
         const { data, error: updateError } = await supabase
           .from("recipe_lines")
           .update(lineData)
           .eq("id", id)
-          .eq("user_id", req.user!.id)
+          .eq("tenant_id", req.user!.tenant_id)
           .select()
           .single();
 
@@ -688,13 +688,13 @@ router.post("/batch", async (req, res) => {
 
     // 作成
     if (creates.length > 0) {
-      const createsWithUserId = creates.map((create: Partial<RecipeLine>) => ({
+      const createsWithTenantId = creates.map((create: Partial<RecipeLine>) => ({
         ...create,
-        user_id: req.user!.id,
+        tenant_id: req.user!.tenant_id,
       }));
       const { data: createdData, error: createError } = await supabase
         .from("recipe_lines")
-        .insert(createsWithUserId)
+        .insert(createsWithTenantId)
         .select();
 
       if (createError) {
@@ -712,7 +712,7 @@ router.post("/batch", async (req, res) => {
         .from("items")
         .select("*")
         .eq("id", parentId)
-        .eq("user_id", req.user!.id)
+        .eq("tenant_id", req.user!.tenant_id)
         .single();
 
       if (parentError || !parentItem) {
@@ -727,7 +727,7 @@ router.post("/batch", async (req, res) => {
           .select("id")
           .eq("parent_item_id", parentId)
           .eq("line_type", "ingredient")
-          .eq("user_id", req.user!.id);
+          .eq("tenant_id", req.user!.tenant_id);
 
         if (ilError) {
           return res.status(500).json({ error: ilError.message });
@@ -748,7 +748,7 @@ router.post("/batch", async (req, res) => {
 
     // 作成、更新、削除の影響を受けた親itemsをすべてチェック
     for (const parentId of affectedParentIds) {
-      await autoUndeprecateAfterRecipeLineUpdate(parentId, req.user!.id);
+      await autoUndeprecateAfterRecipeLineUpdate(parentId, req.user!.tenant_id);
     }
 
     res.json(results);

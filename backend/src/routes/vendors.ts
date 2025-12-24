@@ -13,7 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("vendors")
       .select("*")
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .order("name", { ascending: true });
 
     if (error) {
@@ -37,7 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("vendors")
       .select("*")
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .single();
 
     if (error) {
@@ -64,15 +64,15 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name is required" });
     }
 
-    // user_idを自動設定
-    const vendorWithUserId = {
+    // tenant_idを自動設定
+    const vendorWithTenantId = {
       ...vendor,
-      user_id: req.user!.id,
+      tenant_id: req.user!.tenant_id,
     };
 
     const { data, error } = await supabase
       .from("vendors")
-      .insert([vendorWithUserId])
+      .insert([vendorWithTenantId])
       .select()
       .single();
 
@@ -96,14 +96,14 @@ router.put("/:id", async (req, res) => {
     const vendor: Partial<Vendor> = req.body;
     const { id } = req.params;
 
-    // user_idを更新から除外（セキュリティのため）
+    // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, ...vendorWithoutUserId } = vendor;
+    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...vendorWithoutIds } = vendor;
     const { data, error } = await supabase
       .from("vendors")
-      .update(vendorWithoutUserId)
+      .update(vendorWithoutIds)
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .select()
       .single();
 
@@ -132,7 +132,7 @@ router.delete("/:id", async (req, res) => {
       .from("vendors")
       .delete()
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
 
     if (error) {
       return res.status(400).json({ error: error.message });

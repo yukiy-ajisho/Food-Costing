@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calculator, Package, Settings, Moon, Sun } from "lucide-react";
+import { Calculator, Package, Settings, Moon, Sun, Users } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useTenant } from "@/contexts/TenantContext";
 import { UserProfile } from "./UserProfile";
+import { useState, useEffect, useRef } from "react";
 
 // ナビゲーション項目
 const navigationItems = [
@@ -21,6 +23,12 @@ const navigationItems = [
     href: "/items",
   },
   {
+    id: "team",
+    label: "Team",
+    icon: Users,
+    href: "/team",
+  },
+  {
     id: "settings",
     label: "Settings",
     icon: Settings,
@@ -32,6 +40,29 @@ const navigationItems = [
 export function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { theme, toggleTheme } = useTheme();
+  const { currentTenant, tenants, setCurrentTenant, loading: tenantLoading } = useTenant();
+  const [isTenantDropdownOpen, setIsTenantDropdownOpen] = useState(false);
+  const tenantDropdownRef = useRef<HTMLDivElement>(null);
+
+  // ドロップダウンの外側をクリックしたら閉じる
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        tenantDropdownRef.current &&
+        !tenantDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsTenantDropdownOpen(false);
+      }
+    };
+
+    if (isTenantDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isTenantDropdownOpen]);
 
   // 現在のページに応じたタイトルを取得
   const getPageTitle = () => {
@@ -75,6 +106,82 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </h1>
           </div>
         </div>
+
+        {/* テナント選択ドロップダウン */}
+        {/* 注意: Phase 2でCedarベースの選択UIに置き換える予定 */}
+        {tenants.length > 1 && (
+          <div className="px-4 pb-4">
+            <div className="relative" ref={tenantDropdownRef}>
+              <button
+                onClick={() => setIsTenantDropdownOpen(!isTenantDropdownOpen)}
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-colors ${
+                  isDark
+                    ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                    : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                }`}
+                disabled={tenantLoading || tenants.length === 0}
+              >
+                <span className="text-sm font-medium truncate">
+                  {tenantLoading
+                    ? "Loading..."
+                    : currentTenant
+                    ? currentTenant.name
+                    : tenants.length === 0
+                    ? "No tenants"
+                    : "Select tenant"}
+                </span>
+                <svg
+                  className={`w-4 h-4 transition-transform ${
+                    isTenantDropdownOpen ? "rotate-180" : ""
+                  }`}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 9l-7 7-7-7"
+                  />
+                </svg>
+              </button>
+
+              {/* ドロップダウンメニュー */}
+              {isTenantDropdownOpen && tenants.length > 0 && (
+                <div
+                  className={`absolute top-full left-0 right-0 mt-2 rounded-lg shadow-lg z-50 max-h-60 overflow-y-auto ${
+                    isDark ? "bg-slate-700" : "bg-white"
+                  }`}
+                >
+                  {tenants.map((tenant) => (
+                    <button
+                      key={tenant.id}
+                      onClick={() => {
+                        setCurrentTenant(tenant);
+                        setIsTenantDropdownOpen(false);
+                        // テナント切り替え時にページをリロードしてデータを更新
+                        window.location.reload();
+                      }}
+                      className={`w-full text-left px-4 py-3 transition-colors ${
+                        currentTenant?.id === tenant.id
+                          ? isDark
+                            ? "bg-slate-600 text-blue-400"
+                            : "bg-blue-50 text-blue-600"
+                          : isDark
+                          ? "hover:bg-slate-600 text-slate-200"
+                          : "hover:bg-gray-100 text-gray-700"
+                      }`}
+                    >
+                      <div className="font-medium">{tenant.name}</div>
+                      <div className="text-xs opacity-70">{tenant.type}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ナビゲーション項目 */}
         <nav

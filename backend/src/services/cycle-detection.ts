@@ -17,7 +17,7 @@ import { Item, RecipeLine } from "../types/database";
  */
 export async function checkCycle(
   itemId: string,
-  userId: string,
+  tenantId: string,
   visited: Set<string> = new Set(),
   itemsMap: Map<string, Item> = new Map(),
   recipeLinesMap: Map<string, RecipeLine[]> = new Map(),
@@ -59,7 +59,7 @@ export async function checkCycle(
       .from("items")
       .select("*")
       .eq("id", itemId)
-      .eq("user_id", userId)
+      .eq("tenant_id", tenantId)
       .single();
 
     if (itemError || !fetchedItem) {
@@ -87,7 +87,7 @@ export async function checkCycle(
       .select("*")
       .eq("parent_item_id", itemId)
       .eq("line_type", "ingredient")
-      .eq("user_id", userId);
+      .eq("tenant_id", tenantId);
 
     if (linesError) {
       // エラーが発生した場合はスキップ
@@ -123,7 +123,7 @@ export async function checkCycle(
       // 子アイテムの循環参照を再帰的にチェック
       await checkCycle(
         line.child_item_id,
-        userId,
+        tenantId,
         visited,
         itemsMap,
         recipeLinesMap,
@@ -148,7 +148,7 @@ export async function checkCycle(
  */
 export async function checkCyclesForItems(
   itemIds: string[],
-  userId: string,
+  tenantId: string,
   itemsMap: Map<string, Item> = new Map(),
   recipeLinesMap: Map<string, RecipeLine[]> = new Map()
 ): Promise<void> {
@@ -157,7 +157,7 @@ export async function checkCyclesForItems(
     const { data: allItems } = await supabase
       .from("items")
       .select("*")
-      .eq("user_id", userId);
+      .eq("tenant_id", tenantId);
     allItems?.forEach((item) => itemsMap.set(item.id, item));
   }
 
@@ -166,7 +166,7 @@ export async function checkCyclesForItems(
       .from("recipe_lines")
       .select("*")
       .eq("line_type", "ingredient")
-      .eq("user_id", userId);
+      .eq("tenant_id", tenantId);
     allRecipeLines?.forEach((line) => {
       const existing = recipeLinesMap.get(line.parent_item_id) || [];
       existing.push(line);
@@ -176,6 +176,6 @@ export async function checkCyclesForItems(
 
   // 各アイテムの循環参照をチェック
   for (const itemId of itemIds) {
-    await checkCycle(itemId, userId, new Set(), itemsMap, recipeLinesMap, []);
+    await checkCycle(itemId, tenantId, new Set(), itemsMap, recipeLinesMap, []);
   }
 }

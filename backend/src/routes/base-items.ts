@@ -13,7 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("base_items")
       .select("*")
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .order("name", { ascending: true });
 
     if (error) {
@@ -37,7 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("base_items")
       .select("*")
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .single();
 
     if (error) {
@@ -64,15 +64,15 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name is required" });
     }
 
-    // user_idを自動設定
-    const baseItemWithUserId = {
+    // tenant_idを自動設定
+    const baseItemWithTenantId = {
       ...baseItem,
-      user_id: req.user!.id,
+      tenant_id: req.user!.tenant_id,
     };
 
     const { data, error } = await supabase
       .from("base_items")
-      .insert([baseItemWithUserId])
+      .insert([baseItemWithTenantId])
       .select()
       .single();
 
@@ -96,14 +96,14 @@ router.put("/:id", async (req, res) => {
     const baseItem: Partial<BaseItem> = req.body;
     const { id } = req.params;
 
-    // user_idを更新から除外（セキュリティのため）
+    // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, ...baseItemWithoutUserId } = baseItem;
+    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...baseItemWithoutIds } = baseItem;
     const { data, error } = await supabase
       .from("base_items")
-      .update(baseItemWithoutUserId)
+      .update(baseItemWithoutIds)
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.user!.tenant_id)
       .select()
       .single();
 
@@ -129,7 +129,7 @@ router.put("/:id", async (req, res) => {
 router.patch("/:id/deprecate", async (req, res) => {
   try {
     const { deprecateBaseItem } = await import("../services/deprecation");
-    const result = await deprecateBaseItem(req.params.id, req.user!.id);
+    const result = await deprecateBaseItem(req.params.id, req.user!.tenant_id);
 
     if (!result.success) {
       return res.status(400).json({ error: result.error });
@@ -152,7 +152,7 @@ router.delete("/:id", async (req, res) => {
       .from("base_items")
       .delete()
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id);
+      .eq("tenant_id", req.user!.tenant_id);
 
     if (error) {
       return res.status(400).json({ error: error.message });

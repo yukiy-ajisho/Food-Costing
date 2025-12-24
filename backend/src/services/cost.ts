@@ -122,7 +122,7 @@ function getCacheKey(
 
 export async function getCost(
   itemId: string,
-  userId: string,
+  tenantId: string,
   visited: Set<string> = new Set(),
   baseItemsMap: Map<string, BaseItem> = new Map(),
   itemsMap: Map<string, Item> = new Map(),
@@ -137,7 +137,7 @@ export async function getCost(
       .from("items")
       .select("*")
       .eq("id", itemId)
-      .eq("user_id", userId)
+      .eq("tenant_id", tenantId)
       .single();
 
     if (itemError || !fetchedItem) {
@@ -173,14 +173,14 @@ export async function getCost(
      */
     const ensureItemInMap = async (
       childItemId: string,
-      userId: string
+      tenantId: string
     ): Promise<void> => {
       if (!itemsMap.has(childItemId)) {
         const { data: fetchedItem, error: itemError } = await supabase
           .from("items")
           .select("*")
           .eq("id", childItemId)
-          .eq("user_id", userId)
+          .eq("tenant_id", tenantId)
           .single();
 
         if (itemError || !fetchedItem) {
@@ -294,7 +294,7 @@ export async function getCost(
       .from("recipe_lines")
       .select("*")
       .eq("parent_item_id", itemId)
-      .eq("user_id", userId);
+      .eq("tenant_id", tenantId);
 
     if (linesError) {
       throw new Error(
@@ -332,7 +332,7 @@ export async function getCost(
         }
 
         // 子アイテムがitemsMapに存在することを保証（問題5の修正）
-        await ensureItemInMap(line.child_item_id, userId);
+        await ensureItemInMap(line.child_item_id, tenantId);
 
         const grams = convertToGrams(
           line.unit,
@@ -371,7 +371,7 @@ export async function getCost(
           .from("items")
           .update({ each_grams: eachGrams })
           .eq("id", itemId)
-          .eq("user_id", userId);
+          .eq("tenant_id", tenantId);
 
         if (updateError) {
           console.warn(
@@ -420,7 +420,7 @@ export async function getCost(
         let grams = ingredientGramsMap.get(line.id);
         if (grams === undefined) {
           // 子アイテムがitemsMapに存在することを保証（問題5の修正）
-          await ensureItemInMap(line.child_item_id, userId);
+          await ensureItemInMap(line.child_item_id, tenantId);
 
           grams = convertToGrams(
             line.unit,
@@ -433,7 +433,7 @@ export async function getCost(
         }
 
         // 子アイテムのitem_kindを確認
-        await ensureItemInMap(line.child_item_id, userId);
+        await ensureItemInMap(line.child_item_id, tenantId);
         const childItem = itemsMap.get(line.child_item_id);
         if (!childItem) {
           throw new Error(`Child item ${line.child_item_id} not found`);
@@ -447,7 +447,7 @@ export async function getCost(
         // 子アイテムのコストを再帰的に取得
         const childCostPerGram = await getCost(
           line.child_item_id,
-          userId,
+          tenantId,
           visited,
           baseItemsMap,
           itemsMap,
@@ -497,12 +497,12 @@ export function clearCostCache(): void {
  * Base Itemsを取得してマップに変換（base_item_idをキーとして）
  */
 export async function getBaseItemsMap(
-  userId: string
+  tenantId: string
 ): Promise<Map<string, BaseItem>> {
   const { data, error } = await supabase
     .from("base_items")
     .select("*")
-    .eq("user_id", userId);
+    .eq("tenant_id", tenantId);
 
   if (error) {
     throw new Error(`Failed to fetch base items: ${error.message}`);
@@ -520,11 +520,13 @@ export async function getBaseItemsMap(
 /**
  * Itemsを取得してマップに変換（item_idをキーとして）
  */
-export async function getItemsMap(userId: string): Promise<Map<string, Item>> {
+export async function getItemsMap(
+  tenantId: string
+): Promise<Map<string, Item>> {
   const { data, error } = await supabase
     .from("items")
     .select("*")
-    .eq("user_id", userId);
+    .eq("tenant_id", tenantId);
 
   if (error) {
     throw new Error(`Failed to fetch items: ${error.message}`);
@@ -543,12 +545,12 @@ export async function getItemsMap(userId: string): Promise<Map<string, Item>> {
  * 役職を取得してマップに変換（nameをキーとして）
  */
 export async function getLaborRolesMap(
-  userId: string
+  tenantId: string
 ): Promise<Map<string, LaborRole>> {
   const { data, error } = await supabase
     .from("labor_roles")
     .select("*")
-    .eq("user_id", userId);
+    .eq("tenant_id", tenantId);
 
   if (error) {
     throw new Error(`Failed to fetch labor roles: ${error.message}`);
@@ -567,12 +569,12 @@ export async function getLaborRolesMap(
  * Vendor Productsを取得してマップに変換（vendor_product_idをキーとして）
  */
 export async function getVendorProductsMap(
-  userId: string
+  tenantId: string
 ): Promise<Map<string, VendorProduct>> {
   const { data, error } = await supabase
     .from("vendor_products")
     .select("*")
-    .eq("user_id", userId);
+    .eq("tenant_id", tenantId);
 
   if (error) {
     throw new Error(`Failed to fetch vendor products: ${error.message}`);
@@ -592,19 +594,19 @@ export async function getVendorProductsMap(
  */
 export async function calculateCost(
   itemId: string,
-  userId: string
+  tenantId: string
 ): Promise<number> {
   // 計算開始時に全てのキャッシュをクリア（問題1、2、3、4の解決）
   // これにより、常に最新のデータで計算され、古いキャッシュによる問題を回避
   costCache.clear();
 
-  const baseItemsMap = await getBaseItemsMap(userId);
-  const itemsMap = await getItemsMap(userId);
-  const vendorProductsMap = await getVendorProductsMap(userId);
-  const laborRoles = await getLaborRolesMap(userId);
+  const baseItemsMap = await getBaseItemsMap(tenantId);
+  const itemsMap = await getItemsMap(tenantId);
+  const vendorProductsMap = await getVendorProductsMap(tenantId);
+  const laborRoles = await getLaborRolesMap(tenantId);
   return getCost(
     itemId,
-    userId,
+    tenantId,
     new Set(),
     baseItemsMap,
     itemsMap,
@@ -624,16 +626,16 @@ export async function calculateCost(
  */
 export async function calculateCosts(
   itemIds: string[],
-  userId: string
+  tenantId: string
 ): Promise<Map<string, number>> {
   // 計算開始時に全てのキャッシュを一度だけクリア
   costCache.clear();
 
   // データを一度だけ取得
-  const baseItemsMap = await getBaseItemsMap(userId);
-  const itemsMap = await getItemsMap(userId);
-  const vendorProductsMap = await getVendorProductsMap(userId);
-  const laborRoles = await getLaborRolesMap(userId);
+  const baseItemsMap = await getBaseItemsMap(tenantId);
+  const itemsMap = await getItemsMap(tenantId);
+  const vendorProductsMap = await getVendorProductsMap(tenantId);
+  const laborRoles = await getLaborRolesMap(tenantId);
 
   // 結果を保存するMap
   const results = new Map<string, number>();
@@ -643,7 +645,7 @@ export async function calculateCosts(
     try {
       const costPerGram = await getCost(
         itemId,
-        userId,
+        tenantId,
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -712,7 +714,7 @@ function findDependentItems(
  */
 export async function calculateCostsForChangedItems(
   changedItemIds: string[],
-  userId: string,
+  tenantId: string,
   recipeLinesMap?: Map<string, RecipeLine[]>
 ): Promise<Map<string, number>> {
   if (changedItemIds.length === 0) {
@@ -725,7 +727,7 @@ export async function calculateCostsForChangedItems(
       .from("recipe_lines")
       .select("*")
       .eq("line_type", "ingredient")
-      .eq("user_id", userId);
+      .eq("tenant_id", tenantId);
 
     recipeLinesMap = new Map<string, RecipeLine[]>();
     allRecipeLines?.forEach((line) => {
@@ -757,10 +759,10 @@ export async function calculateCostsForChangedItems(
   }
 
   // データを一度だけ取得
-  const baseItemsMap = await getBaseItemsMap(userId);
-  const itemsMap = await getItemsMap(userId);
-  const vendorProductsMap = await getVendorProductsMap(userId);
-  const laborRoles = await getLaborRolesMap(userId);
+  const baseItemsMap = await getBaseItemsMap(tenantId);
+  const itemsMap = await getItemsMap(tenantId);
+  const vendorProductsMap = await getVendorProductsMap(tenantId);
+  const laborRoles = await getLaborRolesMap(tenantId);
 
   // 結果を保存するMap
   const results = new Map<string, number>();
@@ -770,7 +772,7 @@ export async function calculateCostsForChangedItems(
     try {
       const costPerGram = await getCost(
         itemId,
-        userId,
+        tenantId,
         new Set(),
         baseItemsMap,
         itemsMap,

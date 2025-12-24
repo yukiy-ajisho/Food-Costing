@@ -220,10 +220,14 @@ export interface NonMassUnit {
 /**
  * 認証付きAPIリクエスト
  * セッションからアクセストークンを取得してAuthorizationヘッダーに追加
+ * @param endpoint - APIエンドポイント
+ * @param options - リクエストオプション
+ * @param tenantId - 現在のテナントID（オプション、テナント一覧取得時などは不要）
  */
 export async function apiRequest<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  tenantId?: string | null
 ): Promise<T> {
   const supabase = createClient();
   const {
@@ -240,13 +244,27 @@ export async function apiRequest<T>(
     throw new Error("Authentication required.");
   }
 
+  // ヘッダーを構築
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${session.access_token}`,
+    ...options.headers,
+  };
+
+  // tenantIdが指定されていない場合、ローカルストレージから取得を試みる
+  let finalTenantId = tenantId;
+  if (!finalTenantId && typeof window !== "undefined") {
+    finalTenantId = localStorage.getItem("current_tenant_id") || undefined;
+  }
+
+  // tenantIdが取得できた場合、X-Tenant-IDヘッダーを追加
+  if (finalTenantId) {
+    headers["X-Tenant-ID"] = finalTenantId;
+  }
+
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.access_token}`,
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -279,11 +297,14 @@ export async function apiRequest<T>(
 }
 
 // API呼び出しヘルパー（後方互換性のため残すが、apiRequestを使用）
+// 注意: この関数はtenantIdを渡さないため、使用する際は注意が必要
+// 新しいコードでは直接apiRequestを使用し、tenantIdを渡すことを推奨
 async function fetchAPI<T>(
   endpoint: string,
-  options?: RequestInit
+  options?: RequestInit,
+  tenantId?: string | null
 ): Promise<T> {
-  return apiRequest<T>(endpoint, options);
+  return apiRequest<T>(endpoint, options, tenantId);
 }
 
 // Items API
