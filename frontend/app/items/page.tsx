@@ -146,7 +146,7 @@ export default function ItemsPage() {
         // VendorProductUI形式に変換（deprecatedを除外）
         const vendorProductsUI: VendorProductUI[] = vendorProductsData
           .filter((vp) => !vp.deprecated)
-          .map((vp) => {
+          .map((vp): VendorProductUI | null => {
             // product_mappingsからbase_item_idを取得
             const baseItemId = virtualProductToBaseItemMap.get(vp.id);
             if (!baseItemId) {
@@ -184,6 +184,7 @@ export default function ItemsPage() {
               purchase_unit: vp.purchase_unit,
               purchase_quantity: vp.purchase_quantity,
               purchase_cost: vp.purchase_cost,
+              user_id: vp.user_id, // Required field from VendorProduct
               each_grams: item?.each_grams || null,
               needsWarning,
             };
@@ -419,25 +420,38 @@ export default function ItemsPage() {
       }
 
       // データを再取得
-      const [vendorProductsData, baseItemsData, vendorsData, itemsData] =
+      const [vendorProductsData, baseItemsData, vendorsData, itemsData, mappingsData] =
         await Promise.all([
           vendorProductsAPI.getAll(),
           baseItemsAPI.getAll(),
           vendorsAPI.getAll(),
           itemsAPI.getAll({ item_kind: "raw" }),
+          productMappingsAPI.getAll(),
         ]);
 
       setBaseItems(baseItemsData);
       setVendors(vendorsData);
       setItems(itemsData);
 
+      // product_mappingsからbase_item_idを取得するマップを作成
+      const virtualProductToBaseItemMap = new Map<string, string>();
+      mappingsData?.forEach((mapping) => {
+        virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+      });
+
       const vendorProductsUI: VendorProductUI[] = vendorProductsData
         .filter((vp) => !vp.deprecated)
-        .map((vp) => {
+        .map((vp): VendorProductUI | null => {
+          // product_mappingsからbase_item_idを取得
+          const baseItemId = virtualProductToBaseItemMap.get(vp.id);
+          if (!baseItemId) {
+            return null;
+          }
+
           const item = itemsData.find(
-            (i) => i.base_item_id === vp.base_item_id
+            (i) => i.base_item_id === baseItemId
           );
-          const baseItem = baseItemsData.find((b) => b.id === vp.base_item_id);
+          const baseItem = baseItemsData.find((b) => b.id === baseItemId);
           let needsWarning = false;
 
           if (vp.purchase_unit) {
@@ -450,17 +464,19 @@ export default function ItemsPage() {
 
           return {
             id: vp.id,
-            base_item_id: vp.base_item_id,
+            base_item_id: baseItemId,
             vendor_id: vp.vendor_id,
             product_name: vp.product_name,
             brand_name: vp.brand_name,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
             purchase_cost: vp.purchase_cost,
+            user_id: vp.user_id, // Required field from VendorProduct
             each_grams: item?.each_grams || null,
             needsWarning,
           };
-        });
+        })
+        .filter((vp): vp is VendorProductUI => vp !== null);
 
       setVendorProducts(vendorProductsUI);
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
@@ -528,6 +544,7 @@ export default function ItemsPage() {
       purchase_unit: "kg",
       purchase_quantity: 0,
       purchase_cost: 0,
+      user_id: "", // Required field from VendorProduct (will be set by backend)
       isNew: true,
     };
 

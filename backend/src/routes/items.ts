@@ -271,8 +271,11 @@ router.put("/:id", async (req, res) => {
     // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       user_id: _user_id,
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       tenant_id: _tenant_id,
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       id: _id,
       ...itemWithoutIds
     } = item;
