@@ -8,6 +8,7 @@ declare global {
     interface Request {
       user?: {
         id: string;
+        tenant_ids: string[]; // ユーザーが属するすべてのテナントID
       };
     }
   }
@@ -60,9 +61,32 @@ export async function authMiddleware(
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
+    // ユーザーが属するすべてのテナントIDを取得
+    const { data: profiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("tenant_id")
+      .eq("user_id", user.id);
+
+    if (profilesError) {
+      console.error("Failed to fetch user profiles:", profilesError);
+      return res.status(500).json({
+        error: "Failed to fetch user tenant information",
+      });
+    }
+
+    // テナントIDの配列を取得
+    const tenantIds = profiles?.map((p) => p.tenant_id) || [];
+
+    if (tenantIds.length === 0) {
+      return res.status(403).json({
+        error: "User does not belong to any tenant. Please contact administrator.",
+      });
+    }
+
     // リクエストオブジェクトにユーザー情報を追加
     req.user = {
       id: user.id,
+      tenant_ids: tenantIds,
     };
 
     next();

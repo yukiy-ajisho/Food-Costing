@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calculator, Package, Settings, Moon, Sun } from "lucide-react";
+import { Calculator, Package, Settings, Moon, Sun, Users } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
 
@@ -19,6 +19,12 @@ const navigationItems = [
     label: "Items",
     icon: Package,
     href: "/items",
+  },
+  {
+    id: "team",
+    label: "Team",
+    icon: Users,
+    href: "/team",
   },
   {
     id: "settings",

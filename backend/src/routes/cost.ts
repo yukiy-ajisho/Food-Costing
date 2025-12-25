@@ -22,7 +22,8 @@ router.get("/items/:id/cost", async (req, res) => {
       clearCostCache();
     }
 
-    const costPerGram = await calculateCost(id, req.user!.id);
+    // 複数テナント対応: すべてのテナントのデータを取得
+    const costPerGram = await calculateCost(id, req.user!.tenant_ids);
 
     res.json({
       item_id: id,
@@ -54,27 +55,31 @@ router.post("/items/costs", async (req, res) => {
       return res.json({ costs: {} });
     }
 
-    // PostgreSQL関数を呼び出し
-    const { data, error } = await supabase.rpc("calculate_item_costs", {
-      p_user_id: req.user!.id,
-      p_item_ids: item_ids.length > 0 ? item_ids : null,
-    });
+    // PostgreSQL関数を呼び出し（複数テナント対応: 各テナントで計算してマージ）
+    // 注意: 現在のPostgreSQL関数は単一テナント対応のため、各テナントで個別に呼び出し
+    const allCosts: Record<string, number> = {};
+    for (const tenantId of req.user!.tenant_ids) {
+      const { data, error } = await supabase.rpc("calculate_item_costs", {
+        p_tenant_id: tenantId,
+        p_item_ids: item_ids.length > 0 ? item_ids : null,
+      });
 
-    if (error) {
-      throw new Error(`Database error: ${error.message}`);
+      if (error) {
+        console.error(`Error calculating costs for tenant ${tenantId}:`, error);
+        continue;
+      }
+
+      if (data && Array.isArray(data)) {
+        for (const row of data) {
+          // 複数テナントで同じitem_idがある場合、最初に見つかったものを使用
+          if (!(row.item_id in allCosts)) {
+            allCosts[row.item_id] = parseFloat(row.cost_per_gram) || 0;
+          }
+        }
+      }
     }
 
-    if (!data || !Array.isArray(data)) {
-      throw new Error("Invalid response from database function");
-    }
-
-    // 結果をオブジェクトに変換
-    const costs: Record<string, number> = {};
-    for (const row of data) {
-      costs[row.item_id] = parseFloat(row.cost_per_gram) || 0;
-    }
-
-    res.json({ costs });
+    res.json({ costs: allCosts });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
@@ -156,22 +161,9 @@ router.post("/items/costs/differential", async (req, res) => {
  */
 router.get("/items/costs/breakdown", async (req, res) => {
   try {
-    // PostgreSQL関数を呼び出し（user_idをパラメータとして渡す）
-    const { data, error } = await supabase.rpc(
-      "calculate_item_costs_with_breakdown",
-      { p_user_id: req.user!.id }
-    );
-
-    if (error) {
-      throw new Error(`Database error: ${error.message}`);
-    }
-
-    if (!data || !Array.isArray(data)) {
-      throw new Error("Invalid response from database function");
-    }
-
-    // 結果をitem_idをキーとするオブジェクトに変換
-    const costs: Record<
+    // PostgreSQL関数を呼び出し（複数テナント対応: 各テナントで計算してマージ）
+    // 注意: 現在のPostgreSQL関数は単一テナント対応のため、各テナントで個別に呼び出し
+    const allCosts: Record<
       string,
       {
         food_cost_per_gram: number;
@@ -180,15 +172,32 @@ router.get("/items/costs/breakdown", async (req, res) => {
       }
     > = {};
 
-    for (const row of data) {
-      costs[row.out_item_id] = {
-        food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
-        labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
-        total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
-      };
+    for (const tenantId of req.user!.tenant_ids) {
+      const { data, error } = await supabase.rpc(
+        "calculate_item_costs_with_breakdown",
+        { p_tenant_id: tenantId }
+      );
+
+      if (error) {
+        console.error(`Error calculating breakdown for tenant ${tenantId}:`, error);
+        continue;
+      }
+
+      if (data && Array.isArray(data)) {
+        for (const row of data) {
+          // 複数テナントで同じitem_idがある場合、最初に見つかったものを使用
+          if (!(row.out_item_id in allCosts)) {
+            allCosts[row.out_item_id] = {
+              food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
+              labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
+              total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
+            };
+          }
+        }
+      }
     }
 
-    res.json({ costs });
+    res.json({ costs: allCosts });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });

@@ -1,0 +1,292 @@
+import { Router } from "express";
+import { supabase } from "../config/supabase";
+
+const router = Router();
+
+/**
+ * GET /tenants
+ * ユーザーが属するテナント一覧を取得
+ */
+router.get("/", async (req, res) => {
+  try {
+    // ユーザーが属するテナント一覧を取得
+    const { data: profiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("tenant_id, role")
+      .eq("user_id", req.user!.id);
+
+    if (profilesError) {
+      return res.status(500).json({ error: profilesError.message });
+    }
+
+    if (!profiles || profiles.length === 0) {
+      return res.json({ tenants: [] });
+    }
+
+    // テナントIDのリストを取得
+    const tenantIds = profiles.map((p) => p.tenant_id);
+
+    // テナント情報を取得
+    const { data: tenants, error: tenantsError } = await supabase
+      .from("tenants")
+      .select("*")
+      .in("id", tenantIds);
+
+    if (tenantsError) {
+      return res.status(500).json({ error: tenantsError.message });
+    }
+
+    // 各テナントにユーザーの役割を追加
+    const tenantsWithRole = (tenants || []).map((tenant) => {
+      const profile = profiles.find((p) => p.tenant_id === tenant.id);
+      return {
+        ...tenant,
+        role: profile?.role || null,
+      };
+    });
+
+    res.json({ tenants: tenantsWithRole });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /tenants/:id
+ * テナント情報を取得
+ */
+router.get("/:id", async (req, res) => {
+  try {
+    // ユーザーがそのテナントに属しているか確認
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.params.id)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(403).json({
+        error: "User does not belong to this tenant",
+      });
+    }
+
+    // テナント情報を取得
+    const { data: tenant, error: tenantError } = await supabase
+      .from("tenants")
+      .select("*")
+      .eq("id", req.params.id)
+      .single();
+
+    if (tenantError || !tenant) {
+      return res.status(404).json({ error: "Tenant not found" });
+    }
+
+    res.json({
+      ...tenant,
+      role: profile.role,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /tenants/:id/members
+ * テナントのメンバー一覧を取得
+ */
+router.get("/:id/members", async (req, res) => {
+  try {
+    // ユーザーがそのテナントに属しているか確認
+    const { data: userProfile, error: userProfileError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.params.id)
+      .single();
+
+    if (userProfileError || !userProfile) {
+      return res.status(403).json({
+        error: "User does not belong to this tenant",
+      });
+    }
+
+    // テナントのメンバー一覧を取得
+    const { data: profiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("user_id, role, created_at")
+      .eq("tenant_id", req.params.id)
+      .order("created_at", { ascending: true });
+
+    if (profilesError) {
+      return res.status(500).json({ error: profilesError.message });
+    }
+
+    // 各メンバーのauth.users情報を取得
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const userIds = profiles.map((p) => p.user_id);
+    const members = await Promise.all(
+      profiles.map(async (profile) => {
+        // auth.usersからユーザー情報を取得（Service roleが必要）
+        // 注意: 通常のSupabaseクライアントではauth.usersに直接アクセスできない
+        // RPC関数を使用するか、別の方法を検討する必要がある
+        // ここでは一時的にuser_idのみを返す
+        return {
+          user_id: profile.user_id,
+          role: profile.role,
+          member_since: profile.created_at,
+        };
+      })
+    );
+
+    res.json({ members });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PUT /tenants/:id
+ * テナント名を更新（テナントに属しているユーザーであれば誰でも可能）
+ */
+router.put("/:id", async (req, res) => {
+  try {
+    // ユーザーがそのテナントに属しているか確認
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.params.id)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(403).json({
+        error: "User does not belong to this tenant",
+      });
+    }
+
+    const { name } = req.body;
+
+    if (!name || typeof name !== "string") {
+      return res.status(400).json({ error: "name is required" });
+    }
+
+    // テナント名を更新
+    const { data: tenant, error: tenantError } = await supabase
+      .from("tenants")
+      .update({ name })
+      .eq("id", req.params.id)
+      .select()
+      .single();
+
+    if (tenantError || !tenant) {
+      return res.status(500).json({ error: tenantError?.message || "Failed to update tenant" });
+    }
+
+    res.json(tenant);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PUT /tenants/:id/members/:userId/role
+ * メンバーの役割を変更（テナントに属しているユーザーであれば誰でも可能）
+ */
+router.put("/:id/members/:userId/role", async (req, res) => {
+  try {
+    // ユーザーがそのテナントに属しているか確認
+    const { data: userProfile, error: userProfileError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.params.id)
+      .single();
+
+    if (userProfileError || !userProfile) {
+      return res.status(403).json({
+        error: "User does not belong to this tenant",
+      });
+    }
+
+    const { role } = req.body;
+
+    if (!role || !["admin", "manager", "staff"].includes(role)) {
+      return res.status(400).json({
+        error: "role must be one of: admin, manager, staff",
+      });
+    }
+
+    // メンバーの役割を更新
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .update({ role })
+      .eq("user_id", req.params.userId)
+      .eq("tenant_id", req.params.id)
+      .select()
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(404).json({
+        error: "Member not found in this tenant",
+      });
+    }
+
+    res.json(profile);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /tenants/:id/members/:userId
+ * メンバーをテナントから削除（テナントに属しているユーザーであれば誰でも可能）
+ */
+router.delete("/:id/members/:userId", async (req, res) => {
+  try {
+    // ユーザーがそのテナントに属しているか確認
+    const { data: userProfile, error: userProfileError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("user_id", req.user!.id)
+      .eq("tenant_id", req.params.id)
+      .single();
+
+    if (userProfileError || !userProfile) {
+      return res.status(403).json({
+        error: "User does not belong to this tenant",
+      });
+    }
+
+    // 自分自身を削除しようとしている場合はエラー
+    if (req.params.userId === req.user!.id) {
+      return res.status(400).json({
+        error: "Cannot remove yourself from the tenant",
+      });
+    }
+
+    // メンバーを削除
+    const { error: deleteError } = await supabase
+      .from("profiles")
+      .delete()
+      .eq("user_id", req.params.userId)
+      .eq("tenant_id", req.params.id);
+
+    if (deleteError) {
+      return res.status(500).json({ error: deleteError.message });
+    }
+
+    res.status(204).send();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+export default router;
+

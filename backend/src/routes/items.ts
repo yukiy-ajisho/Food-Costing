@@ -14,7 +14,10 @@ const router = Router();
  */
 router.get("/", async (req, res) => {
   try {
-    let query = supabase.from("items").select("*").eq("user_id", req.user!.id);
+    let query = supabase
+      .from("items")
+      .select("*")
+      .in("tenant_id", req.user!.tenant_ids);
 
     // フィルター
     if (req.query.item_kind) {
@@ -47,7 +50,7 @@ router.get("/:id", async (req, res) => {
       .from("items")
       .select("*")
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     if (error) {
@@ -76,15 +79,15 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // user_idを自動設定
-    const itemWithUserId = {
+    // tenant_idを自動設定
+    const itemWithTenantId = {
       ...item,
-      user_id: req.user!.id,
+      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
     };
 
     const { data, error } = await supabase
       .from("items")
-      .insert([itemWithUserId])
+      .insert([itemWithTenantId])
       .select()
       .single();
 
@@ -113,7 +116,7 @@ router.put("/:id", async (req, res) => {
       .from("items")
       .select("*")
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     // Prepped Itemの場合、Yieldバリデーション
@@ -135,26 +138,26 @@ router.put("/:id", async (req, res) => {
               .select("*")
               .eq("parent_item_id", id)
               .eq("line_type", "ingredient")
-              .eq("user_id", req.user!.id);
+              .in("tenant_id", req.user!.tenant_ids);
 
             if (recipeLines && recipeLines.length > 0) {
               // Base Itemsを取得
               const { data: baseItems } = await supabase
                 .from("base_items")
                 .select("*")
-                .eq("user_id", req.user!.id);
+                .in("tenant_id", req.user!.tenant_ids);
 
               // Itemsを取得
               const { data: allItems } = await supabase
                 .from("items")
                 .select("*")
-                .eq("user_id", req.user!.id);
+                .in("tenant_id", req.user!.tenant_ids);
 
-              // Vendor Productsを取得
+              // Virtual Vendor Productsを取得
               const { data: vendorProducts } = await supabase
-                .from("vendor_products")
+                .from("virtual_vendor_products")
                 .select("*")
-                .eq("user_id", req.user!.id);
+                .in("tenant_id", req.user!.tenant_ids);
 
               // マップを作成
               const baseItemsMap = new Map<string, BaseItem>();
@@ -216,14 +219,14 @@ router.put("/:id", async (req, res) => {
         .select("*")
         .eq("parent_item_id", id)
         .eq("line_type", "ingredient")
-        .eq("user_id", req.user!.id);
+        .in("tenant_id", req.user!.tenant_ids);
 
       if (recipeLines && recipeLines.length > 0) {
         // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
         const { data: allItems } = await supabase
           .from("items")
           .select("*")
-          .eq("user_id", req.user!.id);
+          .in("tenant_id", req.user!.tenant_ids);
 
         // マップを作成
         const itemsMap = new Map<string, Item>();
@@ -234,7 +237,7 @@ router.put("/:id", async (req, res) => {
           .from("recipe_lines")
           .select("*")
           .eq("line_type", "ingredient")
-          .eq("user_id", req.user!.id);
+          .in("tenant_id", req.user!.tenant_ids);
 
         const recipeLinesMap = new Map<string, RecipeLine[]>();
         allRecipeLines?.forEach((line) => {
@@ -247,7 +250,7 @@ router.put("/:id", async (req, res) => {
         try {
           await checkCycle(
             id,
-            req.user!.id,
+            req.user!.tenant_ids,
             new Set(),
             itemsMap,
             recipeLinesMap,
@@ -265,14 +268,22 @@ router.put("/:id", async (req, res) => {
       }
     }
 
-    // user_idを更新から除外（セキュリティのため）
+    // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, ...itemWithoutUserId } = item;
+    const {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      user_id: _user_id,
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      tenant_id: _tenant_id,
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      id: _id,
+      ...itemWithoutIds
+    } = item;
     const { data, error } = await supabase
       .from("items")
-      .update(itemWithoutUserId)
+      .update(itemWithoutIds)
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .in("tenant_id", req.user!.tenant_ids)
       .select()
       .single();
 
@@ -298,7 +309,10 @@ router.put("/:id", async (req, res) => {
 router.patch("/:id/deprecate", async (req, res) => {
   try {
     const { deprecatePreppedItem } = await import("../services/deprecation");
-    const result = await deprecatePreppedItem(req.params.id, req.user!.id);
+    const result = await deprecatePreppedItem(
+      req.params.id,
+      req.user!.tenant_ids
+    );
 
     if (!result.success) {
       return res.status(400).json({ error: result.error });
@@ -324,7 +338,7 @@ router.delete("/:id", async (req, res) => {
       .from("items")
       .delete()
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id);
+      .in("tenant_id", req.user!.tenant_ids);
 
     if (error) {
       return res.status(400).json({ error: error.message });

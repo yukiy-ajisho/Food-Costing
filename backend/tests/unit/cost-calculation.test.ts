@@ -5,6 +5,7 @@ import { RecipeLine, Item } from "../../src/types/database";
 // Supabaseをモック化
 let mockRecipeLinesMap: Map<string, RecipeLine[]> = new Map();
 let mockItemsMap: Map<string, Item> = new Map();
+let mockProductMappingsMap: Map<string, string[]> = new Map(); // base_item_id -> virtual_product_id[]
 
 jest.mock("../../src/config/supabase", () => {
   return {
@@ -19,11 +20,17 @@ jest.mock("../../src/config/supabase", () => {
                   if (column === "parent_item_id") {
                     parentItemId = value;
                   }
-                  // user_idフィルタは無視してチェーンを続ける
-                  // 最後の.eq()呼び出し後にデータを返す
+                  // tenant_idフィルタに対応
                   return {
+                    in: jest.fn((column2: string, value2: string[]) => {
+                      // tenant_idフィルタは無視
+                      return Promise.resolve({
+                        data: parentItemId ? mockRecipeLinesMap.get(parentItemId) || null : null,
+                        error: null,
+                      });
+                    }),
                     eq: jest.fn((column2: string, value2: string) => {
-                      // user_idフィルタは無視
+                      // 後方互換性のため残す
                       return Promise.resolve({
                         data: parentItemId ? mockRecipeLinesMap.get(parentItemId) || null : null,
                         error: null,
@@ -45,10 +52,21 @@ jest.mock("../../src/config/supabase", () => {
                   if (column === "id") {
                     itemId = value;
                   }
-                  // user_idフィルタは無視してチェーンを続ける
+                  // tenant_idフィルタは無視してチェーンを続ける
                   return {
+                    in: jest.fn((column2: string, value2: string[]) => {
+                      // tenant_idフィルタは無視
+                      return {
+                        single: jest.fn(() => {
+                          return Promise.resolve({
+                            data: itemId ? mockItemsMap.get(itemId) || null : null,
+                            error: null,
+                          });
+                        }),
+                      };
+                    }),
                     eq: jest.fn((column2: string, value2: string) => {
-                      // user_idフィルタは無視
+                      // 後方互換性のため残す
                       return {
                         single: jest.fn(() => {
                           return Promise.resolve({
@@ -65,6 +83,11 @@ jest.mock("../../src/config/supabase", () => {
             }),
             update: jest.fn(() => ({
               eq: jest.fn(() => ({
+                in: jest.fn(() => {
+                  return Promise.resolve({
+                    error: null,
+                  });
+                }),
                 eq: jest.fn(() => {
                   return Promise.resolve({
                     error: null,
@@ -74,17 +97,112 @@ jest.mock("../../src/config/supabase", () => {
             })),
           };
         }
+        if (table === "product_mappings") {
+          return {
+            select: jest.fn(() => {
+              let baseItemId: string | null = null;
+              return {
+                eq: jest.fn((column: string, value: string) => {
+                  if (column === "base_item_id") {
+                    baseItemId = value;
+                  }
+                  return {
+                    in: jest.fn((column2: string, value2: string[]) => {
+                      // tenant_idフィルタは無視
+                      // base_item_idに対応するvirtual_product_idのリストを返す
+                      const virtualProductIds = baseItemId ? mockProductMappingsMap.get(baseItemId) || [] : [];
+                      const mappings = virtualProductIds.map((vpId) => ({
+                        virtual_product_id: vpId,
+                      }));
+                      return Promise.resolve({
+                        data: mappings,
+                        error: null,
+                      });
+                    }),
+                  };
+                }),
+              };
+            }),
+          };
+        }
+        if (table === "base_items") {
+          return {
+            select: jest.fn(() => {
+              return {
+                in: jest.fn(() => {
+                  return Promise.resolve({
+                    data: [],
+                    error: null,
+                  });
+                }),
+              };
+            }),
+          };
+        }
+        if (table === "virtual_vendor_products") {
+          return {
+            select: jest.fn(() => {
+              return {
+                in: jest.fn(() => {
+                  return Promise.resolve({
+                    data: [],
+                    error: null,
+                  });
+                }),
+              };
+            }),
+          };
+        }
+        if (table === "labor_roles") {
+          return {
+            select: jest.fn(() => {
+              return {
+                in: jest.fn(() => {
+                  return Promise.resolve({
+                    data: [],
+                    error: null,
+                  });
+                }),
+              };
+            }),
+          };
+        }
         return {};
       }),
     },
   };
 });
 
+// product_mappingsを構築するヘルパー関数
+function setupProductMappings(vendorProducts?: Array<{
+  id: string;
+  baseItemId: string;
+  vendorId: string;
+  productName?: string | null;
+  brandName?: string | null;
+  purchaseUnit: string;
+  purchaseQuantity: number;
+  purchaseCost: number;
+}>): void {
+  if (vendorProducts) {
+    vendorProducts.forEach((vp) => {
+      if (vp.baseItemId) {
+        const existing = mockProductMappingsMap.get(vp.baseItemId) || [];
+        if (!existing.includes(vp.id)) {
+          existing.push(vp.id);
+          mockProductMappingsMap.set(vp.baseItemId, existing);
+        }
+      }
+    });
+  }
+}
+
 describe("Cost Calculation Unit Tests", () => {
   beforeEach(() => {
     // 各テストの前にモックをクリア
     mockRecipeLinesMap.clear();
     mockItemsMap.clear();
+    mockProductMappingsMap.clear();
   });
 
   describe("Test Case 1: Simple Raw Item (Mass Unit)", () => {
@@ -128,10 +246,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockItemsMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // コスト計算
       const costPerGram = await getCost(
         "item-1",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -185,10 +308,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockItemsMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // コスト計算
       const costPerGram = await getCost(
         "item-2",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -268,10 +396,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // コスト計算
       const costPerGram = await getCost(
         "item-3-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -354,10 +487,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // コスト計算
       const costPerGram = await getCost(
         "item-4-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -456,10 +594,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // コスト計算（Egg Salad）
       const costPerGram = await getCost(
         "item-5-prepped-2",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -588,10 +731,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // コスト計算
       const costPerGram = await getCost(
         "item-6-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -722,10 +870,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // コスト計算
       const costPerGram = await getCost(
         "item-7-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -809,9 +962,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-9-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -927,9 +1085,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-10-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1071,9 +1234,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-11-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1146,9 +1314,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockItemsMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-12-raw",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1258,9 +1431,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-13-prepped-2",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1369,9 +1547,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-14-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1477,9 +1660,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-15-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1643,9 +1831,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-16-prepped-3",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1720,9 +1913,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-17-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1798,9 +1996,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-18-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1861,9 +2064,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-19-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1963,9 +2171,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-20-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2074,9 +2287,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-29-prepped",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2214,9 +2432,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-22-prepped-2",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2640,9 +2863,14 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       const costPerGram = await getCost(
         "item-23-prepped-6",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2754,11 +2982,16 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // エラーが発生することを期待
       await expect(
         getCost(
           "item-21-prepped-1",
-          "test-user-id",
+          ["test-user-id"],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -2874,10 +3107,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       await expect(
         getCost(
           "item-24-prepped-1",
-          "test-user-id",
+          ["test-user-id"],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3031,10 +3269,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       await expect(
         getCost(
           "item-25-prepped-1",
-          "test-user-id",
+          ["test-user-id"],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3171,10 +3414,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       await expect(
         getCost(
           "item-26-prepped-1",
-          "test-user-id",
+          ["test-user-id"],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3327,10 +3575,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       // エラーが発生しないことを期待
       const costPerGram = await getCost(
         "item-27-prepped-3",
-        "test-user-id",
+        ["test-user-id"],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -3462,10 +3715,15 @@ describe("Cost Calculation Unit Tests", () => {
         mockRecipeLinesMap.set(key, value);
       });
 
+      // product_mappingsを構築（Phase 1b対応）
+      if ('vendorProducts' in testData && (testData as any).vendorProducts) {
+        setupProductMappings((testData as any).vendorProducts);
+      }
+
       await expect(
         getCost(
           "item-28-prepped-2",
-          "test-user-id",
+          ["test-user-id"],
           new Set(),
           baseItemsMap,
           itemsMap,

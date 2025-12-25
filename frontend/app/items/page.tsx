@@ -7,10 +7,13 @@ import {
   itemsAPI,
   baseItemsAPI,
   vendorsAPI,
+  productMappingsAPI,
   saveChangeHistory,
   type Item,
   type BaseItem as APIBaseItem,
   type Vendor,
+  type VendorProduct,
+  type ProductMapping,
 } from "@/lib/api";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import {
@@ -23,15 +26,8 @@ import { useTheme } from "@/contexts/ThemeContext";
 type TabType = "items" | "raw-items" | "vendors";
 
 // UI用の型定義
-interface VendorProductUI {
-  id: string;
-  base_item_id: string;
-  vendor_id: string;
-  product_name?: string | null; // NULL可能
-  brand_name?: string | null;
-  purchase_unit: string;
-  purchase_quantity: number;
-  purchase_cost: number;
+interface VendorProductUI extends VendorProduct {
+  base_item_id: string; // product_mappingsから取得した表示用のbase_item_id
   each_grams?: number | null; // itemsテーブルのeach_grams（表示用のみ、Base Itemsタブで管理）
   isMarkedForDeletion?: boolean;
   isNew?: boolean;
@@ -128,30 +124,44 @@ export default function ItemsPage() {
         if (isFirstLoad) {
           setLoadingItems(true);
         }
-        const [vendorProductsData, baseItemsData, vendorsData, itemsData] =
+        const [vendorProductsData, baseItemsData, vendorsData, itemsData, mappingsData] =
           await Promise.all([
             vendorProductsAPI.getAll(),
             baseItemsAPI.getAll(),
             vendorsAPI.getAll(),
             itemsAPI.getAll({ item_kind: "raw" }),
+            productMappingsAPI.getAll(),
           ]);
 
         setBaseItems(baseItemsData);
         setVendors(vendorsData);
         setItems(itemsData);
 
+        // product_mappingsからbase_item_idを取得するマップを作成
+        const virtualProductToBaseItemMap = new Map<string, string>();
+        mappingsData?.forEach((mapping) => {
+          virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+        });
+
         // VendorProductUI形式に変換（deprecatedを除外）
         const vendorProductsUI: VendorProductUI[] = vendorProductsData
           .filter((vp) => !vp.deprecated)
-          .map((vp) => {
+          .map((vp): VendorProductUI | null => {
+            // product_mappingsからbase_item_idを取得
+            const baseItemId = virtualProductToBaseItemMap.get(vp.id);
+            if (!baseItemId) {
+              // マッピングがない場合はスキップ（またはエラー処理）
+              return null;
+            }
+
             // 対応するitemを取得（each_gramsを取得するため）
             const item = itemsData.find(
-              (i) => i.base_item_id === vp.base_item_id
+              (i) => i.base_item_id === baseItemId
             );
 
             // 警告フラグをチェック
             const baseItem = baseItemsData.find(
-              (b) => b.id === vp.base_item_id
+              (b) => b.id === baseItemId
             );
             let needsWarning = false;
 
@@ -167,17 +177,19 @@ export default function ItemsPage() {
 
             return {
               id: vp.id,
-              base_item_id: vp.base_item_id,
+              base_item_id: baseItemId,
               vendor_id: vp.vendor_id,
               product_name: vp.product_name,
               brand_name: vp.brand_name,
               purchase_unit: vp.purchase_unit,
               purchase_quantity: vp.purchase_quantity,
               purchase_cost: vp.purchase_cost,
+              user_id: vp.user_id, // Required field from VendorProduct
               each_grams: item?.each_grams || null,
               needsWarning,
             };
-          });
+          })
+          .filter((vp): vp is VendorProductUI => vp !== null);
 
         setVendorProducts(vendorProductsUI);
         setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
@@ -338,9 +350,8 @@ export default function ItemsPage() {
       // API呼び出し
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
-          // 新規作成: vendor_productsを作成（自動的にitemsも作成される）
+          // 新規作成: virtual_vendor_productsを作成（base_item_idは含めない）
           const newVp = await vendorProductsAPI.create({
-            base_item_id: vp.base_item_id,
             vendor_id: vp.vendor_id,
             product_name: vp.product_name || null,
             brand_name: vp.brand_name || null,
@@ -350,11 +361,18 @@ export default function ItemsPage() {
           });
           changedVendorProductIds.push(newVp.id);
 
+          // product_mappingsを作成
+          if (vp.base_item_id) {
+            await productMappingsAPI.create({
+              base_item_id: vp.base_item_id,
+              virtual_product_id: newVp.id,
+            });
+          }
+
           // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         } else {
-          // 更新: vendor_productsを更新
+          // 更新: virtual_vendor_productsを更新（base_item_idは含めない）
           await vendorProductsAPI.update(vp.id, {
-            base_item_id: vp.base_item_id,
             vendor_id: vp.vendor_id,
             product_name: vp.product_name || null,
             brand_name: vp.brand_name || null,
@@ -363,6 +381,23 @@ export default function ItemsPage() {
             purchase_cost: vp.purchase_cost,
           });
           changedVendorProductIds.push(vp.id);
+
+          // product_mappingsを更新（既存のマッピングを削除して新規作成）
+          if (vp.base_item_id) {
+            // 既存のマッピングを取得
+            const existingMappings = await productMappingsAPI.getAll({
+              virtual_product_id: vp.id,
+            });
+            // 既存のマッピングを削除
+            for (const mapping of existingMappings) {
+              await productMappingsAPI.delete(mapping.id);
+            }
+            // 新しいマッピングを作成
+            await productMappingsAPI.create({
+              base_item_id: vp.base_item_id,
+              virtual_product_id: vp.id,
+            });
+          }
 
           // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         }
@@ -385,25 +420,38 @@ export default function ItemsPage() {
       }
 
       // データを再取得
-      const [vendorProductsData, baseItemsData, vendorsData, itemsData] =
+      const [vendorProductsData, baseItemsData, vendorsData, itemsData, mappingsData] =
         await Promise.all([
           vendorProductsAPI.getAll(),
           baseItemsAPI.getAll(),
           vendorsAPI.getAll(),
           itemsAPI.getAll({ item_kind: "raw" }),
+          productMappingsAPI.getAll(),
         ]);
 
       setBaseItems(baseItemsData);
       setVendors(vendorsData);
       setItems(itemsData);
 
+      // product_mappingsからbase_item_idを取得するマップを作成
+      const virtualProductToBaseItemMap = new Map<string, string>();
+      mappingsData?.forEach((mapping) => {
+        virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+      });
+
       const vendorProductsUI: VendorProductUI[] = vendorProductsData
         .filter((vp) => !vp.deprecated)
-        .map((vp) => {
+        .map((vp): VendorProductUI | null => {
+          // product_mappingsからbase_item_idを取得
+          const baseItemId = virtualProductToBaseItemMap.get(vp.id);
+          if (!baseItemId) {
+            return null;
+          }
+
           const item = itemsData.find(
-            (i) => i.base_item_id === vp.base_item_id
+            (i) => i.base_item_id === baseItemId
           );
-          const baseItem = baseItemsData.find((b) => b.id === vp.base_item_id);
+          const baseItem = baseItemsData.find((b) => b.id === baseItemId);
           let needsWarning = false;
 
           if (vp.purchase_unit) {
@@ -416,17 +464,19 @@ export default function ItemsPage() {
 
           return {
             id: vp.id,
-            base_item_id: vp.base_item_id,
+            base_item_id: baseItemId,
             vendor_id: vp.vendor_id,
             product_name: vp.product_name,
             brand_name: vp.brand_name,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
             purchase_cost: vp.purchase_cost,
+            user_id: vp.user_id, // Required field from VendorProduct
             each_grams: item?.each_grams || null,
             needsWarning,
           };
-        });
+        })
+        .filter((vp): vp is VendorProductUI => vp !== null);
 
       setVendorProducts(vendorProductsUI);
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
@@ -494,6 +544,7 @@ export default function ItemsPage() {
       purchase_unit: "kg",
       purchase_quantity: 0,
       purchase_cost: 0,
+      user_id: "", // Required field from VendorProduct (will be set by backend)
       isNew: true,
     };
 
@@ -526,7 +577,22 @@ export default function ItemsPage() {
       // バリデーション: specific_weightやeach_gramsを削除しようとしている場合、
       // Vendor Productsで使用されていないかチェック
       // ============================================================
-      const allVendorProducts = await vendorProductsAPI.getAll();
+      const [allVendorProducts, allMappings] = await Promise.all([
+        vendorProductsAPI.getAll(),
+        productMappingsAPI.getAll(),
+      ]);
+
+      // product_mappingsからbase_item_idを取得するマップを作成
+      const virtualProductToBaseItemMap = new Map<string, string>();
+      allMappings?.forEach((mapping) => {
+        virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+      });
+
+      // vendorProductsにbase_item_idを追加（表示用）
+      const allVendorProductsWithBaseItemId = allVendorProducts.map((vp) => ({
+        ...vp,
+        base_item_id: virtualProductToBaseItemMap.get(vp.id) || "",
+      }));
 
       for (const item of baseItemsUI) {
         if (item.isNew) continue; // 新規追加は対象外
@@ -543,7 +609,7 @@ export default function ItemsPage() {
 
         if (isRemovingSpecificWeight) {
           // このBase Itemを使用しているVendor Productsを取得
-          const usedVendorProducts = allVendorProducts.filter(
+          const usedVendorProducts = allVendorProductsWithBaseItemId.filter(
             (vp) =>
               vp.base_item_id === item.id &&
               ["gallon", "liter", "floz", "ml"].includes(vp.purchase_unit)
@@ -569,7 +635,7 @@ export default function ItemsPage() {
 
         if (isRemovingEachGrams) {
           // このBase Itemを使用しているVendor Productsを取得
-          const usedVendorProducts = allVendorProducts.filter(
+          const usedVendorProducts = allVendorProductsWithBaseItemId.filter(
             (vp) => vp.base_item_id === item.id && vp.purchase_unit === "each"
           );
 

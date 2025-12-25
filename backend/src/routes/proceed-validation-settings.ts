@@ -63,10 +63,10 @@ router.put("/", async (req, res) => {
     if (existingData) {
       // 更新
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { user_id: _user_id, id: _id, ...settingsWithoutUserId } = settings;
+      const { user_id: _user_id, id: _id, ...settingsWithoutIds } = settings;
       const { data, error } = await supabase
         .from("proceed_validation_settings")
-        .update(settingsWithoutUserId)
+        .update(settingsWithoutIds)
         .eq("user_id", req.user!.id)
         .select()
         .single();

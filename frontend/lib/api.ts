@@ -152,7 +152,7 @@ export interface Vendor {
 
 export interface VendorProduct {
   id: string;
-  base_item_id: string; // FK to base_items
+  // base_item_id removed in Phase 1b - use product_mappings instead
   vendor_id: string; // FK to vendors
   product_name?: string | null; // NULL可能
   brand_name?: string | null;
@@ -161,6 +161,14 @@ export interface VendorProduct {
   purchase_cost: number;
   deprecated?: string | null; // timestamp when deprecated
   user_id: string; // FK to users
+}
+
+export interface ProductMapping {
+  id: string;
+  base_item_id: string; // FK to base_items
+  virtual_product_id: string; // FK to virtual_vendor_products
+  tenant_id: string; // FK to tenants
+  created_at?: string;
 }
 
 export interface Item {
@@ -220,10 +228,14 @@ export interface NonMassUnit {
 /**
  * 認証付きAPIリクエスト
  * セッションからアクセストークンを取得してAuthorizationヘッダーに追加
+ * @param endpoint - APIエンドポイント
+ * @param options - リクエストオプション
+ * @param tenantId - 現在のテナントID（オプション、テナント一覧取得時などは不要）
  */
 export async function apiRequest<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  tenantId?: string | null
 ): Promise<T> {
   const supabase = createClient();
   const {
@@ -240,13 +252,18 @@ export async function apiRequest<T>(
     throw new Error("Authentication required.");
   }
 
+  // ヘッダーを構築
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${session.access_token}`,
+    ...options.headers,
+  };
+
+  // Phase 1a: すべてのテナントのデータを表示するため、X-Tenant-IDヘッダーは不要
+
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${session.access_token}`,
-      ...options.headers,
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -279,11 +296,14 @@ export async function apiRequest<T>(
 }
 
 // API呼び出しヘルパー（後方互換性のため残すが、apiRequestを使用）
+// 注意: この関数はtenantIdを渡さないため、使用する際は注意が必要
+// 新しいコードでは直接apiRequestを使用し、tenantIdを渡すことを推奨
 async function fetchAPI<T>(
   endpoint: string,
-  options?: RequestInit
+  options?: RequestInit,
+  tenantId?: string | null
 ): Promise<T> {
-  return apiRequest<T>(endpoint, options);
+  return apiRequest<T>(endpoint, options, tenantId);
 }
 
 // Items API
@@ -418,6 +438,8 @@ export const costAPI = {
 export const baseItemsAPI = {
   getAll: () => fetchAPI<BaseItem[]>("/base-items"),
   getById: (id: string) => fetchAPI<BaseItem>(`/base-items/${id}`),
+  getVendorProducts: (baseItemId: string) =>
+    fetchAPI<VendorProduct[]>(`/base-items/${baseItemId}/vendor-products`),
   create: (baseItem: Partial<BaseItem>) =>
     fetchAPI<BaseItem>("/base-items", {
       method: "POST",
@@ -529,3 +551,25 @@ export const nonMassUnitsAPI = {
       method: "DELETE",
     }),
 };
+
+// Product Mappings API
+export const productMappingsAPI = {
+  getAll: (params?: { base_item_id?: string; virtual_product_id?: string }) => {
+    const queryParams = new URLSearchParams();
+    if (params?.base_item_id) queryParams.append("base_item_id", params.base_item_id);
+    if (params?.virtual_product_id) queryParams.append("virtual_product_id", params.virtual_product_id);
+    const query = queryParams.toString();
+    return fetchAPI<ProductMapping[]>(`/product-mappings${query ? `?${query}` : ""}`);
+  },
+  getById: (id: string) => fetchAPI<ProductMapping>(`/product-mappings/${id}`),
+  create: (mapping: Partial<ProductMapping>) =>
+    fetchAPI<ProductMapping>("/product-mappings", {
+      method: "POST",
+      body: JSON.stringify(mapping),
+    }),
+  delete: (id: string) =>
+    fetchAPI<void>(`/product-mappings/${id}`, {
+      method: "DELETE",
+    }),
+};
+

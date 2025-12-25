@@ -20,6 +20,7 @@ import {
   baseItemsAPI,
   vendorProductsAPI,
   vendorsAPI,
+  productMappingsAPI,
   proceedValidationSettingsAPI,
   saveChangeHistory,
   // getAndClearChangeHistory, // フル計算に統一するため、不要
@@ -53,6 +54,11 @@ interface RecipeLine {
   last_change?: string | null; // vendor product change history
   isMarkedForDeletion?: boolean;
   isNew?: boolean; // 新規作成フラグ
+}
+
+// UI用の型定義
+interface VendorProductUI extends VendorProduct {
+  base_item_id: string; // product_mappingsから取得した表示用のbase_item_id
 }
 
 // Prepped/Menu Itemの型定義（UI用）
@@ -1074,7 +1080,7 @@ export default function CostPage() {
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
   const [baseItems, setBaseItems] = useState<BaseItem[]>([]);
-  const [vendorProducts, setVendorProducts] = useState<VendorProduct[]>([]);
+  const [vendorProducts, setVendorProducts] = useState<VendorProductUI[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -1147,6 +1153,7 @@ export default function CostPage() {
           vendorProductsData,
           vendorsData,
           roles,
+          mappingsData,
           breakdownData,
         ] = await Promise.all([
           itemsAPI.getAll({ item_kind: "prepped" }),
@@ -1155,16 +1162,29 @@ export default function CostPage() {
           vendorProductsAPI.getAll(),
           vendorsAPI.getAll(),
           laborRolesAPI.getAll(),
+          productMappingsAPI.getAll(),
           costAPI.getCostsBreakdown().catch((error) => {
             console.error("Failed to fetch cost breakdown:", error);
             return { costs: {} };
           }),
         ]);
 
+        // product_mappingsからbase_item_idを取得するマップを作成
+        const virtualProductToBaseItemMap = new Map<string, string>();
+        mappingsData?.forEach((mapping) => {
+          virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+        });
+
+        // vendorProductsにbase_item_idを追加（表示用）
+        const vendorProductsWithBaseItemId = vendorProductsData.map((vp) => ({
+          ...vp,
+          base_item_id: virtualProductToBaseItemMap.get(vp.id) || "",
+        }));
+
         // 状態を更新
         setAvailableItems(allItems);
         setBaseItems(baseItemsData);
-        setVendorProducts(vendorProductsData);
+        setVendorProducts(vendorProductsWithBaseItemId);
         setVendors(vendorsData);
         setLaborRoles(roles);
         setCostBreakdown(breakdownData.costs);

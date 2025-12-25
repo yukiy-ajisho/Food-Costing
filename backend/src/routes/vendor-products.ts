@@ -11,9 +11,9 @@ const router = Router();
 router.get("/", async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from("vendor_products")
+      .from("virtual_vendor_products")
       .select("*")
-      .eq("user_id", req.user!.id)
+      .in("tenant_id", req.user!.tenant_ids)
       .order("product_name");
 
     if (error) {
@@ -34,10 +34,10 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from("vendor_products")
+      .from("virtual_vendor_products")
       .select("*")
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     if (error) {
@@ -60,9 +60,8 @@ router.post("/", async (req, res) => {
   try {
     const vendorProduct: Partial<VendorProduct> = req.body;
 
-    // バリデーション
+    // バリデーション（base_item_idは不要 - マッピングは別途作成）
     if (
-      !vendorProduct.base_item_id ||
       !vendorProduct.vendor_id ||
       !vendorProduct.purchase_unit ||
       !vendorProduct.purchase_quantity ||
@@ -70,20 +69,24 @@ router.post("/", async (req, res) => {
     ) {
       return res.status(400).json({
         error:
-          "base_item_id, vendor_id, purchase_unit, purchase_quantity, and purchase_cost are required",
+          "vendor_id, purchase_unit, purchase_quantity, and purchase_cost are required",
       });
     }
 
-    // user_idを自動設定
-    const vendorProductWithUserId = {
+    // tenant_idを自動設定
+    const vendorProductWithTenantId = {
       ...vendorProduct,
-      user_id: req.user!.id,
+      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
     };
 
-    // vendor_productsを作成
+    // base_item_idを削除（Phase 1b: マッピングは別途作成）
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { base_item_id: _base_item_id, ...vendorProductWithoutBaseItemId } = vendorProductWithTenantId as typeof vendorProductWithTenantId & { base_item_id?: string };
+
+    // virtual_vendor_productsを作成
     const { data: newVendorProduct, error: vpError } = await supabase
-      .from("vendor_products")
-      .insert([vendorProductWithUserId])
+      .from("virtual_vendor_products")
+      .insert([vendorProductWithoutBaseItemId])
       .select()
       .single();
 
@@ -106,9 +109,9 @@ router.post("/", async (req, res) => {
     const { autoUndeprecateAfterVendorProductCreation } = await import(
       "../services/deprecation"
     );
-    const undeprecateResult = await autoUndeprecateAfterVendorProductCreation(
+    const undeprecateResult =       await autoUndeprecateAfterVendorProductCreation(
       newVendorProduct.id,
-      req.user!.id
+        req.user!.tenant_ids
     );
 
     if (undeprecateResult.undeprecatedItems?.length) {
@@ -133,14 +136,14 @@ router.put("/:id", async (req, res) => {
     const vendorProduct: Partial<VendorProduct> = req.body;
     const { id } = req.params;
 
-    // user_idを更新から除外（セキュリティのため）
+    // user_id、tenant_id、base_item_idを更新から除外（セキュリティのため、base_item_idはproduct_mappingsで管理）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, ...vendorProductWithoutUserId } = vendorProduct;
+    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, base_item_id: _base_item_id, ...vendorProductWithoutIds } = vendorProduct as typeof vendorProduct & { base_item_id?: string };
     const { data, error } = await supabase
-      .from("vendor_products")
-      .update(vendorProductWithoutUserId)
+      .from("virtual_vendor_products")
+      .update(vendorProductWithoutIds)
       .eq("id", id)
-      .eq("user_id", req.user!.id)
+      .in("tenant_id", req.user!.tenant_ids)
       .select()
       .single();
 
@@ -177,7 +180,7 @@ router.put("/:id", async (req, res) => {
 router.patch("/:id/deprecate", async (req, res) => {
   try {
     const { deprecateVendorProduct } = await import("../services/deprecation");
-    const result = await deprecateVendorProduct(req.params.id, req.user!.id);
+    const result = await deprecateVendorProduct(req.params.id, req.user!.tenant_ids);
 
     if (!result.success) {
       return res.status(400).json({ error: result.error });
@@ -200,10 +203,10 @@ router.patch("/:id/deprecate", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   try {
     const { error } = await supabase
-      .from("vendor_products")
+      .from("virtual_vendor_products")
       .delete()
       .eq("id", req.params.id)
-      .eq("user_id", req.user!.id);
+      .in("tenant_id", req.user!.tenant_ids);
 
     if (error) {
       return res.status(400).json({ error: error.message });

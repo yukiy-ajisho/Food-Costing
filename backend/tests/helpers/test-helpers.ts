@@ -71,6 +71,7 @@ export function buildTestMaps(data: {
         name: bi.name,
         specific_weight: bi.specificWeight ?? null,
         user_id: "test-user-id",
+        tenant_id: "test-tenant-id", // Required field
       });
     });
   }
@@ -89,16 +90,17 @@ export function buildTestMaps(data: {
         each_grams: item.eachGrams ?? null,
         notes: item.notes ?? null,
         user_id: "test-user-id",
+        tenant_id: "test-tenant-id", // Required field
       });
     });
   }
 
-  // Vendor Products
+  // Vendor Products (Phase 1b: base_item_id removed, use product_mappings instead)
   if (data.vendorProducts) {
     data.vendorProducts.forEach((vp) => {
       vendorProductsMap.set(vp.id, {
         id: vp.id,
-        base_item_id: vp.baseItemId,
+        // base_item_id removed in Phase 1b
         vendor_id: vp.vendorId,
         product_name: vp.productName ?? null,
         brand_name: vp.brandName ?? null,
@@ -106,6 +108,7 @@ export function buildTestMaps(data: {
         purchase_quantity: vp.purchaseQuantity,
         purchase_cost: vp.purchaseCost,
         user_id: "test-user-id",
+        tenant_id: "test-tenant-id", // Required field
       });
     });
   }
@@ -118,6 +121,7 @@ export function buildTestMaps(data: {
         name: lr.name,
         hourly_wage: lr.hourlyWage,
         user_id: "test-user-id",
+        tenant_id: "test-tenant-id", // Required field
       });
     });
   }
@@ -135,6 +139,7 @@ export function buildTestMaps(data: {
         labor_role: rl.laborRoleId ?? null,
         minutes: rl.minutes ?? null,
         user_id: "test-user-id",
+        tenant_id: "test-tenant-id", // Required field
       };
 
       if (!recipeLinesMap.has(rl.parentItemId)) {
