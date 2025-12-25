@@ -56,6 +56,11 @@ interface RecipeLine {
   isNew?: boolean; // 新規作成フラグ
 }
 
+// UI用の型定義
+interface VendorProductUI extends VendorProduct {
+  base_item_id: string; // product_mappingsから取得した表示用のbase_item_id
+}
+
 // Prepped/Menu Itemの型定義（UI用）
 interface PreppedItem {
   id: string;
@@ -1075,7 +1080,7 @@ export default function CostPage() {
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
   const [baseItems, setBaseItems] = useState<BaseItem[]>([]);
-  const [vendorProducts, setVendorProducts] = useState<VendorProduct[]>([]);
+  const [vendorProducts, setVendorProducts] = useState<VendorProductUI[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
   const [isEditMode, setIsEditMode] = useState(false);

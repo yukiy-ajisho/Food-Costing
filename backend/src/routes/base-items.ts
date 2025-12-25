@@ -131,7 +131,7 @@ router.patch("/:id/deprecate", async (req, res) => {
   try {
     const { deprecateBaseItem } = await import("../services/deprecation");
     // 複数テナント対応: 最初のテナントIDを使用（Phase 2で改善予定）
-    const result = await deprecateBaseItem(req.params.id, req.user!.tenant_ids[0]);
+    const result = await deprecateBaseItem(req.params.id, req.user!.tenant_ids);
 
     if (!result.success) {
       return res.status(400).json({ error: result.error });

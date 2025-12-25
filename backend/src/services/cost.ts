@@ -460,7 +460,7 @@ export async function getCost(
         // 子アイテムのコストを再帰的に取得
         const childCostPerGram = await getCost(
           line.child_item_id,
-          tenantId,
+          tenantIds,
           visited,
           baseItemsMap,
           itemsMap,

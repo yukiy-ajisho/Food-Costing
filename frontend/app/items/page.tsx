@@ -12,6 +12,7 @@ import {
   type Item,
   type BaseItem as APIBaseItem,
   type Vendor,
+  type VendorProduct,
   type ProductMapping,
 } from "@/lib/api";
 import { SearchableSelect } from "@/components/SearchableSelect";
@@ -25,15 +26,8 @@ import { useTheme } from "@/contexts/ThemeContext";
 type TabType = "items" | "raw-items" | "vendors";
 
 // UI用の型定義
-interface VendorProductUI {
-  id: string;
-  base_item_id: string;
-  vendor_id: string;
-  product_name?: string | null; // NULL可能
-  brand_name?: string | null;
-  purchase_unit: string;
-  purchase_quantity: number;
-  purchase_cost: number;
+interface VendorProductUI extends VendorProduct {
+  base_item_id: string; // product_mappingsから取得した表示用のbase_item_id
   each_grams?: number | null; // itemsテーブルのeach_grams（表示用のみ、Base Itemsタブで管理）
   isMarkedForDeletion?: boolean;
   isNew?: boolean;

@@ -301,7 +301,7 @@ export async function deprecateVendorProduct(
               vendorProduct,
               otherVPs,
               vendorProductId,
-              tenantId
+              tenantIds
             );
           }
         }
@@ -430,7 +430,7 @@ async function deprecateItemCascade(
       const nestedAffected = await deprecateItemCascade(
         parentId,
         deprecatedTime,
-        tenantId,
+        tenantIds,
         visited
       );
       nestedAffected.forEach((id) => affectedItems.add(id));
@@ -587,7 +587,7 @@ export async function undeprecateItem(
     if (item.item_kind === "prepped") {
       const allIngredientsActive = await checkAllIngredientsActive(
         itemId,
-        tenantId
+        tenantIds
       );
       if (!allIngredientsActive) {
         return {
@@ -624,7 +624,7 @@ export async function undeprecateItem(
       for (const line of recipeLines) {
         const result = await recursivelyUndeprecateParents(
           line.parent_item_id,
-          tenantId,
+          tenantIds,
           new Set()
         );
         result.forEach((id) => undeprecatedItems.add(id));
@@ -732,7 +732,7 @@ export async function undeprecateBaseItem(
             for (const line of recipeLines) {
               const result = await recursivelyUndeprecateParents(
                 line.parent_item_id,
-                tenantId,
+                tenantIds,
                 new Set()
               );
               result.forEach((id) => undeprecatedItems.add(id));
@@ -941,7 +941,7 @@ async function recursivelyUndeprecateParents(
         for (const line of parentLines) {
           const nestedUndeprecated = await recursivelyUndeprecateParents(
             line.parent_item_id,
-            tenantId,
+            tenantIds,
             visited
           );
           nestedUndeprecated.forEach((id) => undeprecatedItems.add(id));
@@ -1022,7 +1022,7 @@ export async function autoUndeprecateAfterVendorProductCreation(
         ) {
           const result = await recursivelyUndeprecateParents(
             line.parent_item_id,
-            tenantId,
+            tenantIds,
             new Set()
           );
           result.forEach((id) => undeprecatedItems.add(id));
@@ -1054,7 +1054,7 @@ export async function autoUndeprecateAfterRecipeLineUpdate(
   try {
     const undeprecatedItems = await recursivelyUndeprecateParents(
       parentItemId,
-      tenantId,
+      tenantIds,
       new Set()
     );
 

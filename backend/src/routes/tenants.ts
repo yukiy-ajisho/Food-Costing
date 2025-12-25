@@ -125,6 +125,7 @@ router.get("/:id/members", async (req, res) => {
     }
 
     // 各メンバーのauth.users情報を取得
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const userIds = profiles.map((p) => p.user_id);
     const members = await Promise.all(
       profiles.map(async (profile) => {

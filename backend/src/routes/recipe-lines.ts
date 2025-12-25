@@ -149,7 +149,7 @@ router.post("/", async (req, res) => {
       if (line.labor_role) {
         const laborRoleValidation = await validateLaborRoleExists(
           line.labor_role,
-          req.user!.tenant_ids[0] // Phase 2で改善予定
+          req.user!.tenant_ids
         );
         if (!laborRoleValidation.valid) {
           return res.status(400).json({ error: laborRoleValidation.error });
@@ -194,6 +194,7 @@ router.post("/", async (req, res) => {
         unit: line.unit || null,
         labor_role: null,
         tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+        user_id: req.user!.id, // Required field
         minutes: null,
       };
       const existing = recipeLinesMap.get(line.parent_item_id!) || [];
@@ -222,7 +223,7 @@ router.post("/", async (req, res) => {
     // Deprecatedバリデーション
     const validation = await validateRecipeLineNotDeprecated(
       line,
-      req.user!.tenant_ids[0] // Phase 2で改善予定
+      req.user!.tenant_ids
     );
     if (!validation.valid) {
       return res.status(400).json({ error: validation.error });
@@ -251,7 +252,7 @@ router.post("/", async (req, res) => {
       );
       await autoUndeprecateAfterRecipeLineUpdate(
         line.parent_item_id,
-        req.user!.tenant_ids[0] // Phase 2で改善予定
+        req.user!.tenant_ids
       );
     }
 
@@ -348,7 +349,7 @@ router.put("/:id", async (req, res) => {
     ) {
       const laborRoleValidation = await validateLaborRoleExists(
         line.labor_role,
-        req.user!.tenant_ids[0] // Phase 2で改善予定
+        req.user!.tenant_ids
       );
       if (!laborRoleValidation.valid) {
         return res.status(400).json({ error: laborRoleValidation.error });
@@ -380,7 +381,7 @@ router.put("/:id", async (req, res) => {
       );
       await autoUndeprecateAfterRecipeLineUpdate(
         existingLine.parent_item_id,
-        req.user!.tenant_id
+        req.user!.tenant_ids
       );
     }
 
@@ -509,6 +510,7 @@ router.post("/batch", async (req, res) => {
         unit: create.unit || null,
         specific_child: create.specific_child ?? null, // nullish coalescing: null/undefinedのみnullに
         tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+        user_id: req.user!.id, // Required field
         labor_role: create.labor_role || null,
         minutes: create.minutes || null,
         created_at: undefined,
@@ -536,7 +538,7 @@ router.post("/batch", async (req, res) => {
         // Deprecatedバリデーション
         const validation = await validateRecipeLineNotDeprecated(
           create,
-          req.user!.tenant_ids[0] // Phase 2で改善予定
+          req.user!.tenant_ids
         );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
@@ -551,7 +553,7 @@ router.post("/batch", async (req, res) => {
         if (create.labor_role) {
           const laborRoleValidation = await validateLaborRoleExists(
             create.labor_role,
-            req.user!.tenant_ids[0] // Phase 2で改善予定
+            req.user!.tenant_ids
           );
           if (!laborRoleValidation.valid) {
             return res.status(400).json({ error: laborRoleValidation.error });
@@ -570,7 +572,7 @@ router.post("/batch", async (req, res) => {
         // Deprecatedバリデーション
         const validation = await validateRecipeLineNotDeprecated(
           update,
-          req.user!.tenant_ids[0] // Phase 2で改善予定
+          req.user!.tenant_ids
         );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
@@ -585,7 +587,7 @@ router.post("/batch", async (req, res) => {
         if (update.labor_role) {
           const laborRoleValidation = await validateLaborRoleExists(
             update.labor_role,
-            req.user!.tenant_ids[0] // Phase 2で改善予定
+            req.user!.tenant_ids
           );
           if (!laborRoleValidation.valid) {
             return res.status(400).json({ error: laborRoleValidation.error });
@@ -764,7 +766,7 @@ router.post("/batch", async (req, res) => {
 
     // 作成、更新、削除の影響を受けた親itemsをすべてチェック
     for (const parentId of affectedParentIds) {
-      await autoUndeprecateAfterRecipeLineUpdate(parentId, req.user!.tenant_ids[0]); // Phase 2で改善予定
+      await autoUndeprecateAfterRecipeLineUpdate(parentId, req.user!.tenant_ids);
     }
 
     res.json(results);
