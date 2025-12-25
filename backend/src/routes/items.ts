@@ -17,7 +17,7 @@ router.get("/", async (req, res) => {
     let query = supabase
       .from("items")
       .select("*")
-      .eq("tenant_id", req.user!.tenant_id);
+      .in("tenant_id", req.user!.tenant_ids);
 
     // フィルター
     if (req.query.item_kind) {
@@ -50,7 +50,7 @@ router.get("/:id", async (req, res) => {
       .from("items")
       .select("*")
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     if (error) {
@@ -82,7 +82,7 @@ router.post("/", async (req, res) => {
     // tenant_idを自動設定
     const itemWithTenantId = {
       ...item,
-      tenant_id: req.user!.tenant_id,
+      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
     };
 
     const { data, error } = await supabase
@@ -116,7 +116,7 @@ router.put("/:id", async (req, res) => {
       .from("items")
       .select("*")
       .eq("id", id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     // Prepped Itemの場合、Yieldバリデーション
@@ -138,26 +138,26 @@ router.put("/:id", async (req, res) => {
               .select("*")
               .eq("parent_item_id", id)
               .eq("line_type", "ingredient")
-              .eq("tenant_id", req.user!.tenant_id);
+              .in("tenant_id", req.user!.tenant_ids);
 
             if (recipeLines && recipeLines.length > 0) {
               // Base Itemsを取得
               const { data: baseItems } = await supabase
                 .from("base_items")
                 .select("*")
-                .eq("tenant_id", req.user!.tenant_id);
+                .in("tenant_id", req.user!.tenant_ids);
 
               // Itemsを取得
               const { data: allItems } = await supabase
                 .from("items")
                 .select("*")
-                .eq("tenant_id", req.user!.tenant_id);
+                .in("tenant_id", req.user!.tenant_ids);
 
-              // Vendor Productsを取得
+              // Virtual Vendor Productsを取得
               const { data: vendorProducts } = await supabase
-                .from("vendor_products")
+                .from("virtual_vendor_products")
                 .select("*")
-                .eq("tenant_id", req.user!.tenant_id);
+                .in("tenant_id", req.user!.tenant_ids);
 
               // マップを作成
               const baseItemsMap = new Map<string, BaseItem>();
@@ -219,14 +219,14 @@ router.put("/:id", async (req, res) => {
         .select("*")
         .eq("parent_item_id", id)
         .eq("line_type", "ingredient")
-        .eq("tenant_id", req.user!.tenant_id);
+        .in("tenant_id", req.user!.tenant_ids);
 
       if (recipeLines && recipeLines.length > 0) {
         // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
         const { data: allItems } = await supabase
           .from("items")
           .select("*")
-          .eq("tenant_id", req.user!.tenant_id);
+          .in("tenant_id", req.user!.tenant_ids);
 
         // マップを作成
         const itemsMap = new Map<string, Item>();
@@ -237,7 +237,7 @@ router.put("/:id", async (req, res) => {
           .from("recipe_lines")
           .select("*")
           .eq("line_type", "ingredient")
-          .eq("tenant_id", req.user!.tenant_id);
+          .in("tenant_id", req.user!.tenant_ids);
 
         const recipeLinesMap = new Map<string, RecipeLine[]>();
         allRecipeLines?.forEach((line) => {
@@ -250,7 +250,7 @@ router.put("/:id", async (req, res) => {
         try {
           await checkCycle(
             id,
-            req.user!.tenant_id,
+            req.user!.tenant_ids,
             new Set(),
             itemsMap,
             recipeLinesMap,
@@ -280,7 +280,7 @@ router.put("/:id", async (req, res) => {
       .from("items")
       .update(itemWithoutIds)
       .eq("id", id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .select()
       .single();
 
@@ -308,7 +308,7 @@ router.patch("/:id/deprecate", async (req, res) => {
     const { deprecatePreppedItem } = await import("../services/deprecation");
     const result = await deprecatePreppedItem(
       req.params.id,
-      req.user!.tenant_id
+      req.user!.tenant_ids
     );
 
     if (!result.success) {
@@ -335,7 +335,7 @@ router.delete("/:id", async (req, res) => {
       .from("items")
       .delete()
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id);
+      .in("tenant_id", req.user!.tenant_ids);
 
     if (error) {
       return res.status(400).json({ error: error.message });

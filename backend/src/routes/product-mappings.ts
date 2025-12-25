@@ -1,20 +1,29 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
-import { Vendor } from "../types/database";
+import { ProductMapping } from "../types/database";
 
 const router = Router();
 
 /**
- * GET /vendors
- * 全Vendorsを取得
+ * GET /product-mappings
+ * 全Product Mappingsを取得（オプション: base_item_idまたはvirtual_product_idでフィルタ）
  */
 router.get("/", async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from("vendors")
+    let query = supabase
+      .from("product_mappings")
       .select("*")
-      .in("tenant_id", req.user!.tenant_ids)
-      .order("name", { ascending: true });
+      .in("tenant_id", req.user!.tenant_ids);
+
+    // フィルター
+    if (req.query.base_item_id) {
+      query = query.eq("base_item_id", req.query.base_item_id as string);
+    }
+    if (req.query.virtual_product_id) {
+      query = query.eq("virtual_product_id", req.query.virtual_product_id as string);
+    }
+
+    const { data, error } = await query.order("created_at", { ascending: false });
 
     if (error) {
       return res.status(500).json({ error: error.message });
@@ -28,13 +37,13 @@ router.get("/", async (req, res) => {
 });
 
 /**
- * GET /vendors/:id
- * VendorをIDで取得
+ * GET /product-mappings/:id
+ * Product Mapping詳細を取得
  */
 router.get("/:id", async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from("vendors")
+      .from("product_mappings")
       .select("*")
       .eq("id", req.params.id)
       .in("tenant_id", req.user!.tenant_ids)
@@ -52,31 +61,44 @@ router.get("/:id", async (req, res) => {
 });
 
 /**
- * POST /vendors
- * Vendorを作成
+ * POST /product-mappings
+ * Product Mappingを作成
  */
 router.post("/", async (req, res) => {
   try {
-    const vendor: Partial<Vendor> = req.body;
+    const mapping: Partial<ProductMapping> = req.body;
 
     // バリデーション
-    if (!vendor.name) {
-      return res.status(400).json({ error: "name is required" });
+    if (!mapping.base_item_id || !mapping.virtual_product_id) {
+      return res.status(400).json({
+        error: "base_item_id and virtual_product_id are required",
+      });
     }
 
     // tenant_idを自動設定
-    const vendorWithTenantId = {
-      ...vendor,
+    const mappingWithTenantId = {
+      ...mapping,
       tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
     };
 
     const { data, error } = await supabase
-      .from("vendors")
-      .insert([vendorWithTenantId])
+      .from("product_mappings")
+      .insert([mappingWithTenantId])
       .select()
       .single();
 
     if (error) {
+      // unique constraint違反の場合、より分かりやすいメッセージに変換
+      if (
+        error.code === "23505" ||
+        error.message.includes("duplicate key") ||
+        error.message.includes("unique constraint")
+      ) {
+        return res.status(400).json({
+          error:
+            "A mapping between this base item and virtual product already exists for your tenant.",
+        });
+      }
       return res.status(400).json({ error: error.message });
     }
 
@@ -88,48 +110,13 @@ router.post("/", async (req, res) => {
 });
 
 /**
- * PUT /vendors/:id
- * Vendorを更新
- */
-router.put("/:id", async (req, res) => {
-  try {
-    const vendor: Partial<Vendor> = req.body;
-    const { id } = req.params;
-
-    // user_idとtenant_idを更新から除外（セキュリティのため）
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...vendorWithoutIds } = vendor;
-    const { data, error } = await supabase
-      .from("vendors")
-      .update(vendorWithoutIds)
-      .eq("id", id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    if (!data) {
-      return res.status(404).json({ error: "Vendor not found" });
-    }
-
-    res.json(data);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
-  }
-});
-
-/**
- * DELETE /vendors/:id
- * Vendorを削除
+ * DELETE /product-mappings/:id
+ * Product Mappingを削除
  */
 router.delete("/:id", async (req, res) => {
   try {
     const { error } = await supabase
-      .from("vendors")
+      .from("product_mappings")
       .delete()
       .eq("id", req.params.id)
       .in("tenant_id", req.user!.tenant_ids);
@@ -146,3 +133,5 @@ router.delete("/:id", async (req, res) => {
 });
 
 export default router;
+
+

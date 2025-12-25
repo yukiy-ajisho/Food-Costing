@@ -8,8 +8,7 @@ declare global {
     interface Request {
       user?: {
         id: string;
-        tenant_id: string | null; // GET /tenantsの場合はnullになる可能性がある
-        role: "admin" | "manager" | "staff" | null; // GET /tenantsの場合はnullになる可能性がある
+        tenant_ids: string[]; // ユーザーが属するすべてのテナントID
       };
     }
   }
@@ -62,58 +61,33 @@ export async function authMiddleware(
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
-    // リクエストヘッダーからtenant_idを取得
-    const tenantId = req.headers["x-tenant-id"] as string | undefined;
+    // ユーザーが属するすべてのテナントIDを取得
+    const { data: profiles, error: profilesError } = await supabase
+      .from("profiles")
+      .select("tenant_id")
+      .eq("user_id", user.id);
 
-    // GET /tenants エンドポイントではX-Tenant-IDをオプショナルにする
-    // req.originalUrlからクエリパラメータを除去してパス部分のみを取得
-    const pathWithoutQuery = req.originalUrl.split("?")[0];
-    const isTenantsListEndpoint =
-      req.method === "GET" && pathWithoutQuery === "/tenants";
-
-    if (!tenantId && !isTenantsListEndpoint) {
-      return res.status(400).json({
-        error: "X-Tenant-ID header is required",
+    if (profilesError) {
+      console.error("Failed to fetch user profiles:", profilesError);
+      return res.status(500).json({
+        error: "Failed to fetch user tenant information",
       });
     }
 
-    // X-Tenant-IDが指定されている場合、ユーザーがそのテナントに属しているか確認
-    if (tenantId) {
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("user_id", user.id)
-        .eq("tenant_id", tenantId)
-        .single();
+    // テナントIDの配列を取得
+    const tenantIds = profiles?.map((p) => p.tenant_id) || [];
 
-      if (profileError || !profile) {
-        console.error(
-          "Profile not found for user:",
-          user.id,
-          "tenant:",
-          tenantId,
-          profileError
-        );
-        return res.status(403).json({
-          error:
-            "User does not belong to this tenant or profile not found. Please contact administrator.",
-        });
-      }
-
-      // リクエストオブジェクトにユーザー情報を追加
-      req.user = {
-        id: user.id,
-        tenant_id: tenantId,
-        role: profile.role as "admin" | "manager" | "staff",
-      };
-    } else {
-      // GET /tenants の場合、tenant_idとroleはnullにする
-      req.user = {
-        id: user.id,
-        tenant_id: null,
-        role: null,
-      };
+    if (tenantIds.length === 0) {
+      return res.status(403).json({
+        error: "User does not belong to any tenant. Please contact administrator.",
+      });
     }
+
+    // リクエストオブジェクトにユーザー情報を追加
+    req.user = {
+      id: user.id,
+      tenant_ids: tenantIds,
+    };
 
     next();
   } catch (error) {

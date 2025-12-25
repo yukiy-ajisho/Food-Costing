@@ -13,7 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("item_unit_profiles")
       .select("*")
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .order("item_id");
 
     if (error) {
@@ -37,7 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("item_unit_profiles")
       .select("*")
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     if (error) {
@@ -79,7 +79,7 @@ router.post("/", async (req, res) => {
     // tenant_idを自動設定
     const profileWithTenantId = {
       ...profile,
-      tenant_id: req.user!.tenant_id,
+      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
     };
 
     const { data, error } = await supabase
@@ -120,7 +120,7 @@ router.put("/:id", async (req, res) => {
       .from("item_unit_profiles")
       .update(profileWithoutIds)
       .eq("id", id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .select()
       .single();
 
@@ -149,7 +149,7 @@ router.delete("/:id", async (req, res) => {
       .from("item_unit_profiles")
       .delete()
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id);
+      .in("tenant_id", req.user!.tenant_ids);
 
     if (error) {
       return res.status(400).json({ error: error.message });

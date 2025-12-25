@@ -93,12 +93,12 @@ export function buildTestMaps(data: {
     });
   }
 
-  // Vendor Products
+  // Vendor Products (Phase 1b: base_item_id removed, use product_mappings instead)
   if (data.vendorProducts) {
     data.vendorProducts.forEach((vp) => {
       vendorProductsMap.set(vp.id, {
         id: vp.id,
-        base_item_id: vp.baseItemId,
+        // base_item_id removed in Phase 1b
         vendor_id: vp.vendorId,
         product_name: vp.productName ?? null,
         brand_name: vp.brandName ?? null,
@@ -106,6 +106,7 @@ export function buildTestMaps(data: {
         purchase_quantity: vp.purchaseQuantity,
         purchase_cost: vp.purchaseCost,
         user_id: "test-user-id",
+        tenant_id: "test-tenant-id",
       });
     });
   }

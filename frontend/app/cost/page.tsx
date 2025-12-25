@@ -20,6 +20,7 @@ import {
   baseItemsAPI,
   vendorProductsAPI,
   vendorsAPI,
+  productMappingsAPI,
   proceedValidationSettingsAPI,
   saveChangeHistory,
   // getAndClearChangeHistory, // フル計算に統一するため、不要
@@ -1147,6 +1148,7 @@ export default function CostPage() {
           vendorProductsData,
           vendorsData,
           roles,
+          mappingsData,
           breakdownData,
         ] = await Promise.all([
           itemsAPI.getAll({ item_kind: "prepped" }),
@@ -1155,16 +1157,29 @@ export default function CostPage() {
           vendorProductsAPI.getAll(),
           vendorsAPI.getAll(),
           laborRolesAPI.getAll(),
+          productMappingsAPI.getAll(),
           costAPI.getCostsBreakdown().catch((error) => {
             console.error("Failed to fetch cost breakdown:", error);
             return { costs: {} };
           }),
         ]);
 
+        // product_mappingsからbase_item_idを取得するマップを作成
+        const virtualProductToBaseItemMap = new Map<string, string>();
+        mappingsData?.forEach((mapping) => {
+          virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+        });
+
+        // vendorProductsにbase_item_idを追加（表示用）
+        const vendorProductsWithBaseItemId = vendorProductsData.map((vp) => ({
+          ...vp,
+          base_item_id: virtualProductToBaseItemMap.get(vp.id) || "",
+        }));
+
         // 状態を更新
         setAvailableItems(allItems);
         setBaseItems(baseItemsData);
-        setVendorProducts(vendorProductsData);
+        setVendorProducts(vendorProductsWithBaseItemId);
         setVendors(vendorsData);
         setLaborRoles(roles);
         setCostBreakdown(breakdownData.costs);

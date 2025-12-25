@@ -13,7 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("base_items")
       .select("*")
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .order("name", { ascending: true });
 
     if (error) {
@@ -37,7 +37,7 @@ router.get("/:id", async (req, res) => {
       .from("base_items")
       .select("*")
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     if (error) {
@@ -67,7 +67,8 @@ router.post("/", async (req, res) => {
     // tenant_idを自動設定
     const baseItemWithTenantId = {
       ...baseItem,
-      tenant_id: req.user!.tenant_id,
+      // tenant_idは自動設定されないため、最初のテナントIDを使用（Phase 2で改善予定）
+      tenant_id: req.user!.tenant_ids[0],
     };
 
     const { data, error } = await supabase
@@ -103,7 +104,7 @@ router.put("/:id", async (req, res) => {
       .from("base_items")
       .update(baseItemWithoutIds)
       .eq("id", id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .select()
       .single();
 
@@ -129,13 +130,62 @@ router.put("/:id", async (req, res) => {
 router.patch("/:id/deprecate", async (req, res) => {
   try {
     const { deprecateBaseItem } = await import("../services/deprecation");
-    const result = await deprecateBaseItem(req.params.id, req.user!.tenant_id);
+    // 複数テナント対応: 最初のテナントIDを使用（Phase 2で改善予定）
+    const result = await deprecateBaseItem(req.params.id, req.user!.tenant_ids[0]);
 
     if (!result.success) {
       return res.status(400).json({ error: result.error });
     }
 
     res.json({ message: "Base item deprecated successfully" });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /base-items/:id/vendor-products
+ * Base ItemにマッピングされているVirtual Vendor Productsを取得
+ */
+router.get("/:id/vendor-products", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // product_mappings経由でvirtual_vendor_productsを取得
+    const { data: vendorProducts, error } = await supabase
+      .from("product_mappings")
+      .select(
+        `
+        virtual_product_id,
+        virtual_vendor_products (
+          id,
+          vendor_id,
+          product_name,
+          brand_name,
+          purchase_unit,
+          purchase_quantity,
+          purchase_cost,
+          deprecated,
+          tenant_id,
+          created_at,
+          updated_at
+        )
+      `
+      )
+      .eq("base_item_id", id)
+      .in("tenant_id", req.user!.tenant_ids);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    // ネストされた構造をフラット化
+    const products = vendorProducts
+      ?.map((mapping: { virtual_vendor_products: unknown }) => mapping.virtual_vendor_products)
+      .filter((p: unknown) => p !== null) || [];
+
+    res.json(products);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
@@ -152,7 +202,7 @@ router.delete("/:id", async (req, res) => {
       .from("base_items")
       .delete()
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id);
+      .in("tenant_id", req.user!.tenant_ids);
 
     if (error) {
       return res.status(400).json({ error: error.message });

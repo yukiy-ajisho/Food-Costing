@@ -152,7 +152,7 @@ export interface Vendor {
 
 export interface VendorProduct {
   id: string;
-  base_item_id: string; // FK to base_items
+  // base_item_id removed in Phase 1b - use product_mappings instead
   vendor_id: string; // FK to vendors
   product_name?: string | null; // NULL可能
   brand_name?: string | null;
@@ -161,6 +161,14 @@ export interface VendorProduct {
   purchase_cost: number;
   deprecated?: string | null; // timestamp when deprecated
   user_id: string; // FK to users
+}
+
+export interface ProductMapping {
+  id: string;
+  base_item_id: string; // FK to base_items
+  virtual_product_id: string; // FK to virtual_vendor_products
+  tenant_id: string; // FK to tenants
+  created_at?: string;
 }
 
 export interface Item {
@@ -251,16 +259,7 @@ export async function apiRequest<T>(
     ...options.headers,
   };
 
-  // tenantIdが指定されていない場合、ローカルストレージから取得を試みる
-  let finalTenantId = tenantId;
-  if (!finalTenantId && typeof window !== "undefined") {
-    finalTenantId = localStorage.getItem("current_tenant_id") || undefined;
-  }
-
-  // tenantIdが取得できた場合、X-Tenant-IDヘッダーを追加
-  if (finalTenantId) {
-    headers["X-Tenant-ID"] = finalTenantId;
-  }
+  // Phase 1a: すべてのテナントのデータを表示するため、X-Tenant-IDヘッダーは不要
 
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
@@ -439,6 +438,8 @@ export const costAPI = {
 export const baseItemsAPI = {
   getAll: () => fetchAPI<BaseItem[]>("/base-items"),
   getById: (id: string) => fetchAPI<BaseItem>(`/base-items/${id}`),
+  getVendorProducts: (baseItemId: string) =>
+    fetchAPI<VendorProduct[]>(`/base-items/${baseItemId}/vendor-products`),
   create: (baseItem: Partial<BaseItem>) =>
     fetchAPI<BaseItem>("/base-items", {
       method: "POST",
@@ -550,3 +551,25 @@ export const nonMassUnitsAPI = {
       method: "DELETE",
     }),
 };
+
+// Product Mappings API
+export const productMappingsAPI = {
+  getAll: (params?: { base_item_id?: string; virtual_product_id?: string }) => {
+    const queryParams = new URLSearchParams();
+    if (params?.base_item_id) queryParams.append("base_item_id", params.base_item_id);
+    if (params?.virtual_product_id) queryParams.append("virtual_product_id", params.virtual_product_id);
+    const query = queryParams.toString();
+    return fetchAPI<ProductMapping[]>(`/product-mappings${query ? `?${query}` : ""}`);
+  },
+  getById: (id: string) => fetchAPI<ProductMapping>(`/product-mappings/${id}`),
+  create: (mapping: Partial<ProductMapping>) =>
+    fetchAPI<ProductMapping>("/product-mappings", {
+      method: "POST",
+      body: JSON.stringify(mapping),
+    }),
+  delete: (id: string) =>
+    fetchAPI<void>(`/product-mappings/${id}`, {
+      method: "DELETE",
+    }),
+};
+

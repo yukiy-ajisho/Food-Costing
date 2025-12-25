@@ -22,7 +22,7 @@ export interface Vendor {
 
 export interface VendorProduct {
   id: string;
-  base_item_id: string; // FK to base_items
+  // base_item_id removed in Phase 1b - use product_mappings instead
   vendor_id: string; // FK to vendors
   product_name?: string | null; // NULL可能
   brand_name?: string | null;
@@ -34,6 +34,14 @@ export interface VendorProduct {
   tenant_id: string; // FK to tenants
   created_at?: string;
   updated_at?: string;
+}
+
+export interface ProductMapping {
+  id: string;
+  base_item_id: string; // FK to base_items
+  virtual_product_id: string; // FK to virtual_vendor_products
+  tenant_id: string; // FK to tenants
+  created_at?: string;
 }
 
 export interface Item {

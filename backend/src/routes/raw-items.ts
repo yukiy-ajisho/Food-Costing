@@ -13,7 +13,7 @@ router.get("/", async (req, res) => {
     const { data, error } = await supabase
       .from("base_items")
       .select("*")
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .order("name", { ascending: true });
 
     if (error) {
@@ -38,7 +38,7 @@ router.get("/:id", async (req, res) => {
       .from("base_items")
       .select("*")
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .single();
 
     if (error) {
@@ -69,7 +69,7 @@ router.post("/", async (req, res) => {
     // tenant_idを自動設定
     const baseItemWithTenantId = {
       ...baseItem,
-      tenant_id: req.user!.tenant_id,
+      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
     };
 
     const { data, error } = await supabase
@@ -106,7 +106,7 @@ router.put("/:id", async (req, res) => {
       .from("base_items")
       .update(baseItemWithoutIds)
       .eq("id", id)
-      .eq("tenant_id", req.user!.tenant_id)
+      .in("tenant_id", req.user!.tenant_ids)
       .select()
       .single();
 
@@ -132,7 +132,7 @@ router.delete("/:id", async (req, res) => {
       .from("base_items")
       .delete()
       .eq("id", req.params.id)
-      .eq("tenant_id", req.user!.tenant_id);
+      .in("tenant_id", req.user!.tenant_ids);
 
     if (error) {
       return res.status(400).json({ error: error.message });

@@ -1,13 +1,14 @@
 -- =========================================================
--- Migration: Update calculate_item_costs_with_breakdown function for tenant_id
+-- Migration: Phase 1b - Update calculate_item_costs_with_breakdown function for product_mappings
 -- =========================================================
--- This migration updates the PostgreSQL function to use tenant_id instead of user_id
+-- This migration updates the calculate_item_costs_with_breakdown function to use product_mappings
+-- bridge table instead of direct base_item_id references
 -- =========================================================
 
 -- 既存の関数を削除
 DROP FUNCTION IF EXISTS calculate_item_costs_with_breakdown(uuid);
 
--- 新しい関数を作成（p_tenant_idパラメータ付き、元のロジックを保持）
+-- 新しい関数を作成（product_mappings経由）
 CREATE OR REPLACE FUNCTION calculate_item_costs_with_breakdown(p_tenant_id uuid)
 RETURNS TABLE (
   out_item_id uuid,
@@ -38,47 +39,52 @@ BEGIN
       WHEN rl.specific_child = 'lowest' OR rl.specific_child IS NULL THEN
         (SELECT MIN(
           CASE
-            WHEN vp.purchase_unit = 'kg' THEN (vp.purchase_cost / (vp.purchase_quantity * 1000))
-            WHEN vp.purchase_unit = 'lb' THEN (vp.purchase_cost / (vp.purchase_quantity * 453.592))
-            WHEN vp.purchase_unit = 'oz' THEN (vp.purchase_cost / (vp.purchase_quantity * 28.3495))
-            WHEN vp.purchase_unit = 'g' THEN (vp.purchase_cost / vp.purchase_quantity)
-            WHEN vp.purchase_unit = 'each' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(i.each_grams, 0)))
-            WHEN vp.purchase_unit = 'gallon' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
-            WHEN vp.purchase_unit = 'liter' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
-            WHEN vp.purchase_unit = 'floz' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
-            WHEN vp.purchase_unit = 'ml' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
+            WHEN vvp.purchase_unit = 'kg' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 1000))
+            WHEN vvp.purchase_unit = 'lb' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 453.592))
+            WHEN vvp.purchase_unit = 'oz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 28.3495))
+            WHEN vvp.purchase_unit = 'g' THEN (vvp.purchase_cost / vvp.purchase_quantity)
+            WHEN vvp.purchase_unit = 'each' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(i.each_grams, 0)))
+            WHEN vvp.purchase_unit = 'gallon' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
+            WHEN vvp.purchase_unit = 'liter' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
+            WHEN vvp.purchase_unit = 'floz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
+            WHEN vvp.purchase_unit = 'ml' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
             ELSE NULL
           END
         )
-        FROM vendor_products vp
-        LEFT JOIN base_items bi ON vp.base_item_id = bi.id
-        WHERE vp.base_item_id = i.base_item_id
-          AND vp.tenant_id = p_tenant_id
+        FROM virtual_vendor_products vvp
+        JOIN product_mappings pm ON vvp.id = pm.virtual_product_id
+        JOIN base_items bi ON pm.base_item_id = bi.id
+        WHERE pm.base_item_id = i.base_item_id
+          AND pm.tenant_id = p_tenant_id
+          AND vvp.tenant_id = p_tenant_id
           AND bi.tenant_id = p_tenant_id
-          AND vp.deprecated IS NULL
-          AND vp.purchase_cost > 0
-          AND vp.purchase_quantity > 0)
+          AND vvp.deprecated IS NULL
+          AND vvp.purchase_cost > 0
+          AND vvp.purchase_quantity > 0)
       ELSE
         (SELECT
           CASE
-            WHEN vp.purchase_unit = 'kg' THEN (vp.purchase_cost / (vp.purchase_quantity * 1000))
-            WHEN vp.purchase_unit = 'lb' THEN (vp.purchase_cost / (vp.purchase_quantity * 453.592))
-            WHEN vp.purchase_unit = 'oz' THEN (vp.purchase_cost / (vp.purchase_quantity * 28.3495))
-            WHEN vp.purchase_unit = 'g' THEN (vp.purchase_cost / vp.purchase_quantity)
-            WHEN vp.purchase_unit = 'each' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(i.each_grams, 0)))
-            WHEN vp.purchase_unit = 'gallon' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
-            WHEN vp.purchase_unit = 'liter' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
-            WHEN vp.purchase_unit = 'floz' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
-            WHEN vp.purchase_unit = 'ml' THEN (vp.purchase_cost / (vp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
+            WHEN vvp.purchase_unit = 'kg' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 1000))
+            WHEN vvp.purchase_unit = 'lb' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 453.592))
+            WHEN vvp.purchase_unit = 'oz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 28.3495))
+            WHEN vvp.purchase_unit = 'g' THEN (vvp.purchase_cost / vvp.purchase_quantity)
+            WHEN vvp.purchase_unit = 'each' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(i.each_grams, 0)))
+            WHEN vvp.purchase_unit = 'gallon' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
+            WHEN vvp.purchase_unit = 'liter' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
+            WHEN vvp.purchase_unit = 'floz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
+            WHEN vvp.purchase_unit = 'ml' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
             ELSE NULL
           END
-        FROM vendor_products vp
-        LEFT JOIN base_items bi ON vp.base_item_id = bi.id
-        WHERE vp.id = rl.specific_child::uuid
-          AND vp.tenant_id = p_tenant_id
+        FROM virtual_vendor_products vvp
+        JOIN product_mappings pm ON vvp.id = pm.virtual_product_id
+        JOIN base_items bi ON pm.base_item_id = bi.id
+        WHERE vvp.id = rl.specific_child::uuid
+          AND pm.base_item_id = i.base_item_id
+          AND pm.tenant_id = p_tenant_id
+          AND vvp.tenant_id = p_tenant_id
           AND bi.tenant_id = p_tenant_id
-          AND vp.purchase_cost > 0
-          AND vp.purchase_quantity > 0)
+          AND vvp.purchase_cost > 0
+          AND vvp.purchase_quantity > 0)
     END as food_cost_per_gram,
     0::numeric as labor_cost_per_gram
   FROM items i
