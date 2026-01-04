@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { LaborRole } from "../types/database";
+import { authorizationMiddleware } from "../middleware/authorization";
+import { getCollectionResource } from "../middleware/resource-helpers";
 
 const router = Router();
 
@@ -8,7 +10,12 @@ const router = Router();
  * GET /labor-roles
  * 全役職を取得
  */
-router.get("/", async (req, res) => {
+router.get(
+  "/",
+  authorizationMiddleware("read", (req) =>
+    getCollectionResource(req, "labor_role")
+  ),
+  async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("labor_roles")

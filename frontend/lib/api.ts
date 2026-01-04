@@ -189,6 +189,7 @@ export interface Item {
   wholesale?: number | null; // wholesale price
   retail?: number | null; // retail price
   user_id: string; // FK to users
+  responsible_user_id?: string | null; // FK to users - The Manager who has the right to change access rights for this record
 }
 
 export interface RecipeLine {
@@ -225,6 +226,21 @@ export interface NonMassUnit {
   name: string;
 }
 
+// Phase 2: Authorization & Sharing
+export interface ResourceShare {
+  id: string;
+  resource_type: string; // 'vendor_item', 'base_item', 'item', etc.
+  resource_id: string;
+  owner_tenant_id: string; // FK to tenants(id)
+  target_type: "tenant" | "role" | "user";
+  target_id: string | null; // tenant_id (uuid), role名 ('admin', 'manager', 'staff'), user_id (uuid) - nullable
+  is_exclusion: boolean; // TRUE = FORBID（permitを上書き）
+  allowed_actions: string[]; // ['read'] または ['read', 'update'] - View only または Editable
+  show_history_to_shared: boolean; // 価格履歴の可視性
+  created_at?: string;
+  updated_at?: string;
+}
+
 /**
  * 認証付きAPIリクエスト
  * セッションからアクセストークンを取得してAuthorizationヘッダーに追加
@@ -259,7 +275,16 @@ export async function apiRequest<T>(
     ...options.headers,
   };
 
-  // Phase 1a: すべてのテナントのデータを表示するため、X-Tenant-IDヘッダーは不要
+  // 選択されたテナントIDを取得（LocalStorageから）
+  let selectedTenantId: string | null = null;
+  if (typeof window !== "undefined") {
+    selectedTenantId = localStorage.getItem("selectedTenantId");
+  }
+
+  // X-Tenant-IDヘッダーを追加（選択されたテナントIDがある場合）
+  if (selectedTenantId) {
+    headers["X-Tenant-ID"] = selectedTenantId;
+  }
 
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
@@ -569,6 +594,41 @@ export const productMappingsAPI = {
     }),
   delete: (id: string) =>
     fetchAPI<void>(`/product-mappings/${id}`, {
+      method: "DELETE",
+    }),
+};
+
+// Resource Shares API
+export const resourceSharesAPI = {
+  getAll: (params?: {
+    resource_type?: string;
+    resource_id?: string;
+    owner_tenant_id?: string;
+    target_type?: string;
+    target_id?: string;
+  }) => {
+    const queryParams = new URLSearchParams();
+    if (params?.resource_type) queryParams.append("resource_type", params.resource_type);
+    if (params?.resource_id) queryParams.append("resource_id", params.resource_id);
+    if (params?.owner_tenant_id) queryParams.append("owner_tenant_id", params.owner_tenant_id);
+    if (params?.target_type) queryParams.append("target_type", params.target_type);
+    if (params?.target_id) queryParams.append("target_id", params.target_id);
+    const query = queryParams.toString();
+    return fetchAPI<ResourceShare[]>(`/resource-shares${query ? `?${query}` : ""}`);
+  },
+  getById: (id: string) => fetchAPI<ResourceShare>(`/resource-shares/${id}`),
+  create: (share: Partial<ResourceShare>) =>
+    fetchAPI<ResourceShare>("/resource-shares", {
+      method: "POST",
+      body: JSON.stringify(share),
+    }),
+  update: (id: string, share: Partial<ResourceShare>) =>
+    fetchAPI<ResourceShare>(`/resource-shares/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(share),
+    }),
+  delete: (id: string) =>
+    fetchAPI<void>(`/resource-shares/${id}`, {
       method: "DELETE",
     }),
 };

@@ -2,6 +2,11 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { RecipeLine, Item } from "../types/database";
 import { checkCycle } from "../services/cycle-detection";
+import { authorizationMiddleware } from "../middleware/authorization";
+import {
+  getRecipeLineResource,
+  getCreateResource,
+} from "../middleware/resource-helpers";
 
 /**
  * Recipe Lineのバリデーション: deprecatedな材料やvendor_productを使おうとしていないかチェック
@@ -122,7 +127,12 @@ const router = Router();
  * POST /recipe-lines
  * レシピラインを作成
  */
-router.post("/", async (req, res) => {
+router.post(
+  "/",
+  authorizationMiddleware("create", (req) =>
+    getCreateResource(req, "recipe_line")
+  ),
+  async (req, res) => {
   try {
     const line: Partial<RecipeLine> = req.body;
 
@@ -267,7 +277,10 @@ router.post("/", async (req, res) => {
  * PUT /recipe-lines/:id
  * レシピラインを更新
  */
-router.put("/:id", async (req, res) => {
+router.put(
+  "/:id",
+  authorizationMiddleware("update", getRecipeLineResource),
+  async (req, res) => {
   try {
     const line: Partial<RecipeLine> = req.body;
     const { id } = req.params;
@@ -396,7 +409,10 @@ router.put("/:id", async (req, res) => {
  * DELETE /recipe-lines/:id
  * レシピラインを削除
  */
-router.delete("/:id", async (req, res) => {
+router.delete(
+  "/:id",
+  authorizationMiddleware("delete", getRecipeLineResource),
+  async (req, res) => {
   try {
     const { error } = await supabase
       .from("recipe_lines")

@@ -1,6 +1,12 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { VendorProduct } from "../types/database";
+import { authorizationMiddleware } from "../middleware/authorization";
+import {
+  getVendorProductResource,
+  getCreateResource,
+  getCollectionResource,
+} from "../middleware/resource-helpers";
 
 const router = Router();
 
@@ -8,7 +14,12 @@ const router = Router();
  * GET /vendor-products
  * 全vendor productsを取得
  */
-router.get("/", async (req, res) => {
+router.get(
+  "/",
+  authorizationMiddleware("read", (req) =>
+    getCollectionResource(req, "vendor_product")
+  ),
+  async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("virtual_vendor_products")
@@ -31,7 +42,10 @@ router.get("/", async (req, res) => {
  * GET /vendor-products/:id
  * vendor product詳細を取得
  */
-router.get("/:id", async (req, res) => {
+router.get(
+  "/:id",
+  authorizationMiddleware("read", getVendorProductResource),
+  async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("virtual_vendor_products")
@@ -56,7 +70,12 @@ router.get("/:id", async (req, res) => {
  * vendor productを作成
  * 注意: itemsレコードはBase ItemsタブでBase Itemを作成したときに既に作成されている
  */
-router.post("/", async (req, res) => {
+router.post(
+  "/",
+  authorizationMiddleware("create", (req) =>
+    getCreateResource(req, "vendor_product")
+  ),
+  async (req, res) => {
   try {
     const vendorProduct: Partial<VendorProduct> = req.body;
 
@@ -131,7 +150,10 @@ router.post("/", async (req, res) => {
  * PUT /vendor-products/:id
  * vendor productを更新
  */
-router.put("/:id", async (req, res) => {
+router.put(
+  "/:id",
+  authorizationMiddleware("update", getVendorProductResource),
+  async (req, res) => {
   try {
     const vendorProduct: Partial<VendorProduct> = req.body;
     const { id } = req.params;
@@ -200,7 +222,10 @@ router.patch("/:id/deprecate", async (req, res) => {
  * DELETE /vendor-products/:id
  * vendor productを削除（物理削除は危険なので非推奨、deprecateを使用してください）
  */
-router.delete("/:id", async (req, res) => {
+router.delete(
+  "/:id",
+  authorizationMiddleware("delete", getVendorProductResource),
+  async (req, res) => {
   try {
     const { error } = await supabase
       .from("virtual_vendor_products")

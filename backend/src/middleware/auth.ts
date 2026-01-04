@@ -9,6 +9,8 @@ declare global {
       user?: {
         id: string;
         tenant_ids: string[]; // ユーザーが属するすべてのテナントID
+        roles: Map<string, string>; // tenant_id -> role のマッピング（Phase 2: RBAC用）
+        selected_tenant_id?: string; // 選択されたテナントID（テナント切り替えフィルター用）
       };
     }
   }
@@ -61,10 +63,10 @@ export async function authMiddleware(
       return res.status(401).json({ error: "Invalid or expired token" });
     }
 
-    // ユーザーが属するすべてのテナントIDを取得
+    // ユーザーが属するすべてのテナントIDとロールを取得（Phase 2: RBAC用）
     const { data: profiles, error: profilesError } = await supabase
       .from("profiles")
-      .select("tenant_id")
+      .select("tenant_id, role")
       .eq("user_id", user.id);
 
     if (profilesError) {
@@ -83,10 +85,34 @@ export async function authMiddleware(
       });
     }
 
+    // tenant_id -> role のマッピングを作成（Phase 2: RBAC用）
+    const rolesMap = new Map<string, string>();
+    profiles?.forEach((p) => {
+      rolesMap.set(p.tenant_id, p.role);
+    });
+
+    // X-Tenant-IDヘッダーから選択されたテナントIDを取得
+    const selectedTenantIdHeader = req.headers["x-tenant-id"] as string | undefined;
+    let selectedTenantId: string | undefined = undefined;
+
+    if (selectedTenantIdHeader) {
+      // ユーザーがそのテナントに属しているか確認
+      if (tenantIds.includes(selectedTenantIdHeader)) {
+        selectedTenantId = selectedTenantIdHeader;
+      } else {
+        // 無効なテナントIDが指定された場合はエラー
+        return res.status(403).json({
+          error: "User does not belong to the specified tenant",
+        });
+      }
+    }
+
     // リクエストオブジェクトにユーザー情報を追加
     req.user = {
       id: user.id,
       tenant_ids: tenantIds,
+      roles: rolesMap, // Phase 2: RBAC用
+      selected_tenant_id: selectedTenantId, // テナント切り替えフィルター用
     };
 
     next();

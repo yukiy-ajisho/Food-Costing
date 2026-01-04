@@ -125,18 +125,38 @@ router.get("/:id/members", async (req, res) => {
     }
 
     // 各メンバーのauth.users情報を取得
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const userIds = profiles.map((p) => p.user_id);
     const members = await Promise.all(
       profiles.map(async (profile) => {
-        // auth.usersからユーザー情報を取得（Service roleが必要）
-        // 注意: 通常のSupabaseクライアントではauth.usersに直接アクセスできない
-        // RPC関数を使用するか、別の方法を検討する必要がある
-        // ここでは一時的にuser_idのみを返す
+        // auth.usersからユーザー情報を取得（Service role keyを使用）
+        const { data: authUser, error: authError } =
+          await supabase.auth.admin.getUserById(profile.user_id);
+
+        // ユーザー情報が取得できない場合は、基本情報のみ返す
+        if (authError || !authUser?.user) {
+          return {
+            user_id: profile.user_id,
+            role: profile.role,
+            member_since: profile.created_at,
+            name: undefined,
+            email: undefined,
+          };
+        }
+
+        // user_metadataから名前を取得（full_name, nameの順で確認）
+        const name =
+          authUser.user.user_metadata?.full_name ||
+          authUser.user.user_metadata?.name ||
+          undefined;
+
+        // メールアドレスを取得
+        const email = authUser.user.email || undefined;
+
         return {
           user_id: profile.user_id,
           role: profile.role,
           member_since: profile.created_at,
+          name,
+          email,
         };
       })
     );
@@ -183,7 +203,9 @@ router.put("/:id", async (req, res) => {
       .single();
 
     if (tenantError || !tenant) {
-      return res.status(500).json({ error: tenantError?.message || "Failed to update tenant" });
+      return res
+        .status(500)
+        .json({ error: tenantError?.message || "Failed to update tenant" });
     }
 
     res.json(tenant);
@@ -289,4 +311,3 @@ router.delete("/:id/members/:userId", async (req, res) => {
 });
 
 export default router;
-

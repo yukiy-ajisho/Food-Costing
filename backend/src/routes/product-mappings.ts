@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { ProductMapping } from "../types/database";
+import { authorizationMiddleware } from "../middleware/authorization";
+import { getCollectionResource } from "../middleware/resource-helpers";
 
 const router = Router();
 
@@ -8,7 +10,12 @@ const router = Router();
  * GET /product-mappings
  * 全Product Mappingsを取得（オプション: base_item_idまたはvirtual_product_idでフィルタ）
  */
-router.get("/", async (req, res) => {
+router.get(
+  "/",
+  authorizationMiddleware("read", (req) =>
+    getCollectionResource(req, "product_mapping")
+  ),
+  async (req, res) => {
   try {
     let query = supabase
       .from("product_mappings")

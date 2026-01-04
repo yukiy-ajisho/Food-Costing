@@ -59,15 +59,15 @@ router.post("/items/costs", async (req, res) => {
     // 注意: 現在のPostgreSQL関数は単一テナント対応のため、各テナントで個別に呼び出し
     const allCosts: Record<string, number> = {};
     for (const tenantId of req.user!.tenant_ids) {
-      const { data, error } = await supabase.rpc("calculate_item_costs", {
+    const { data, error } = await supabase.rpc("calculate_item_costs", {
         p_tenant_id: tenantId,
-        p_item_ids: item_ids.length > 0 ? item_ids : null,
-      });
+      p_item_ids: item_ids.length > 0 ? item_ids : null,
+    });
 
-      if (error) {
+    if (error) {
         console.error(`Error calculating costs for tenant ${tenantId}:`, error);
         continue;
-      }
+    }
 
       if (data && Array.isArray(data)) {
         for (const row of data) {
@@ -184,14 +184,14 @@ router.get("/items/costs/breakdown", async (req, res) => {
       }
 
       if (data && Array.isArray(data)) {
-        for (const row of data) {
+    for (const row of data) {
           // 複数テナントで同じitem_idがある場合、最初に見つかったものを使用
           if (!(row.out_item_id in allCosts)) {
             allCosts[row.out_item_id] = {
-              food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
-              labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
-              total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
-            };
+        food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
+        labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
+        total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
+      };
           }
         }
       }
