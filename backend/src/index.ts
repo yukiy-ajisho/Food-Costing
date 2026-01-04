@@ -5,6 +5,7 @@ require("dotenv").config();
 import express from "express";
 import cors from "cors";
 import { authMiddleware } from "./middleware/auth";
+import { initializeAuthorizer } from "./authz/authorize";
 import itemsRouter from "./routes/items";
 import recipeLinesRouter from "./routes/recipe-lines";
 import recipeLinesItemsRouter from "./routes/recipe-lines-items";
@@ -18,6 +19,16 @@ import itemUnitProfilesRouter from "./routes/item-unit-profiles";
 import proceedValidationSettingsRouter from "./routes/proceed-validation-settings";
 import tenantsRouter from "./routes/tenants";
 import productMappingsRouter from "./routes/product-mappings";
+import resourceSharesRouter from "./routes/resource-shares";
+
+// Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
+try {
+  initializeAuthorizer();
+} catch (error) {
+  console.error("Failed to initialize Cedar Authorizer:", error);
+  // 認可エンジンの初期化失敗は致命的なので、サーバーを起動しない
+  process.exit(1);
+}
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -56,6 +67,7 @@ app.use(
 );
 app.use("/tenants", authMiddleware, tenantsRouter);
 app.use("/product-mappings", authMiddleware, productMappingsRouter);
+app.use("/resource-shares", authMiddleware, resourceSharesRouter);
 
 // サーバー起動
 app.listen(PORT, () => {

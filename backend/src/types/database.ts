@@ -61,6 +61,7 @@ export interface Item {
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   user_id: string; // FK to users (deprecated, use tenant_id)
   tenant_id: string; // FK to tenants
+  responsible_user_id?: string | null; // FK to users - The Manager who has the right to change access rights for this record
   created_at?: string;
   updated_at?: string;
 }
@@ -132,5 +133,32 @@ export interface Profile {
   user_id: string; // FK to public.users(id)
   tenant_id: string; // FK to tenants(id)
   role: "admin" | "manager" | "staff";
+  created_at?: string;
+}
+
+// Phase 2: Authorization & Sharing
+export interface ResourceShare {
+  id: string;
+  resource_type: string; // 'vendor_item', 'base_item', 'item', etc.
+  resource_id: string;
+  owner_tenant_id: string; // FK to tenants(id)
+  target_type: "tenant" | "role" | "user";
+  target_id: string | null; // tenant_id (uuid), role名 ('admin', 'manager', 'staff'), user_id (uuid) - nullable
+  is_exclusion: boolean; // TRUE = FORBID（permitを上書き）
+  allowed_actions: string[]; // ['read'] または ['read', 'update'] - View only または Editable
+  show_history_to_shared: boolean; // 価格履歴の可視性
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface HistoryLog {
+  id: string;
+  resource_type: string; // 'vendor_item', 'base_item', 'item', etc.
+  resource_id: string;
+  action: "create" | "update" | "delete";
+  changed_fields?: Record<string, unknown> | null; // JSONB
+  changed_by: string; // FK to users(id)
+  tenant_id: string; // FK to tenants(id)
+  visibility: "internal" | "shared";
   created_at?: string;
 }

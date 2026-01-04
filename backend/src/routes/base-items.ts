@@ -1,6 +1,12 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { BaseItem } from "../types/database";
+import { authorizationMiddleware } from "../middleware/authorization";
+import {
+  getBaseItemResource,
+  getCreateResource,
+  getCollectionResource,
+} from "../middleware/resource-helpers";
 
 const router = Router();
 
@@ -8,7 +14,12 @@ const router = Router();
  * GET /base-items
  * 全Base Itemsを取得
  */
-router.get("/", async (req, res) => {
+router.get(
+  "/",
+  authorizationMiddleware("read", (req) =>
+    getCollectionResource(req, "base_item")
+  ),
+  async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("base_items")
@@ -31,7 +42,10 @@ router.get("/", async (req, res) => {
  * GET /base-items/:id
  * Base ItemをIDで取得
  */
-router.get("/:id", async (req, res) => {
+router.get(
+  "/:id",
+  authorizationMiddleware("read", getBaseItemResource),
+  async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("base_items")
@@ -55,7 +69,10 @@ router.get("/:id", async (req, res) => {
  * POST /base-items
  * Base Itemを作成
  */
-router.post("/", async (req, res) => {
+router.post(
+  "/",
+  authorizationMiddleware("create", (req) => getCreateResource(req, "base_item")),
+  async (req, res) => {
   try {
     const baseItem: Partial<BaseItem> = req.body;
 
@@ -92,7 +109,10 @@ router.post("/", async (req, res) => {
  * PUT /base-items/:id
  * Base Itemを更新
  */
-router.put("/:id", async (req, res) => {
+router.put(
+  "/:id",
+  authorizationMiddleware("update", getBaseItemResource),
+  async (req, res) => {
   try {
     const baseItem: Partial<BaseItem> = req.body;
     const { id } = req.params;
@@ -196,7 +216,10 @@ router.get("/:id/vendor-products", async (req, res) => {
  * DELETE /base-items/:id
  * Base Itemを削除（物理削除は危険なので非推奨、deprecateを使用してください）
  */
-router.delete("/:id", async (req, res) => {
+router.delete(
+  "/:id",
+  authorizationMiddleware("delete", getBaseItemResource),
+  async (req, res) => {
   try {
     const { error } = await supabase
       .from("base_items")

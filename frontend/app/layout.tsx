@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import "./globals.css";
 import { Layout } from "@/components/Layout";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { TenantProvider } from "@/contexts/TenantContext";
 
 export const metadata: Metadata = {
   title: "Food Costing",
@@ -22,7 +23,13 @@ export default async function RootLayout({
     <html lang="en">
       <body>
         <ThemeProvider>
-          {isLoginPage ? children : <Layout>{children}</Layout>}
+          {isLoginPage ? (
+            children
+          ) : (
+            <TenantProvider>
+              <Layout>{children}</Layout>
+            </TenantProvider>
+          )}
         </ThemeProvider>
       </body>
     </html>

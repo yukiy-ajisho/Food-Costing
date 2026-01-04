@@ -392,7 +392,7 @@ async function deprecateItemCascade(
     .from("recipe_lines")
     .select("parent_item_id")
     .eq("line_type", "ingredient")
-      .eq("child_item_id", itemId)
+    .eq("child_item_id", itemId)
       .in("tenant_id", tenantIds);
 
   if (plError || !parentLines) {

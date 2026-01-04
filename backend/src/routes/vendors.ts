@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { Vendor } from "../types/database";
+import { authorizationMiddleware } from "../middleware/authorization";
+import { getCollectionResource } from "../middleware/resource-helpers";
 
 const router = Router();
 
@@ -8,7 +10,12 @@ const router = Router();
  * GET /vendors
  * 全Vendorsを取得
  */
-router.get("/", async (req, res) => {
+router.get(
+  "/",
+  authorizationMiddleware("read", (req) =>
+    getCollectionResource(req, "vendor")
+  ),
+  async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("vendors")

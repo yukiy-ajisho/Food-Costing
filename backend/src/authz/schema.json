@@ -1,0 +1,140 @@
+{
+  "": {
+    "entityTypes": {
+      "User": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            },
+            "tenant_id": {
+              "type": "String",
+              "required": true
+            },
+            "role": {
+              "type": "String",
+              "required": true
+            }
+          }
+        }
+      },
+      "Resource": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            },
+            "resource_type": {
+              "type": "String",
+              "required": true
+            },
+            "owner_tenant_id": {
+              "type": "String",
+              "required": true
+            },
+            "is_virtual": {
+              "type": "Boolean",
+              "required": false
+            },
+            "item_kind": {
+              "type": "String",
+              "required": false
+            },
+            "user_id": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "read": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Resource"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": {
+                "type": "Boolean",
+                "required": false
+              },
+              "is_shared": {
+                "type": "Boolean",
+                "required": false
+              }
+            }
+          }
+        }
+      },
+      "create": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Resource"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": {
+                "type": "Boolean",
+                "required": false
+              },
+              "is_shared": {
+                "type": "Boolean",
+                "required": false
+              }
+            }
+          }
+        }
+      },
+      "update": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Resource"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": {
+                "type": "Boolean",
+                "required": false
+              },
+              "is_shared": {
+                "type": "Boolean",
+                "required": false
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Resource"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": {
+                "type": "Boolean",
+                "required": false
+              },
+              "is_shared": {
+                "type": "Boolean",
+                "required": false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

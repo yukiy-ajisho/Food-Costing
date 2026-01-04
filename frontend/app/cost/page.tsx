@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Search,
   X,
+  Share2,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import {
@@ -22,6 +23,8 @@ import {
   vendorsAPI,
   productMappingsAPI,
   proceedValidationSettingsAPI,
+  resourceSharesAPI,
+  apiRequest,
   saveChangeHistory,
   // getAndClearChangeHistory, // フル計算に統一するため、不要
   type Item,
@@ -30,6 +33,7 @@ import {
   type BaseItem,
   type VendorProduct,
   type Vendor,
+  type ResourceShare,
 } from "@/lib/api";
 import {
   MASS_UNIT_CONVERSIONS,
@@ -40,6 +44,8 @@ import {
   isMassUnit,
 } from "@/lib/constants";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useUser } from "@/hooks/useUser";
+import { useTenant } from "@/contexts/TenantContext";
 
 // Recipe Lineの型定義（UI用）
 interface RecipeLine {
@@ -80,6 +86,8 @@ interface PreppedItem {
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   wholesale?: number | null; // wholesale price
   retail?: number | null; // retail price
+  user_id?: string; // 作成者のユーザーID
+  responsible_user_id?: string | null; // 責任者のユーザーID（アクセス権を変更できるManager）
 }
 
 // 単位のオプション（順番を制御）
@@ -1076,6 +1084,8 @@ function AddItemModal({
 
 export default function CostPage() {
   const { theme } = useTheme();
+  const { user, loading: userLoading } = useUser();
+  const { selectedTenantId } = useTenant();
   const isDark = theme === "dark";
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
@@ -1083,9 +1093,27 @@ export default function CostPage() {
   const [vendorProducts, setVendorProducts] = useState<VendorProductUI[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
-  const [isEditMode, setIsEditMode] = useState(false);
+  // モード管理
+  const [activeMode, setActiveMode] = useState<"costing" | "access-control">(
+    "costing"
+  );
+  // Costingモードの編集状態（既存のisEditModeをリネーム）
+  const [isEditModeCosting, setIsEditModeCosting] = useState(false);
+  // Access Controlモードの編集状態
+  const [isEditModeAccessControl, setIsEditModeAccessControl] = useState(false);
   const [originalItems, setOriginalItems] = useState<PreppedItem[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  // 共有設定の一時的な変更（Editモード用）
+  const [pendingShareChanges, setPendingShareChanges] = useState<
+    Map<string, "hide" | "view-only" | "editable">
+  >(new Map());
+  // 責任者変更（Adminのみ、item.id -> responsible_user_id）
+  const [pendingResponsibleUserChanges, setPendingResponsibleUserChanges] =
+    useState<Map<string, string>>(new Map());
+  // 共有設定の元の状態（Cancel用）
+  const [originalItemShares, setOriginalItemShares] = useState<
+    Map<string, ResourceShare | null>
+  >(new Map());
   const [searchTerm, setSearchTerm] = useState("");
   const [appliedSearchTerm, setAppliedSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
@@ -1137,6 +1165,25 @@ export default function CostPage() {
   // 固定ヘッダーセクションの高さを取得するためのref
   const fixedHeaderRef = useRef<HTMLDivElement>(null);
   const [fixedHeaderHeight, setFixedHeaderHeight] = useState(0);
+  // ユーザーのロール（現在のテナントでのロール）
+  const [userRole, setUserRole] = useState<
+    "admin" | "manager" | "staff" | null
+  >(null);
+  // 現在のユーザーID
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  // 各アイテムの共有設定（item.id -> ResourceShare | null）
+  const [itemShares, setItemShares] = useState<
+    Map<string, ResourceShare | null>
+  >(new Map());
+  // マネージャーのリスト（責任者選択用）
+  const [managers, setManagers] = useState<
+    Array<{
+      user_id: string;
+      role: string;
+      name?: string;
+      email?: string;
+    }>
+  >([]);
 
   // データ取得
   useEffect(() => {
@@ -1172,7 +1219,10 @@ export default function CostPage() {
         // product_mappingsからbase_item_idを取得するマップを作成
         const virtualProductToBaseItemMap = new Map<string, string>();
         mappingsData?.forEach((mapping) => {
-          virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+          virtualProductToBaseItemMap.set(
+            mapping.virtual_product_id,
+            mapping.base_item_id
+          );
         });
 
         // vendorProductsにbase_item_idを追加（表示用）
@@ -1188,6 +1238,87 @@ export default function CostPage() {
         setVendors(vendorsData);
         setLaborRoles(roles);
         setCostBreakdown(breakdownData.costs);
+
+        // ユーザーのロールを取得
+        try {
+          const tenantsData = await apiRequest<{
+            tenants: Array<{
+              id: string;
+              name: string;
+              type: string;
+              created_at: string;
+              role: string;
+            }>;
+          }>("/tenants");
+
+          if (tenantsData.tenants && tenantsData.tenants.length > 0) {
+            // 最初のテナントのロールを使用
+            const role = tenantsData.tenants[0].role as
+              | "admin"
+              | "manager"
+              | "staff";
+            setUserRole(role);
+
+            // Adminの場合、Prepped Itemsの共有設定を取得
+            if (role === "admin") {
+              const preppedItemIds = preppedItems.map((item) => item.id);
+              if (preppedItemIds.length > 0) {
+                try {
+                  // 一括取得（パフォーマンス最適化）
+                  const allShares = await resourceSharesAPI.getAll({
+                    resource_type: "item",
+                    // resource_idを指定しない → 全件取得
+                    target_type: "role",
+                    target_id: "manager",
+                  });
+
+                  // フロントエンドでitemIdでフィルタリングしてMapに保存
+                  const sharesMap = new Map<string, ResourceShare | null>();
+                  preppedItemIds.forEach((itemId) => {
+                    const share =
+                      allShares
+                        .filter((s) => s.resource_id === itemId)
+                        .find((s) => s.is_exclusion === false) || null;
+                    sharesMap.set(itemId, share);
+                  });
+                  setItemShares(sharesMap);
+                } catch (error) {
+                  console.error("Failed to fetch shares:", error);
+                  // エラー時は空のMapを設定
+                  setItemShares(new Map());
+                }
+
+                // マネージャーのリストを取得（責任者選択用）
+                try {
+                  const currentTenantId =
+                    selectedTenantId || tenantsData.tenants[0]?.id;
+                  if (currentTenantId) {
+                    const membersData = await apiRequest<{
+                      members: Array<{
+                        user_id: string;
+                        role: string;
+                        member_since: string;
+                        name?: string;
+                        email?: string;
+                      }>;
+                    }>(`/tenants/${currentTenantId}/members`);
+
+                    // Managerロールのユーザーのみをフィルタリング
+                    const managerList = (membersData.members || []).filter(
+                      (member) => member.role === "manager"
+                    );
+                    setManagers(managerList);
+                  }
+                } catch (error) {
+                  console.error("Failed to fetch managers:", error);
+                  setManagers([]);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Failed to fetch user role:", error);
+        }
 
         // 全アイテムのIDを取得
         const itemIds = preppedItems.map((item) => item.id);
@@ -1232,6 +1363,8 @@ export default function CostPage() {
               is_menu_item: item.is_menu_item,
               proceed_yield_amount: item.proceed_yield_amount || 0,
               proceed_yield_unit: item.proceed_yield_unit || "g",
+              user_id: item.user_id,
+              responsible_user_id: item.responsible_user_id,
               recipe_lines: recipeLines.map((line) => {
                 // specific_childの処理: Raw Itemの場合、nullを"lowest"に変換
                 let specificChild = line.specific_child || null;
@@ -1278,20 +1411,249 @@ export default function CostPage() {
     };
 
     fetchData();
-  }, []);
+  }, [selectedTenantId]); // テナント切り替え時にデータを再取得
 
-  // Editモード切り替え
+  // 現在のユーザーIDを設定（userが取得できた後に設定）
+  useEffect(() => {
+    if (user?.id) {
+      setCurrentUserId(user.id);
+    } else {
+      setCurrentUserId(null);
+    }
+  }, [user]);
+
+  // モード切り替えハンドラー
+  const handleModeChange = async (newMode: "costing" | "access-control") => {
+    if (activeMode !== newMode) {
+      // 編集中の場合はリセット（警告なし、後で追加可能）
+      setIsEditModeCosting(false);
+      setIsEditModeAccessControl(false);
+      setPendingShareChanges(new Map());
+      setActiveMode(newMode);
+
+      // Access Controlモードに切り替える場合のみ、共有設定を再取得
+      if (newMode === "access-control") {
+        await refreshItemShares();
+      }
+    }
+  };
+
+  // 共有設定の再取得（Access Controlモード用）
+  const refreshItemShares = async () => {
+    try {
+      const preppedItemIds = items
+        .filter((item) => item.item_kind === "prepped")
+        .map((item) => item.id);
+
+      if (preppedItemIds.length > 0) {
+        // 一括取得（パフォーマンス最適化）
+        const allShares = await resourceSharesAPI.getAll({
+          resource_type: "item",
+          // resource_idを指定しない → 全件取得
+          target_type: "role",
+          target_id: "manager",
+        });
+
+        // フロントエンドでitemIdでフィルタリングしてMapに保存
+        const sharesMap = new Map<string, ResourceShare | null>();
+        preppedItemIds.forEach((itemId) => {
+          const share =
+            allShares
+              .filter((s) => s.resource_id === itemId)
+              .find((s) => s.is_exclusion === false) || null;
+          sharesMap.set(itemId, share);
+        });
+        setItemShares(sharesMap);
+      }
+    } catch (error) {
+      console.error("Failed to refresh item shares:", error);
+      // エラー時は空のMapを設定
+      setItemShares(new Map());
+    }
+  };
+
+  // CostingモードのEditモード切り替え
   const handleEditClick = () => {
     // 現在の状態を保存
     setOriginalItems(JSON.parse(JSON.stringify(items)));
-    setIsEditMode(true);
+    setIsEditModeCosting(true);
   };
 
-  // Cancel処理
+  // CostingモードのCancel処理
   const handleCancelClick = () => {
     // 元の状態に戻す
     setItems(JSON.parse(JSON.stringify(originalItems)));
-    setIsEditMode(false);
+    setIsEditModeCosting(false);
+  };
+
+  // Access ControlモードのEditモード切り替え
+  const handleAccessControlEditClick = () => {
+    // 現在の共有設定を保存
+    setOriginalItemShares(new Map(itemShares));
+    setPendingShareChanges(new Map());
+    setPendingResponsibleUserChanges(new Map());
+    setIsEditModeAccessControl(true);
+  };
+
+  // Access ControlモードのCancel処理
+  const handleAccessControlCancelClick = () => {
+    // 元の共有設定に戻す
+    setItemShares(new Map(originalItemShares));
+    setPendingShareChanges(new Map());
+    setPendingResponsibleUserChanges(new Map());
+    setIsEditModeAccessControl(false);
+  };
+
+  // Access ControlモードのSave処理
+  const handleAccessControlSaveClick = async () => {
+    setLoading(true);
+    try {
+      // pendingShareChangesを順次保存
+      for (const [itemId, shareType] of pendingShareChanges.entries()) {
+        const item = items.find((i) => i.id === itemId);
+        if (!item || !canChangeAccessControl(item)) continue;
+
+        const existingShare = itemShares.get(itemId);
+
+        if (shareType === "hide") {
+          // Hideを選択した場合 → allowed_actionsを空にする（レコードは残す）
+          if (existingShare) {
+            // 既存の共有設定を更新して、allowed_actionsを空にする
+            await resourceSharesAPI.update(existingShare.id, {
+              allowed_actions: [],
+            });
+            setItemShares((prev) => {
+              const next = new Map(prev);
+              next.set(itemId, {
+                ...existingShare,
+                allowed_actions: [],
+              });
+              return next;
+            });
+          } else {
+            // レコードが存在しない場合は作成（hide状態 = allowed_actionsが空）
+            const newShare = await resourceSharesAPI.create({
+              resource_type: "item",
+              resource_id: itemId,
+              target_type: "role",
+              target_id: "manager",
+              allowed_actions: [],
+              is_exclusion: false,
+              show_history_to_shared: false,
+            });
+            setItemShares((prev) => {
+              const next = new Map(prev);
+              next.set(itemId, newShare);
+              return next;
+            });
+          }
+        } else {
+          // ViewまたはEditを選択した場合
+          const allowedActions =
+            shareType === "view-only" ? ["read"] : ["read", "update"];
+
+          if (existingShare) {
+            // 既存の共有設定を更新
+            await resourceSharesAPI.update(existingShare.id, {
+              allowed_actions: allowedActions,
+            });
+            setItemShares((prev) => {
+              const next = new Map(prev);
+              next.set(itemId, {
+                ...existingShare,
+                allowed_actions: allowedActions,
+              });
+              return next;
+            });
+          } else {
+            // 新規作成
+            const newShare = await resourceSharesAPI.create({
+              resource_type: "item",
+              resource_id: itemId,
+              target_type: "role",
+              target_id: "manager",
+              allowed_actions: allowedActions,
+              is_exclusion: false,
+              show_history_to_shared: false,
+            });
+
+            setItemShares((prev) => {
+              const next = new Map(prev);
+              next.set(itemId, newShare);
+              return next;
+            });
+          }
+        }
+      }
+
+      // 責任者変更を処理（Adminのみ）
+      if (userRole === "admin") {
+        for (const [
+          itemId,
+          responsibleUserId,
+        ] of pendingResponsibleUserChanges.entries()) {
+          const item = items.find((i) => i.id === itemId);
+          if (!item) continue;
+
+          // responsibleUserIdが空文字列の場合は、既存の値を維持
+          const finalResponsibleUserId =
+            responsibleUserId || item.responsible_user_id;
+
+          // itemsテーブルのresponsible_user_idを更新
+          await itemsAPI.update(itemId, {
+            responsible_user_id: finalResponsibleUserId,
+          });
+
+          // ローカル状態も更新
+          setItems((prev) =>
+            prev.map((i) =>
+              i.id === itemId
+                ? { ...i, responsible_user_id: finalResponsibleUserId }
+                : i
+            )
+          );
+        }
+      }
+
+      // 保存完了後、pendingShareChangesとpendingResponsibleUserChangesをクリア
+      setPendingShareChanges(new Map());
+      setPendingResponsibleUserChanges(new Map());
+      setIsEditModeAccessControl(false);
+    } catch (error) {
+      console.error("Failed to save share settings:", error);
+      alert("共有設定の保存に失敗しました");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // アイテムのコントロール権を変更できるかチェック
+  const canChangeAccessControl = (item: PreppedItem): boolean => {
+    if (!currentUserId) return false;
+    if (userRole === "admin") return true;
+    if (userRole !== "manager") return false;
+    // 作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
+    const isCreatorAndResponsible =
+      item.user_id === currentUserId &&
+      item.responsible_user_id === currentUserId;
+    const isResponsibleUser = item.responsible_user_id === currentUserId;
+    return isCreatorAndResponsible || isResponsibleUser;
+  };
+
+  // 共有設定の一時的な変更（Editモード用）
+  const handleShareChangePending = (
+    itemId: string,
+    shareType: "hide" | "view-only" | "editable"
+  ) => {
+    if (!isEditModeAccessControl) return;
+    const item = items.find((i) => i.id === itemId);
+    if (!item || !canChangeAccessControl(item)) return;
+
+    setPendingShareChanges((prev) => {
+      const next = new Map(prev);
+      next.set(itemId, shareType);
+      return next;
+    });
   };
 
   // 単位と数量をグラムに変換（フロントエンド用）
@@ -2181,7 +2543,7 @@ export default function CostPage() {
         // costBreakdownの更新失敗は警告のみ（コスト表示には影響しないが、パーセンテージ計算に影響する）
       }
 
-      setIsEditMode(false);
+      setIsEditModeCosting(false);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       // サイクル検出エラーはユーザーに既に通知済みのため、コンソール出力をスキップ
@@ -2430,8 +2792,8 @@ export default function CostPage() {
     setIsAddModalOpen(false);
 
     // Editモードを有効化（performSaveが正常に動作するため）
-    if (!isEditMode) {
-      setIsEditMode(true);
+    if (!isEditModeCosting && activeMode === "costing") {
+      setIsEditModeCosting(true);
       // originalItemsを更新（新規アイテムを含む）
       setOriginalItems(JSON.parse(JSON.stringify(updatedItems)));
     }
@@ -2679,7 +3041,7 @@ export default function CostPage() {
       }
       mutationObserver.disconnect();
     };
-  }, [loading, isEditMode, searchTerm, typeFilter]);
+  }, [loading, isEditModeCosting, activeMode, searchTerm, typeFilter]);
 
   // availableItemsをSearchableSelect用の形式に変換
   // Ingredient選択用のフィルタリング関数
@@ -2734,6 +3096,10 @@ export default function CostPage() {
 
   // 検索・フィルター処理
   const filteredItems = items.filter((item) => {
+    // Access ControlモードではPrepped Itemsのみ表示
+    if (activeMode === "access-control" && item.item_kind !== "prepped") {
+      return false;
+    }
     // 検索（Name）
     if (appliedSearchTerm.trim() !== "") {
       if (
@@ -2782,37 +3148,108 @@ export default function CostPage() {
             isDark ? "bg-slate-900" : "bg-gray-50"
           }`}
         >
+          {/* タブ */}
+          <div
+            className={`mb-6 border-b transition-colors ${
+              isDark ? "border-slate-700" : "border-gray-200"
+            }`}
+          >
+            <nav className="flex space-x-8">
+              <button
+                onClick={() => handleModeChange("costing")}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeMode === "costing"
+                    ? "border-blue-500 text-blue-600"
+                    : isDark
+                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
+              >
+                Costing
+              </button>
+              <button
+                onClick={() => handleModeChange("access-control")}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeMode === "access-control"
+                    ? "border-blue-500 text-blue-600"
+                    : isDark
+                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
+              >
+                Access Control
+              </button>
+            </nav>
+          </div>
+
           {/* ヘッダーとEdit/Save/Cancelボタン */}
           <div className="flex justify-between items-center mb-6 gap-2">
-            {/* Addボタン（左側、常に表示、非Editモード時のみ有効） */}
-            <button
-              onClick={handleAddButtonClick}
-              disabled={isEditMode}
-              className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
-                !isEditMode
-                  ? "bg-green-600 text-white hover:bg-green-700"
-                  : isDark
-                  ? "bg-slate-700 text-slate-400 cursor-not-allowed"
-                  : "bg-gray-300 text-gray-400 cursor-not-allowed"
-              }`}
-            >
-              <Plus className="w-5 h-5" />
-              Add
-            </button>
+            {/* 左側: Addボタン（Costingモードのみ）または空のdiv（Access Controlモード） */}
+            {activeMode === "costing" ? (
+              <button
+                onClick={handleAddButtonClick}
+                disabled={isEditModeCosting}
+                className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
+                  !isEditModeCosting
+                    ? "bg-green-600 text-white hover:bg-green-700"
+                    : isDark
+                    ? "bg-slate-700 text-slate-400 cursor-not-allowed"
+                    : "bg-gray-300 text-gray-400 cursor-not-allowed"
+                }`}
+              >
+                <Plus className="w-5 h-5" />
+                Add
+              </button>
+            ) : (
+              <div className="min-w-[100px]"></div>
+            )}
 
             {/* Edit/Save/Cancelボタン（右側） */}
             <div className="flex items-center gap-2">
-              {isEditMode ? (
+              {activeMode === "costing" ? (
+                // CostingモードのEdit/Save/Cancel
+                isEditModeCosting ? (
+                  <>
+                    <button
+                      onClick={handleSaveClick}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px]"
+                    >
+                      <Save className="w-5 h-5" />
+                      Save
+                    </button>
+                    <button
+                      onClick={handleCancelClick}
+                      className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
+                        isDark
+                          ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                          : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                      }`}
+                    >
+                      <X className="w-5 h-5" />
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleEditClick}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px]"
+                  >
+                    <Edit className="w-5 h-5" />
+                    Edit
+                  </button>
+                )
+              ) : // Access ControlモードのEdit/Save/Cancel
+              isEditModeAccessControl ? (
                 <>
                   <button
-                    onClick={handleSaveClick}
+                    onClick={handleAccessControlSaveClick}
                     className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px]"
                   >
                     <Save className="w-5 h-5" />
                     Save
                   </button>
                   <button
-                    onClick={handleCancelClick}
+                    onClick={handleAccessControlCancelClick}
                     className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
                       isDark
                         ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
@@ -2825,7 +3262,7 @@ export default function CostPage() {
                 </>
               ) : (
                 <button
-                  onClick={handleEditClick}
+                  onClick={handleAccessControlEditClick}
                   className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px]"
                 >
                   <Edit className="w-5 h-5" />
@@ -2968,169 +3405,204 @@ export default function CostPage() {
                 }}
               >
                 <tr>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "48px" }}
-                  >
-                    {/* 展開アイコン用 */}
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider sticky left-0 z-30 ${
-                      isDark
-                        ? "bg-slate-700 text-slate-300"
-                        : "bg-gray-50 text-gray-500"
-                    }`}
-                    style={{ width: "180px" }}
-                  >
-                    Name
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "120px" }}
-                  >
-                    Type
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "250px" }}
-                  >
-                    Finish Amount
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "230px" }}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="min-w-[70px]">Cost</span>
-                      <div className="flex items-center gap-1">
-                        <span
-                          className={`text-xs normal-case ${
-                            costUnit === "g"
-                              ? "font-semibold"
-                              : isDark
-                              ? "text-slate-500"
-                              : "text-gray-400"
-                          }`}
-                        >
-                          g
-                        </span>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={costUnit === "kg"}
-                            onChange={(e) =>
-                              setCostUnit(e.target.checked ? "kg" : "g")
-                            }
-                            className="sr-only peer"
-                          />
-                          <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-gray-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                        </label>
-                        <span
-                          className={`text-xs normal-case ${
-                            costUnit === "kg"
-                              ? "font-semibold"
-                              : "text-gray-400"
-                          }`}
-                        >
-                          kg
-                        </span>
-                      </div>
-                      <button
-                        onClick={() => setEachMode(!eachMode)}
-                        className={`px-2 py-1 text-xs rounded transition-colors ${
-                          eachMode
-                            ? "bg-blue-500 text-white font-semibold"
-                            : isDark
-                            ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                            : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                  {activeMode === "access-control" ? (
+                    // Access Controlモード: Name, Type, Access Control
+                    <>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider sticky left-0 z-30 ${
+                          isDark
+                            ? "bg-slate-700 text-slate-300"
+                            : "bg-gray-50 text-gray-500"
                         }`}
+                        style={{ width: "300px" }}
                       >
-                        each
-                      </button>
-                    </div>
-                  </th>
-                  {/* Wholesale */}
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider whitespace-nowrap ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "140px" }}
-                  >
-                    WHOLESALE ($/kg)
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "100px" }}
-                  >
-                    LABOR%
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "100px" }}
-                  >
-                    COG%
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "100px" }}
-                  >
-                    LCOG%
-                  </th>
-                  {/* Retail */}
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "120px" }}
-                  >
-                    RETAIL ($/kg)
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "100px" }}
-                  >
-                    LABOR%
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "100px" }}
-                  >
-                    COG%
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "100px" }}
-                  >
-                    LCOG%
-                  </th>
-                  <th
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                      isDark ? "text-slate-300" : "text-gray-500"
-                    }`}
-                    style={{ width: "64px" }}
-                  >
-                    {/* ゴミ箱列のヘッダー */}
-                  </th>
+                        Name
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "150px" }}
+                      >
+                        Type
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "250px" }}
+                      >
+                        Access Control
+                      </th>
+                    </>
+                  ) : (
+                    // Costingモード: 既存のヘッダー
+                    <>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "48px" }}
+                      >
+                        {/* 展開アイコン用 */}
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider sticky left-0 z-30 ${
+                          isDark
+                            ? "bg-slate-700 text-slate-300"
+                            : "bg-gray-50 text-gray-500"
+                        }`}
+                        style={{ width: "180px" }}
+                      >
+                        Name
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "120px" }}
+                      >
+                        Type
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "250px" }}
+                      >
+                        Finish Amount
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "230px" }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="min-w-[70px]">Cost</span>
+                          <div className="flex items-center gap-1">
+                            <span
+                              className={`text-xs normal-case ${
+                                costUnit === "g"
+                                  ? "font-semibold"
+                                  : isDark
+                                  ? "text-slate-500"
+                                  : "text-gray-400"
+                              }`}
+                            >
+                              g
+                            </span>
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={costUnit === "kg"}
+                                onChange={(e) =>
+                                  setCostUnit(e.target.checked ? "kg" : "g")
+                                }
+                                className="sr-only peer"
+                              />
+                              <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-gray-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                            </label>
+                            <span
+                              className={`text-xs normal-case ${
+                                costUnit === "kg"
+                                  ? "font-semibold"
+                                  : "text-gray-400"
+                              }`}
+                            >
+                              kg
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => setEachMode(!eachMode)}
+                            className={`px-2 py-1 text-xs rounded transition-colors ${
+                              eachMode
+                                ? "bg-blue-500 text-white font-semibold"
+                                : isDark
+                                ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                            }`}
+                          >
+                            each
+                          </button>
+                        </div>
+                      </th>
+                      {/* Wholesale */}
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider whitespace-nowrap ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "140px" }}
+                      >
+                        WHOLESALE ($/kg)
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "100px" }}
+                      >
+                        LABOR%
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "100px" }}
+                      >
+                        COG%
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "100px" }}
+                      >
+                        LCOG%
+                      </th>
+                      {/* Retail */}
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "120px" }}
+                      >
+                        RETAIL ($/kg)
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "100px" }}
+                      >
+                        LABOR%
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "100px" }}
+                      >
+                        COG%
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "100px" }}
+                      >
+                        LCOG%
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "64px" }}
+                      >
+                        {/* ゴミ箱列のヘッダー */}
+                      </th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody
@@ -3181,312 +3653,393 @@ export default function CostPage() {
 
                   return (
                     <Fragment key={item.id}>
-                      <tr
-                        className={`${item.isExpanded ? "peer" : ""} ${
-                          item.isMarkedForDeletion
-                            ? isDark
-                              ? "bg-red-900"
-                              : "bg-red-50"
-                            : isNewItem
-                            ? newItemBgClass
-                            : expandedBgClass
-                            ? expandedBgClass
-                            : ""
-                        } ${
-                          !isNewItem && !expandedBgClass
-                            ? isDark
+                      {activeMode === "access-control" ? (
+                        // Access Controlモード: シンプルなテーブル行
+                        <tr
+                          className={`${
+                            item.isMarkedForDeletion
+                              ? isDark
+                                ? "bg-red-900"
+                                : "bg-red-50"
+                              : isDark
                               ? hoveredItemId === item.id
                                 ? "bg-slate-700"
                                 : "hover:bg-slate-700"
                               : hoveredItemId === item.id
                               ? "bg-gray-50"
                               : "hover:bg-gray-50"
-                            : ""
-                        } cursor-pointer transition-colors group ${
-                          item.isExpanded ? "!border-b-0" : ""
-                        }`}
-                        onMouseEnter={() => setHoveredItemId(item.id)}
-                        onMouseLeave={() => setHoveredItemId(null)}
-                        onClick={() => !isEditMode && toggleExpand(item.id)}
-                        style={{
-                          height: "51px",
-                          minHeight: "51px",
-                          maxHeight: "51px",
-                          ...(item.isExpanded
-                            ? {
-                                borderBottomWidth: 0,
-                                borderBottomStyle: "none",
-                              }
-                            : {}),
-                        }}
-                      >
-                        {/* 展開アイコン */}
-                        <td
-                          className="px-6 whitespace-nowrap"
+                          } transition-colors`}
+                          onMouseEnter={() => setHoveredItemId(item.id)}
+                          onMouseLeave={() => setHoveredItemId(null)}
                           style={{
-                            width: "48px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
+                            height: "51px",
+                            minHeight: "51px",
+                            maxHeight: "51px",
                           }}
                         >
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleExpand(item.id);
+                          {/* Name */}
+                          <td
+                            className={`px-6 whitespace-nowrap sticky left-0 z-30 transition-colors ${
+                              item.isMarkedForDeletion
+                                ? isDark
+                                  ? "bg-red-900/30"
+                                  : "bg-red-50"
+                                : isDark
+                                ? hoveredItemId === item.id
+                                  ? "bg-slate-700"
+                                  : "bg-slate-800 group-hover:bg-slate-700"
+                                : hoveredItemId === item.id
+                                ? "bg-gray-50"
+                                : "bg-white group-hover:bg-gray-50"
+                            } ${isDark ? "text-slate-100" : "text-gray-900"}`}
+                            style={{
+                              width: "300px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
                             }}
-                            className={`transition-colors ${
-                              isDark
-                                ? "text-slate-500 hover:text-slate-300"
-                                : "text-gray-400 hover:text-gray-600"
-                            }`}
                           >
-                            {item.isExpanded ? (
-                              <ChevronDown className="w-5 h-5" />
-                            ) : (
-                              <ChevronRight className="w-5 h-5" />
-                            )}
-                          </button>
-                        </td>
+                            <div className="text-sm">{item.name}</div>
+                          </td>
 
-                        {/* Name */}
-                        <td
-                          className={`px-6 whitespace-nowrap sticky left-0 z-30 transition-colors ${
+                          {/* Type */}
+                          <td
+                            className={`px-6 whitespace-nowrap text-left ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                            style={{
+                              width: "150px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div className="text-sm">
+                              {item.is_menu_item ? "Menu Item" : "Prepped"}
+                            </div>
+                          </td>
+
+                          {/* Access Control */}
+                          <td
+                            className={`px-6 whitespace-nowrap text-left ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                            style={{
+                              width: "250px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            {canChangeAccessControl(item) && (
+                              <div
+                                className="flex flex-col gap-2"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <label
+                                    className={`flex items-center gap-1 cursor-pointer ${
+                                      isDark
+                                        ? "text-slate-300"
+                                        : "text-gray-700"
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`share-${item.id}`}
+                                      checked={(() => {
+                                        const pendingChange =
+                                          pendingShareChanges.get(item.id);
+                                        if (pendingChange !== undefined) {
+                                          return pendingChange === "hide";
+                                        }
+                                        const share = itemShares.get(item.id);
+                                        // hide = レコードがない、またはallowed_actionsが空
+                                        return (
+                                          share === null ||
+                                          share === undefined ||
+                                          (share.allowed_actions &&
+                                            share.allowed_actions.length === 0)
+                                        );
+                                      })()}
+                                      onChange={() =>
+                                        handleShareChangePending(
+                                          item.id,
+                                          "hide"
+                                        )
+                                      }
+                                      disabled={!isEditModeAccessControl}
+                                      className="w-3 h-3 accent-blue-500"
+                                      style={{ accentColor: "#3b82f6" }}
+                                    />
+                                    <span className="text-xs">Hide</span>
+                                  </label>
+                                  <label
+                                    className={`flex items-center gap-1 cursor-pointer ${
+                                      isDark
+                                        ? "text-slate-300"
+                                        : "text-gray-700"
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`share-${item.id}`}
+                                      checked={(() => {
+                                        const pendingChange =
+                                          pendingShareChanges.get(item.id);
+                                        if (pendingChange !== undefined) {
+                                          return pendingChange === "view-only";
+                                        }
+                                        const share = itemShares.get(item.id);
+                                        return (
+                                          share !== null &&
+                                          share !== undefined &&
+                                          share.allowed_actions.length === 1 &&
+                                          share.allowed_actions[0] === "read"
+                                        );
+                                      })()}
+                                      onChange={() =>
+                                        handleShareChangePending(
+                                          item.id,
+                                          "view-only"
+                                        )
+                                      }
+                                      disabled={!isEditModeAccessControl}
+                                      className="w-3 h-3 accent-blue-500"
+                                      style={{ accentColor: "#3b82f6" }}
+                                    />
+                                    <span className="text-xs">View</span>
+                                  </label>
+                                  <label
+                                    className={`flex items-center gap-1 cursor-pointer ${
+                                      isDark
+                                        ? "text-slate-300"
+                                        : "text-gray-700"
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`share-${item.id}`}
+                                      checked={(() => {
+                                        const pendingChange =
+                                          pendingShareChanges.get(item.id);
+                                        if (pendingChange !== undefined) {
+                                          return pendingChange === "editable";
+                                        }
+                                        const share = itemShares.get(item.id);
+                                        return (
+                                          share !== null &&
+                                          share !== undefined &&
+                                          share.allowed_actions.length === 2 &&
+                                          share.allowed_actions.includes(
+                                            "read"
+                                          ) &&
+                                          share.allowed_actions.includes(
+                                            "update"
+                                          )
+                                        );
+                                      })()}
+                                      onChange={() =>
+                                        handleShareChangePending(
+                                          item.id,
+                                          "editable"
+                                        )
+                                      }
+                                      disabled={!isEditModeAccessControl}
+                                      className="w-3 h-3 accent-blue-500"
+                                      style={{ accentColor: "#3b82f6" }}
+                                    />
+                                    <span className="text-xs">Edit</span>
+                                  </label>
+                                </div>
+                                {/* 責任者選択ドロップダウン（Adminのみ、常に表示） */}
+                                {userRole === "admin" && (
+                                  <div className="ml-2">
+                                    <select
+                                      value={
+                                        pendingResponsibleUserChanges.get(
+                                          item.id
+                                        ) ||
+                                        item.responsible_user_id ||
+                                        ""
+                                      }
+                                      onChange={(e) => {
+                                        setPendingResponsibleUserChanges(
+                                          (prev) => {
+                                            const next = new Map(prev);
+                                            next.set(item.id, e.target.value);
+                                            return next;
+                                          }
+                                        );
+                                      }}
+                                      disabled={!isEditModeAccessControl}
+                                      className={`text-xs px-2 py-1 rounded ${
+                                        isDark
+                                          ? "bg-slate-700 text-slate-200 border-slate-600"
+                                          : "bg-white text-gray-700 border-gray-300"
+                                      } border ${
+                                        !isEditModeAccessControl
+                                          ? "opacity-50 cursor-not-allowed"
+                                          : ""
+                                      }`}
+                                    >
+                                      <option value="">Select Manager</option>
+                                      {managers.map((manager) => {
+                                        // 表示用のテキストを生成
+                                        let displayText = "";
+                                        if (manager.name) {
+                                          displayText = manager.name;
+                                          if (manager.email) {
+                                            displayText += ` (${manager.email})`;
+                                          }
+                                        } else if (manager.email) {
+                                          displayText = manager.email;
+                                        } else {
+                                          displayText = manager.user_id;
+                                        }
+
+                                        return (
+                                          <option
+                                            key={manager.user_id}
+                                            value={manager.user_id}
+                                          >
+                                            {displayText}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ) : (
+                        // Costingモード: 既存のテーブル行
+                        <tr
+                          className={`${item.isExpanded ? "peer" : ""} ${
                             item.isMarkedForDeletion
                               ? isDark
-                                ? "bg-red-900/30"
+                                ? "bg-red-900"
                                 : "bg-red-50"
                               : isNewItem
                               ? newItemBgClass
                               : expandedBgClass
                               ? expandedBgClass
-                              : isDark
-                              ? hoveredItemId === item.id
-                                ? "bg-slate-700"
-                                : "bg-slate-800 group-hover:bg-slate-700 peer-hover:bg-slate-700"
-                              : hoveredItemId === item.id
-                              ? "bg-gray-50"
-                              : "bg-white group-hover:bg-gray-50 peer-hover:bg-gray-50"
-                          } ${isDark ? "text-slate-100" : "text-gray-900"}`}
+                              : ""
+                          } ${
+                            !isNewItem && !expandedBgClass
+                              ? isDark
+                                ? hoveredItemId === item.id
+                                  ? "bg-slate-700"
+                                  : "hover:bg-slate-700"
+                                : hoveredItemId === item.id
+                                ? "bg-gray-50"
+                                : "hover:bg-gray-50"
+                              : ""
+                          } cursor-pointer transition-colors group ${
+                            item.isExpanded ? "!border-b-0" : ""
+                          }`}
+                          onMouseEnter={() => setHoveredItemId(item.id)}
+                          onMouseLeave={() => setHoveredItemId(null)}
+                          onClick={() =>
+                            !(isEditModeCosting && activeMode === "costing") &&
+                            toggleExpand(item.id)
+                          }
                           style={{
-                            width: "180px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            {isEditMode ? (
-                              <input
-                                type="text"
-                                value={item.name}
-                                onChange={(e) =>
-                                  handleItemChange(
-                                    item.id,
-                                    "name",
-                                    e.target.value
-                                  )
+                            height: "51px",
+                            minHeight: "51px",
+                            maxHeight: "51px",
+                            ...(item.isExpanded
+                              ? {
+                                  borderBottomWidth: 0,
+                                  borderBottomStyle: "none",
                                 }
-                                className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
-                                  isDark
-                                    ? "bg-slate-700 border-slate-600 text-slate-100"
-                                    : "bg-white border-gray-300 text-gray-900"
-                                }`}
-                                placeholder="Item name"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              />
-                            ) : (
-                              <div
-                                className="flex items-center gap-2"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                }}
-                              >
-                                <div
-                                  className={`text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ lineHeight: "20px", height: "20px" }}
-                                >
-                                  {item.name}
-                                </div>
-                                {/* Deprecated marker (間接deprecatedのみ) */}
-                                {item.deprecation_reason === "indirect" && (
-                                  <span
-                                    className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-300"
-                                    title={`Affected by deprecated ingredient${
-                                      item.deprecated
-                                        ? ` (since ${new Date(
-                                            item.deprecated
-                                          ).toLocaleDateString()})`
-                                        : ""
-                                    }`}
-                                  >
-                                    ⚠ Affected
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Type */}
-                        <td
-                          className="px-6 whitespace-nowrap text-left"
-                          style={{
-                            width: "120px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
+                              : {}),
                           }}
                         >
-                          <div
+                          {/* 展開アイコン */}
+                          <td
+                            className="px-6 whitespace-nowrap"
                             style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
+                              width: "48px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
                             }}
                           >
-                            {isEditMode ? (
-                              <select
-                                value={item.is_menu_item ? "menu" : "prepped"}
-                                onChange={(e) =>
-                                  handleItemChange(
-                                    item.id,
-                                    "is_menu_item",
-                                    e.target.value === "menu"
-                                  )
-                                }
-                                className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
-                                  isDark
-                                    ? "bg-slate-700 border-slate-600 text-slate-100"
-                                    : "bg-white border-gray-300 text-gray-900"
-                                }`}
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              >
-                                <option value="prepped">Prepped</option>
-                                <option value="menu">Menu Item</option>
-                              </select>
-                            ) : (
-                              <div
-                                className={`text-sm ${
-                                  isDark ? "text-slate-100" : "text-gray-900"
-                                }`}
-                                style={{
-                                  lineHeight: "20px",
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                }}
-                              >
-                                {item.is_menu_item ? "Menu Item" : "Prepped"}
-                              </div>
-                            )}
-                          </div>
-                        </td>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleExpand(item.id);
+                              }}
+                              className={`transition-colors ${
+                                isDark
+                                  ? "text-slate-500 hover:text-slate-300"
+                                  : "text-gray-400 hover:text-gray-600"
+                              }`}
+                            >
+                              {item.isExpanded ? (
+                                <ChevronDown className="w-5 h-5" />
+                              ) : (
+                                <ChevronRight className="w-5 h-5" />
+                              )}
+                            </button>
+                          </td>
 
-                        {/* Proceed */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "250px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
+                          {/* Name */}
+                          <td
+                            className={`px-6 whitespace-nowrap sticky left-0 z-30 transition-colors ${
+                              item.isMarkedForDeletion
+                                ? isDark
+                                  ? "bg-red-900/30"
+                                  : "bg-red-50"
+                                : isNewItem
+                                ? newItemBgClass
+                                : expandedBgClass
+                                ? expandedBgClass
+                                : isDark
+                                ? hoveredItemId === item.id
+                                  ? "bg-slate-700"
+                                  : "bg-slate-800 group-hover:bg-slate-700 peer-hover:bg-slate-700"
+                                : hoveredItemId === item.id
+                                ? "bg-gray-50"
+                                : "bg-white group-hover:bg-gray-50 peer-hover:bg-gray-50"
+                            } ${isDark ? "text-slate-100" : "text-gray-900"}`}
                             style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
+                              width: "180px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
                             }}
                           >
-                            {isEditMode ? (
-                              <div className="flex items-center gap-2 flex-wrap">
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeCosting && activeMode === "costing" ? (
                                 <input
                                   type="text"
-                                  inputMode="decimal"
-                                  value={
-                                    yieldAmountInputs.has(item.id)
-                                      ? yieldAmountInputs.get(item.id)!
-                                      : item.proceed_yield_amount === 0
-                                      ? ""
-                                      : String(item.proceed_yield_amount)
-                                  }
-                                  onChange={(e) => {
-                                    const value = e.target.value;
-                                    // 数字と小数点のみを許可（空文字列も許可）
-                                    const numericPattern =
-                                      /^(\d+\.?\d*|\.\d+)?$/;
-                                    if (numericPattern.test(value)) {
-                                      setYieldAmountInputs((prev) => {
-                                        const newMap = new Map(prev);
-                                        newMap.set(item.id, value);
-                                        return newMap;
-                                      });
-                                    }
-                                    // マッチしない場合は何もしない（前の値を保持）
-                                  }}
-                                  onBlur={(e) => {
-                                    const value = e.target.value;
-                                    // フォーカスアウト時に数値に変換
-                                    const numValue =
-                                      value === "" || value === "."
-                                        ? 0
-                                        : parseFloat(value) || 0;
+                                  value={item.name}
+                                  onChange={(e) =>
                                     handleItemChange(
                                       item.id,
-                                      "proceed_yield_amount",
-                                      numValue
-                                    );
-                                    // 入力中の文字列をクリア
-                                    setYieldAmountInputs((prev) => {
-                                      const newMap = new Map(prev);
-                                      newMap.delete(item.id);
-                                      return newMap;
-                                    });
-                                  }}
-                                  className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                      "name",
+                                      e.target.value
+                                    )
+                                  }
+                                  className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
                                     isDark
                                       ? "bg-slate-700 border-slate-600 text-slate-100"
                                       : "bg-white border-gray-300 text-gray-900"
                                   }`}
-                                  placeholder="0"
+                                  placeholder="Item name"
                                   style={{
-                                    width: "70px",
                                     height: "20px",
                                     minHeight: "20px",
                                     maxHeight: "20px",
@@ -3497,22 +4050,107 @@ export default function CostPage() {
                                     margin: 0,
                                   }}
                                 />
+                              ) : (
+                                <div
+                                  className="flex items-center gap-2"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                  }}
+                                >
+                                  <div
+                                    className={`text-sm ${
+                                      isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
+                                    }`}
+                                    style={{
+                                      lineHeight: "20px",
+                                      height: "20px",
+                                    }}
+                                  >
+                                    {item.name}
+                                  </div>
+                                  {/* Deprecated marker (間接deprecatedのみ) */}
+                                  {item.deprecation_reason === "indirect" && (
+                                    <span
+                                      className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800 border border-yellow-300"
+                                      title={`Affected by deprecated ingredient${
+                                        item.deprecated
+                                          ? ` (since ${new Date(
+                                              item.deprecated
+                                            ).toLocaleDateString()})`
+                                          : ""
+                                      }`}
+                                    >
+                                      ⚠ Affected
+                                    </span>
+                                  )}
+                                  {/* 共有アイコン（Manager向け） */}
+                                  {userRole === "manager" &&
+                                    item.item_kind === "prepped" &&
+                                    currentUserId &&
+                                    item.user_id !== currentUserId && (
+                                      <Share2
+                                        className={`w-4 h-4 ${
+                                          isDark
+                                            ? "text-blue-400"
+                                            : "text-blue-600"
+                                        }`}
+                                      />
+                                    )}
+                                  {/* 共有設定ラジオボタン（Admin向け、Prepped Itemsのみ、Costingモードでは非表示） */}
+                                  {userRole === "admin" &&
+                                    item.item_kind === "prepped" &&
+                                    activeMode === "costing" && (
+                                      <div
+                                        className="flex items-center gap-1 ml-2"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        {/* Costingモードでは非表示 */}
+                                      </div>
+                                    )}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Type */}
+                          <td
+                            className="px-6 whitespace-nowrap text-left"
+                            style={{
+                              width: "120px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeCosting && activeMode === "costing" ? (
                                 <select
-                                  value={item.proceed_yield_unit}
+                                  value={item.is_menu_item ? "menu" : "prepped"}
                                   onChange={(e) =>
                                     handleItemChange(
                                       item.id,
-                                      "proceed_yield_unit",
-                                      e.target.value
+                                      "is_menu_item",
+                                      e.target.value === "menu"
                                     )
                                   }
-                                  className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                  className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
                                     isDark
                                       ? "bg-slate-700 border-slate-600 text-slate-100"
                                       : "bg-white border-gray-300 text-gray-900"
                                   }`}
                                   style={{
-                                    width: "60px",
                                     height: "20px",
                                     minHeight: "20px",
                                     maxHeight: "20px",
@@ -3523,807 +4161,958 @@ export default function CostPage() {
                                     margin: 0,
                                   }}
                                 >
-                                  {yieldUnitOptions.map((unit) => (
-                                    <option key={unit} value={unit}>
-                                      {unit}
-                                    </option>
-                                  ))}
+                                  <option value="prepped">Prepped</option>
+                                  <option value="menu">Menu Item</option>
                                 </select>
-                                {/* Yield Unitが"each"の場合、右側に入力ボックスを表示 */}
-                                {item.proceed_yield_unit === "each" && (
-                                  <>
-                                    <input
-                                      type="text"
-                                      inputMode="decimal"
-                                      value={
-                                        eachGramsInputs.has(item.id)
-                                          ? eachGramsInputs.get(item.id)!
-                                          : item.each_grams === null ||
-                                            item.each_grams === undefined ||
-                                            item.each_grams === 0
-                                          ? ""
-                                          : String(item.each_grams)
-                                      }
-                                      onChange={(e) => {
-                                        const value = e.target.value;
-                                        // 数字と小数点のみを許可（空文字列も許可）
-                                        const numericPattern =
-                                          /^(\d+\.?\d*|\.\d+)?$/;
-                                        if (numericPattern.test(value)) {
-                                          setEachGramsInputs((prev) => {
-                                            const newMap = new Map(prev);
-                                            newMap.set(item.id, value);
-                                            return newMap;
-                                          });
-                                        }
-                                        // マッチしない場合は何もしない（前の値を保持）
-                                      }}
-                                      onBlur={(e) => {
-                                        const value = e.target.value;
-                                        // フォーカスアウト時に数値に変換
-                                        const numValue =
-                                          value === "" || value === "."
-                                            ? null
-                                            : parseFloat(value) || null;
-                                        handleItemChange(
-                                          item.id,
-                                          "each_grams",
-                                          numValue
-                                        );
-                                        // 入力中の文字列をクリア
-                                        setEachGramsInputs((prev) => {
-                                          const newMap = new Map(prev);
-                                          newMap.delete(item.id);
-                                          return newMap;
-                                        });
-                                      }}
-                                      placeholder={(() => {
-                                        const totalIngredientsGrams =
-                                          calculateTotalIngredientsGrams(
-                                            item.recipe_lines
-                                          );
-                                        const yieldAmount =
-                                          item.proceed_yield_amount || 1;
-                                        const defaultEachGrams =
-                                          totalIngredientsGrams / yieldAmount;
-                                        return `Auto (${defaultEachGrams.toFixed(
-                                          2
-                                        )}g)`;
-                                      })()}
-                                      className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-                                        isDark
-                                          ? "bg-slate-700 border-slate-600 text-slate-100"
-                                          : "bg-white border-gray-300 text-gray-900"
-                                      }`}
-                                      style={{
-                                        width: "70px",
-                                        height: "20px",
-                                        minHeight: "20px",
-                                        maxHeight: "20px",
-                                        lineHeight: "20px",
-                                        padding: "0 4px",
-                                        fontSize: "0.875rem",
-                                        boxSizing: "border-box",
-                                        margin: 0,
-                                      }}
-                                    />
-                                    <span
-                                      className={`text-sm ${
-                                        isDark
-                                          ? "text-slate-300"
-                                          : "text-gray-600"
-                                      }`}
-                                    >
-                                      g/each
-                                    </span>
-                                  </>
-                                )}
-                              </div>
-                            ) : (
-                              <div
-                                className="flex items-center gap-2"
-                                style={{ height: "20px" }}
-                              >
-                                <span
+                              ) : (
+                                <div
                                   className={`text-sm ${
                                     isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
-                                  style={{ lineHeight: "20px" }}
+                                  style={{
+                                    lineHeight: "20px",
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                  }}
                                 >
-                                  {item.proceed_yield_amount}{" "}
-                                  {item.proceed_yield_unit}
-                                </span>
-                                {/* Yield Unitが"each"の場合、each_gramsを表示 */}
-                                {item.proceed_yield_unit === "each" && (
-                                  <span
-                                    className="text-xs text-gray-500"
-                                    style={{ lineHeight: "20px" }}
+                                  {item.is_menu_item ? "Menu Item" : "Prepped"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Proceed */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "250px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeCosting && activeMode === "costing" ? (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      yieldAmountInputs.has(item.id)
+                                        ? yieldAmountInputs.get(item.id)!
+                                        : item.proceed_yield_amount === 0
+                                        ? ""
+                                        : String(item.proceed_yield_amount)
+                                    }
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      // 数字と小数点のみを許可（空文字列も許可）
+                                      const numericPattern =
+                                        /^(\d+\.?\d*|\.\d+)?$/;
+                                      if (numericPattern.test(value)) {
+                                        setYieldAmountInputs((prev) => {
+                                          const newMap = new Map(prev);
+                                          newMap.set(item.id, value);
+                                          return newMap;
+                                        });
+                                      }
+                                      // マッチしない場合は何もしない（前の値を保持）
+                                    }}
+                                    onBlur={(e) => {
+                                      const value = e.target.value;
+                                      // フォーカスアウト時に数値に変換
+                                      const numValue =
+                                        value === "" || value === "."
+                                          ? 0
+                                          : parseFloat(value) || 0;
+                                      handleItemChange(
+                                        item.id,
+                                        "proceed_yield_amount",
+                                        numValue
+                                      );
+                                      // 入力中の文字列をクリア
+                                      setYieldAmountInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.delete(item.id);
+                                        return newMap;
+                                      });
+                                    }}
+                                    className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                      isDark
+                                        ? "bg-slate-700 border-slate-600 text-slate-100"
+                                        : "bg-white border-gray-300 text-gray-900"
+                                    }`}
+                                    placeholder="0"
+                                    style={{
+                                      width: "70px",
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
+                                  />
+                                  <select
+                                    value={item.proceed_yield_unit}
+                                    onChange={(e) =>
+                                      handleItemChange(
+                                        item.id,
+                                        "proceed_yield_unit",
+                                        e.target.value
+                                      )
+                                    }
+                                    className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                      isDark
+                                        ? "bg-slate-700 border-slate-600 text-slate-100"
+                                        : "bg-white border-gray-300 text-gray-900"
+                                    }`}
+                                    style={{
+                                      width: "60px",
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
                                   >
-                                    {(() => {
-                                      const eachGrams =
-                                        item.each_grams ||
-                                        (() => {
+                                    {yieldUnitOptions.map((unit) => (
+                                      <option key={unit} value={unit}>
+                                        {unit}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {/* Yield Unitが"each"の場合、右側に入力ボックスを表示 */}
+                                  {item.proceed_yield_unit === "each" && (
+                                    <>
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={
+                                          eachGramsInputs.has(item.id)
+                                            ? eachGramsInputs.get(item.id)!
+                                            : item.each_grams === null ||
+                                              item.each_grams === undefined ||
+                                              item.each_grams === 0
+                                            ? ""
+                                            : String(item.each_grams)
+                                        }
+                                        onChange={(e) => {
+                                          const value = e.target.value;
+                                          // 数字と小数点のみを許可（空文字列も許可）
+                                          const numericPattern =
+                                            /^(\d+\.?\d*|\.\d+)?$/;
+                                          if (numericPattern.test(value)) {
+                                            setEachGramsInputs((prev) => {
+                                              const newMap = new Map(prev);
+                                              newMap.set(item.id, value);
+                                              return newMap;
+                                            });
+                                          }
+                                          // マッチしない場合は何もしない（前の値を保持）
+                                        }}
+                                        onBlur={(e) => {
+                                          const value = e.target.value;
+                                          // フォーカスアウト時に数値に変換
+                                          const numValue =
+                                            value === "" || value === "."
+                                              ? null
+                                              : parseFloat(value) || null;
+                                          handleItemChange(
+                                            item.id,
+                                            "each_grams",
+                                            numValue
+                                          );
+                                          // 入力中の文字列をクリア
+                                          setEachGramsInputs((prev) => {
+                                            const newMap = new Map(prev);
+                                            newMap.delete(item.id);
+                                            return newMap;
+                                          });
+                                        }}
+                                        placeholder={(() => {
                                           const totalIngredientsGrams =
                                             calculateTotalIngredientsGrams(
                                               item.recipe_lines
                                             );
                                           const yieldAmount =
                                             item.proceed_yield_amount || 1;
-                                          return (
-                                            totalIngredientsGrams / yieldAmount
-                                          );
-                                        })();
-                                      return `(${eachGrams.toFixed(
-                                        2
-                                      )}g / each)`;
-                                    })()}
+                                          const defaultEachGrams =
+                                            totalIngredientsGrams / yieldAmount;
+                                          return `Auto (${defaultEachGrams.toFixed(
+                                            2
+                                          )}g)`;
+                                        })()}
+                                        className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                          isDark
+                                            ? "bg-slate-700 border-slate-600 text-slate-100"
+                                            : "bg-white border-gray-300 text-gray-900"
+                                        }`}
+                                        style={{
+                                          width: "70px",
+                                          height: "20px",
+                                          minHeight: "20px",
+                                          maxHeight: "20px",
+                                          lineHeight: "20px",
+                                          padding: "0 4px",
+                                          fontSize: "0.875rem",
+                                          boxSizing: "border-box",
+                                          margin: 0,
+                                        }}
+                                      />
+                                      <span
+                                        className={`text-sm ${
+                                          isDark
+                                            ? "text-slate-300"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
+                                        g/each
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              ) : (
+                                <div
+                                  className="flex items-center gap-2"
+                                  style={{ height: "20px" }}
+                                >
+                                  <span
+                                    className={`text-sm ${
+                                      isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
+                                    }`}
+                                    style={{ lineHeight: "20px" }}
+                                  >
+                                    {item.proceed_yield_amount}{" "}
+                                    {item.proceed_yield_unit}
                                   </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </td>
+                                  {/* Yield Unitが"each"の場合、each_gramsを表示 */}
+                                  {item.proceed_yield_unit === "each" && (
+                                    <span
+                                      className="text-xs text-gray-500"
+                                      style={{ lineHeight: "20px" }}
+                                    >
+                                      {(() => {
+                                        const eachGrams =
+                                          item.each_grams ||
+                                          (() => {
+                                            const totalIngredientsGrams =
+                                              calculateTotalIngredientsGrams(
+                                                item.recipe_lines
+                                              );
+                                            const yieldAmount =
+                                              item.proceed_yield_amount || 1;
+                                            return (
+                                              totalIngredientsGrams /
+                                              yieldAmount
+                                            );
+                                          })();
+                                        return `(${eachGrams.toFixed(
+                                          2
+                                        )}g / each)`;
+                                      })()}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </td>
 
-                        {/* Cost/g or Cost/kg */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "230px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
+                          {/* Cost/g or Cost/kg */}
+                          <td
+                            className="px-6 whitespace-nowrap"
                             style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
+                              width: "230px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
                             }}
                           >
                             <div
-                              className={`text-sm ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                              style={{ lineHeight: "20px", height: "20px" }}
-                            >
-                              {item.cost_per_gram !== undefined
-                                ? eachMode &&
-                                  item.proceed_yield_unit === "each" &&
-                                  item.each_grams
-                                  ? `$${(
-                                      item.cost_per_gram * item.each_grams
-                                    ).toFixed(2)}/each`
-                                  : costUnit === "g"
-                                  ? `$${item.cost_per_gram.toFixed(6)}/g`
-                                  : `$${(item.cost_per_gram * 1000).toFixed(
-                                      2
-                                    )}/kg`
-                                : "-"}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Wholesale */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "140px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            {isEditMode ? (
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={
-                                  wholesaleInputs.has(item.id)
-                                    ? wholesaleInputs.get(item.id)!
-                                    : item.wholesale === null ||
-                                      item.wholesale === undefined
-                                    ? ""
-                                    : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams
-                                    ? String(
-                                        (item.wholesale / 1000) *
-                                          item.each_grams
-                                      ) // $/kg → $/each
-                                    : String(item.wholesale)
-                                }
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  // 数字と小数点のみを許可（空文字列も許可）
-                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
-                                  if (numericPattern.test(value)) {
-                                    setWholesaleInputs((prev) => {
-                                      const newMap = new Map(prev);
-                                      newMap.set(item.id, value);
-                                      return newMap;
-                                    });
-                                  }
-                                  // マッチしない場合は何もしない（前の値を保持）
-                                }}
-                                onBlur={(e) => {
-                                  const value = e.target.value;
-                                  // フォーカスアウト時に数値に変換
-                                  let numValue =
-                                    value === "" || value === "."
-                                      ? null
-                                      : parseFloat(value) || null;
-                                  // eachモード選択時、proceed_yield_unit === "each"のアイテムは$/eachで入力されているため、$/kgに変換
-                                  if (
-                                    numValue !== null &&
-                                    eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.each_grams > 0
-                                  ) {
-                                    numValue =
-                                      (numValue / item.each_grams) * 1000; // $/each → $/kg
-                                  }
-                                  handleItemChange(
-                                    item.id,
-                                    "wholesale",
-                                    numValue
-                                  );
-                                  // 入力中の文字列をクリア
-                                  setWholesaleInputs((prev) => {
-                                    const newMap = new Map(prev);
-                                    newMap.delete(item.id);
-                                    return newMap;
-                                  });
-                                }}
-                                className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
-                                  isDark
-                                    ? "bg-slate-700 border-slate-600 text-slate-100"
-                                    : "bg-white border-gray-300 text-gray-900"
-                                }`}
-                                placeholder="0.00"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              />
-                            ) : (
-                              <div
-                                className={`text-sm ${
-                                  isDark ? "text-slate-100" : "text-gray-900"
-                                }`}
-                                style={{
-                                  lineHeight: "20px",
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                }}
-                              >
-                                {item.wholesale !== null &&
-                                item.wholesale !== undefined
-                                  ? eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams
-                                    ? `$${(
-                                        (item.wholesale / 1000) *
-                                        item.each_grams
-                                      ).toFixed(2)}/each`
-                                    : `$${item.wholesale.toFixed(2)}/kg`
-                                  : "-"}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Wholesale Labor% */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "100px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <div
-                              className={`text-sm ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                              style={{ lineHeight: "20px", height: "20px" }}
-                            >
-                              {(() => {
-                                // 入力中の値があればそれを使用、なければ既存の値を使用
-                                const currentWholesale = wholesaleInputs.has(
-                                  item.id
-                                )
-                                  ? (() => {
-                                      const value = wholesaleInputs.get(
-                                        item.id
-                                      )!;
-                                      return value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    })()
-                                  : eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.wholesale !== null &&
-                                    item.wholesale !== undefined
-                                  ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
-                                  : item.wholesale;
-                                const { laborPercent } = calculatePercentages(
-                                  currentWholesale,
-                                  item
-                                );
-                                return laborPercent !== null
-                                  ? `${laborPercent.toFixed(2)}%`
-                                  : "-";
-                              })()}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Wholesale COG% */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "100px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <div
-                              className={`text-sm ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                              style={{ lineHeight: "20px", height: "20px" }}
-                            >
-                              {(() => {
-                                // 入力中の値があればそれを使用、なければ既存の値を使用
-                                const currentWholesale = wholesaleInputs.has(
-                                  item.id
-                                )
-                                  ? (() => {
-                                      const value = wholesaleInputs.get(
-                                        item.id
-                                      )!;
-                                      return value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    })()
-                                  : eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.wholesale !== null &&
-                                    item.wholesale !== undefined
-                                  ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
-                                  : item.wholesale;
-                                const { cogPercent } = calculatePercentages(
-                                  currentWholesale,
-                                  item
-                                );
-                                return cogPercent !== null
-                                  ? `${cogPercent.toFixed(2)}%`
-                                  : "-";
-                              })()}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Wholesale LCOG% */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "100px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <div
-                              className={`text-sm ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                              style={{ lineHeight: "20px", height: "20px" }}
-                            >
-                              {(() => {
-                                // 入力中の値があればそれを使用、なければ既存の値を使用
-                                const currentWholesale = wholesaleInputs.has(
-                                  item.id
-                                )
-                                  ? (() => {
-                                      const value = wholesaleInputs.get(
-                                        item.id
-                                      )!;
-                                      return value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    })()
-                                  : eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.wholesale !== null &&
-                                    item.wholesale !== undefined
-                                  ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
-                                  : item.wholesale;
-                                const { lcogPercent } = calculatePercentages(
-                                  currentWholesale,
-                                  item
-                                );
-                                return lcogPercent !== null
-                                  ? `${lcogPercent.toFixed(2)}%`
-                                  : "-";
-                              })()}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Retail */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "120px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            {isEditMode ? (
-                              <input
-                                type="text"
-                                inputMode="decimal"
-                                value={
-                                  retailInputs.has(item.id)
-                                    ? retailInputs.get(item.id)!
-                                    : item.retail === null ||
-                                      item.retail === undefined
-                                    ? ""
-                                    : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams
-                                    ? String(
-                                        (item.retail / 1000) * item.each_grams
-                                      ) // $/kg → $/each
-                                    : String(item.retail)
-                                }
-                                onChange={(e) => {
-                                  const value = e.target.value;
-                                  // 数字と小数点のみを許可（空文字列も許可）
-                                  const numericPattern = /^(\d+\.?\d*|\.\d+)?$/;
-                                  if (numericPattern.test(value)) {
-                                    setRetailInputs((prev) => {
-                                      const newMap = new Map(prev);
-                                      newMap.set(item.id, value);
-                                      return newMap;
-                                    });
-                                  }
-                                  // マッチしない場合は何もしない（前の値を保持）
-                                }}
-                                onBlur={(e) => {
-                                  const value = e.target.value;
-                                  // フォーカスアウト時に数値に変換
-                                  let numValue =
-                                    value === "" || value === "."
-                                      ? null
-                                      : parseFloat(value) || null;
-                                  // eachモード選択時、proceed_yield_unit === "each"のアイテムは$/eachで入力されているため、$/kgに変換
-                                  if (
-                                    numValue !== null &&
-                                    eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.each_grams > 0
-                                  ) {
-                                    numValue =
-                                      (numValue / item.each_grams) * 1000; // $/each → $/kg
-                                  }
-                                  handleItemChange(item.id, "retail", numValue);
-                                  // 入力中の文字列をクリア
-                                  setRetailInputs((prev) => {
-                                    const newMap = new Map(prev);
-                                    newMap.delete(item.id);
-                                    return newMap;
-                                  });
-                                }}
-                                className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
-                                  isDark
-                                    ? "bg-slate-700 border-slate-600 text-slate-100"
-                                    : "bg-white border-gray-300 text-gray-900"
-                                }`}
-                                placeholder="0.00"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              />
-                            ) : (
-                              <div
-                                className={`text-sm ${
-                                  isDark ? "text-slate-100" : "text-gray-900"
-                                }`}
-                                style={{
-                                  lineHeight: "20px",
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                }}
-                              >
-                                {item.retail !== null &&
-                                item.retail !== undefined
-                                  ? eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams
-                                    ? `$${(
-                                        (item.retail / 1000) *
-                                        item.each_grams
-                                      ).toFixed(2)}/each`
-                                    : `$${item.retail.toFixed(2)}/kg`
-                                  : "-"}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Retail Labor% */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "100px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <div
-                              className={`text-sm ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                              style={{ lineHeight: "20px", height: "20px" }}
-                            >
-                              {(() => {
-                                // 入力中の値があればそれを使用、なければ既存の値を使用
-                                const currentRetail = retailInputs.has(item.id)
-                                  ? (() => {
-                                      const value = retailInputs.get(item.id)!;
-                                      return value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    })()
-                                  : eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.retail !== null &&
-                                    item.retail !== undefined
-                                  ? (item.retail / 1000) * item.each_grams // $/kg → $/each
-                                  : item.retail;
-                                const { laborPercent } = calculatePercentages(
-                                  currentRetail,
-                                  item
-                                );
-                                return laborPercent !== null
-                                  ? `${laborPercent.toFixed(2)}%`
-                                  : "-";
-                              })()}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Retail COG% */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "100px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <div
-                              className={`text-sm ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                              style={{ lineHeight: "20px", height: "20px" }}
-                            >
-                              {(() => {
-                                // 入力中の値があればそれを使用、なければ既存の値を使用
-                                const currentRetail = retailInputs.has(item.id)
-                                  ? (() => {
-                                      const value = retailInputs.get(item.id)!;
-                                      return value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    })()
-                                  : eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.retail !== null &&
-                                    item.retail !== undefined
-                                  ? (item.retail / 1000) * item.each_grams // $/kg → $/each
-                                  : item.retail;
-                                const { cogPercent } = calculatePercentages(
-                                  currentRetail,
-                                  item
-                                );
-                                return cogPercent !== null
-                                  ? `${cogPercent.toFixed(2)}%`
-                                  : "-";
-                              })()}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Retail LCOG% */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "100px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <div
-                              className={`text-sm ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                              style={{ lineHeight: "20px", height: "20px" }}
-                            >
-                              {(() => {
-                                // 入力中の値があればそれを使用、なければ既存の値を使用
-                                const currentRetail = retailInputs.has(item.id)
-                                  ? (() => {
-                                      const value = retailInputs.get(item.id)!;
-                                      return value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    })()
-                                  : eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams &&
-                                    item.retail !== null &&
-                                    item.retail !== undefined
-                                  ? (item.retail / 1000) * item.each_grams // $/kg → $/each
-                                  : item.retail;
-                                const { lcogPercent } = calculatePercentages(
-                                  currentRetail,
-                                  item
-                                );
-                                return lcogPercent !== null
-                                  ? `${lcogPercent.toFixed(2)}%`
-                                  : "-";
-                              })()}
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* ゴミ箱（Editモード時のみ表示） */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            width: "64px",
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          {isEditMode && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleItemDeleteClick(item.id);
-                              }}
-                              className={`p-2 rounded-md transition-colors ${
-                                item.isMarkedForDeletion
-                                  ? "bg-red-500 text-white hover:bg-red-600"
-                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                              }`}
                               style={{
                                 height: "20px",
                                 minHeight: "20px",
                                 maxHeight: "20px",
-                                boxSizing: "border-box",
                                 display: "flex",
                                 alignItems: "center",
-                                justifyContent: "center",
-                                padding: "0",
                               }}
-                              title="Mark for deletion"
                             >
-                              <Trash2 className="w-5 h-5" />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {item.cost_per_gram !== undefined
+                                  ? eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams
+                                    ? `$${(
+                                        item.cost_per_gram * item.each_grams
+                                      ).toFixed(2)}/each`
+                                    : costUnit === "g"
+                                    ? `$${item.cost_per_gram.toFixed(6)}/g`
+                                    : `$${(item.cost_per_gram * 1000).toFixed(
+                                        2
+                                      )}/kg`
+                                  : "-"}
+                              </div>
+                            </div>
+                          </td>
 
-                      {/* 展開されたレシピとLaborセクション */}
-                      {item.isExpanded && (
+                          {/* Wholesale */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "140px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeCosting && activeMode === "costing" ? (
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={
+                                    wholesaleInputs.has(item.id)
+                                      ? wholesaleInputs.get(item.id)!
+                                      : item.wholesale === null ||
+                                        item.wholesale === undefined
+                                      ? ""
+                                      : eachMode &&
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams
+                                      ? String(
+                                          (item.wholesale / 1000) *
+                                            item.each_grams
+                                        ) // $/kg → $/each
+                                      : String(item.wholesale)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setWholesaleInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(item.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
+                                    let numValue =
+                                      value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    // eachモード選択時、proceed_yield_unit === "each"のアイテムは$/eachで入力されているため、$/kgに変換
+                                    if (
+                                      numValue !== null &&
+                                      eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.each_grams > 0
+                                    ) {
+                                      numValue =
+                                        (numValue / item.each_grams) * 1000; // $/each → $/kg
+                                    }
+                                    handleItemChange(
+                                      item.id,
+                                      "wholesale",
+                                      numValue
+                                    );
+                                    // 入力中の文字列をクリア
+                                    setWholesaleInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.delete(item.id);
+                                      return newMap;
+                                    });
+                                  }}
+                                  className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100"
+                                      : "bg-white border-gray-300 text-gray-900"
+                                  }`}
+                                  placeholder="0.00"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
+                                  style={{
+                                    lineHeight: "20px",
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                  }}
+                                >
+                                  {item.wholesale !== null &&
+                                  item.wholesale !== undefined
+                                    ? eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams
+                                      ? `$${(
+                                          (item.wholesale / 1000) *
+                                          item.each_grams
+                                        ).toFixed(2)}/each`
+                                      : `$${item.wholesale.toFixed(2)}/kg`
+                                    : "-"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Wholesale Labor% */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "100px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  // 入力中の値があればそれを使用、なければ既存の値を使用
+                                  const currentWholesale = wholesaleInputs.has(
+                                    item.id
+                                  )
+                                    ? (() => {
+                                        const value = wholesaleInputs.get(
+                                          item.id
+                                        )!;
+                                        return value === "" || value === "."
+                                          ? null
+                                          : parseFloat(value) || null;
+                                      })()
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.wholesale !== null &&
+                                      item.wholesale !== undefined
+                                    ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
+                                    : item.wholesale;
+                                  const { laborPercent } = calculatePercentages(
+                                    currentWholesale,
+                                    item
+                                  );
+                                  return laborPercent !== null
+                                    ? `${laborPercent.toFixed(2)}%`
+                                    : "-";
+                                })()}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Wholesale COG% */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "100px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  // 入力中の値があればそれを使用、なければ既存の値を使用
+                                  const currentWholesale = wholesaleInputs.has(
+                                    item.id
+                                  )
+                                    ? (() => {
+                                        const value = wholesaleInputs.get(
+                                          item.id
+                                        )!;
+                                        return value === "" || value === "."
+                                          ? null
+                                          : parseFloat(value) || null;
+                                      })()
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.wholesale !== null &&
+                                      item.wholesale !== undefined
+                                    ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
+                                    : item.wholesale;
+                                  const { cogPercent } = calculatePercentages(
+                                    currentWholesale,
+                                    item
+                                  );
+                                  return cogPercent !== null
+                                    ? `${cogPercent.toFixed(2)}%`
+                                    : "-";
+                                })()}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Wholesale LCOG% */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "100px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  // 入力中の値があればそれを使用、なければ既存の値を使用
+                                  const currentWholesale = wholesaleInputs.has(
+                                    item.id
+                                  )
+                                    ? (() => {
+                                        const value = wholesaleInputs.get(
+                                          item.id
+                                        )!;
+                                        return value === "" || value === "."
+                                          ? null
+                                          : parseFloat(value) || null;
+                                      })()
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.wholesale !== null &&
+                                      item.wholesale !== undefined
+                                    ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
+                                    : item.wholesale;
+                                  const { lcogPercent } = calculatePercentages(
+                                    currentWholesale,
+                                    item
+                                  );
+                                  return lcogPercent !== null
+                                    ? `${lcogPercent.toFixed(2)}%`
+                                    : "-";
+                                })()}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Retail */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "120px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeCosting && activeMode === "costing" ? (
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={
+                                    retailInputs.has(item.id)
+                                      ? retailInputs.get(item.id)!
+                                      : item.retail === null ||
+                                        item.retail === undefined
+                                      ? ""
+                                      : eachMode &&
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams
+                                      ? String(
+                                          (item.retail / 1000) * item.each_grams
+                                        ) // $/kg → $/each
+                                      : String(item.retail)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setRetailInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(item.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
+                                    let numValue =
+                                      value === "" || value === "."
+                                        ? null
+                                        : parseFloat(value) || null;
+                                    // eachモード選択時、proceed_yield_unit === "each"のアイテムは$/eachで入力されているため、$/kgに変換
+                                    if (
+                                      numValue !== null &&
+                                      eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.each_grams > 0
+                                    ) {
+                                      numValue =
+                                        (numValue / item.each_grams) * 1000; // $/each → $/kg
+                                    }
+                                    handleItemChange(
+                                      item.id,
+                                      "retail",
+                                      numValue
+                                    );
+                                    // 入力中の文字列をクリア
+                                    setRetailInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.delete(item.id);
+                                      return newMap;
+                                    });
+                                  }}
+                                  className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100"
+                                      : "bg-white border-gray-300 text-gray-900"
+                                  }`}
+                                  placeholder="0.00"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
+                                  style={{
+                                    lineHeight: "20px",
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                  }}
+                                >
+                                  {item.retail !== null &&
+                                  item.retail !== undefined
+                                    ? eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams
+                                      ? `$${(
+                                          (item.retail / 1000) *
+                                          item.each_grams
+                                        ).toFixed(2)}/each`
+                                      : `$${item.retail.toFixed(2)}/kg`
+                                    : "-"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Retail Labor% */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "100px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  // 入力中の値があればそれを使用、なければ既存の値を使用
+                                  const currentRetail = retailInputs.has(
+                                    item.id
+                                  )
+                                    ? (() => {
+                                        const value = retailInputs.get(
+                                          item.id
+                                        )!;
+                                        return value === "" || value === "."
+                                          ? null
+                                          : parseFloat(value) || null;
+                                      })()
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.retail !== null &&
+                                      item.retail !== undefined
+                                    ? (item.retail / 1000) * item.each_grams // $/kg → $/each
+                                    : item.retail;
+                                  const { laborPercent } = calculatePercentages(
+                                    currentRetail,
+                                    item
+                                  );
+                                  return laborPercent !== null
+                                    ? `${laborPercent.toFixed(2)}%`
+                                    : "-";
+                                })()}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Retail COG% */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "100px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  // 入力中の値があればそれを使用、なければ既存の値を使用
+                                  const currentRetail = retailInputs.has(
+                                    item.id
+                                  )
+                                    ? (() => {
+                                        const value = retailInputs.get(
+                                          item.id
+                                        )!;
+                                        return value === "" || value === "."
+                                          ? null
+                                          : parseFloat(value) || null;
+                                      })()
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.retail !== null &&
+                                      item.retail !== undefined
+                                    ? (item.retail / 1000) * item.each_grams // $/kg → $/each
+                                    : item.retail;
+                                  const { cogPercent } = calculatePercentages(
+                                    currentRetail,
+                                    item
+                                  );
+                                  return cogPercent !== null
+                                    ? `${cogPercent.toFixed(2)}%`
+                                    : "-";
+                                })()}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Retail LCOG% */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "100px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  // 入力中の値があればそれを使用、なければ既存の値を使用
+                                  const currentRetail = retailInputs.has(
+                                    item.id
+                                  )
+                                    ? (() => {
+                                        const value = retailInputs.get(
+                                          item.id
+                                        )!;
+                                        return value === "" || value === "."
+                                          ? null
+                                          : parseFloat(value) || null;
+                                      })()
+                                    : eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams &&
+                                      item.retail !== null &&
+                                      item.retail !== undefined
+                                    ? (item.retail / 1000) * item.each_grams // $/kg → $/each
+                                    : item.retail;
+                                  const { lcogPercent } = calculatePercentages(
+                                    currentRetail,
+                                    item
+                                  );
+                                  return lcogPercent !== null
+                                    ? `${lcogPercent.toFixed(2)}%`
+                                    : "-";
+                                })()}
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* ゴミ箱（Editモード時のみ表示） */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "64px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            {isEditModeCosting && activeMode === "costing" && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleItemDeleteClick(item.id);
+                                }}
+                                className={`p-2 rounded-md transition-colors ${
+                                  item.isMarkedForDeletion
+                                    ? "bg-red-500 text-white hover:bg-red-600"
+                                    : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                }`}
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  boxSizing: "border-box",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  padding: "0",
+                                }}
+                                title="Mark for deletion"
+                              >
+                                <Trash2 className="w-5 h-5" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+
+                      {/* 展開されたレシピとLaborセクション（Costingモードのみ） */}
+                      {activeMode === "costing" && item.isExpanded && (
                         <tr
                           style={{ borderTopWidth: 0, borderTopStyle: "none" }}
                           className={`transition-colors ${
@@ -4388,21 +5177,22 @@ export default function CostPage() {
                                   }`}
                                 >
                                   Ingredients:
-                                  {isEditMode && (
-                                    <span
-                                      className={`ml-4 text-sm font-normal ${
-                                        isDark
-                                          ? "text-slate-400"
-                                          : "text-gray-600"
-                                      }`}
-                                    >
-                                      Total:{" "}
-                                      {calculateTotalIngredientsGrams(
-                                        item.recipe_lines
-                                      ).toFixed(2)}{" "}
-                                      g
-                                    </span>
-                                  )}
+                                  {isEditModeCosting &&
+                                    activeMode === "costing" && (
+                                      <span
+                                        className={`ml-4 text-sm font-normal ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
+                                        Total:{" "}
+                                        {calculateTotalIngredientsGrams(
+                                          item.recipe_lines
+                                        ).toFixed(2)}{" "}
+                                        g
+                                      </span>
+                                    )}
                                 </h3>
                                 <table
                                   className={`w-full ${expandedBgClass || ""}`}
@@ -4491,7 +5281,8 @@ export default function CostPage() {
                                           }}
                                         >
                                           <td className="px-4 py-2">
-                                            {isEditMode ? (
+                                            {isEditModeCosting &&
+                                            activeMode === "costing" ? (
                                               <SearchableSelect
                                                 options={getAvailableItemsForSelect(
                                                   line.child_item_id
@@ -4546,7 +5337,10 @@ export default function CostPage() {
                                                 );
                                               }
 
-                                              if (isEditMode) {
+                                              if (
+                                                isEditModeCosting &&
+                                                activeMode === "costing"
+                                              ) {
                                                 return (
                                                   <div className="flex items-center gap-4">
                                                     <label className="flex items-center gap-1">
@@ -4802,7 +5596,8 @@ export default function CostPage() {
                                             })()}
                                           </td>
                                           <td className="px-4 py-2">
-                                            {isEditMode ? (
+                                            {isEditModeCosting &&
+                                            activeMode === "costing" ? (
                                               <input
                                                 type="text"
                                                 inputMode="decimal"
@@ -4882,7 +5677,8 @@ export default function CostPage() {
                                             )}
                                           </td>
                                           <td className="px-4 py-2">
-                                            {isEditMode ? (
+                                            {isEditModeCosting &&
+                                            activeMode === "costing" ? (
                                               <select
                                                 value={line.unit || "g"}
                                                 onChange={(e) =>
@@ -4971,41 +5767,43 @@ export default function CostPage() {
                                             )}
                                           </td>
                                           <td className="px-4 py-2">
-                                            {isEditMode && (
-                                              <button
-                                                onClick={() =>
-                                                  handleRecipeLineDeleteClick(
-                                                    item.id,
-                                                    line.id
-                                                  )
-                                                }
-                                                className={`p-2 rounded-md transition-colors ${
-                                                  line.isMarkedForDeletion
-                                                    ? "bg-red-500 text-white hover:bg-red-600"
-                                                    : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                                                }`}
-                                              >
-                                                <Trash2 className="w-4 h-4" />
-                                              </button>
-                                            )}
+                                            {isEditModeCosting &&
+                                              activeMode === "costing" && (
+                                                <button
+                                                  onClick={() =>
+                                                    handleRecipeLineDeleteClick(
+                                                      item.id,
+                                                      line.id
+                                                    )
+                                                  }
+                                                  className={`p-2 rounded-md transition-colors ${
+                                                    line.isMarkedForDeletion
+                                                      ? "bg-red-500 text-white hover:bg-red-600"
+                                                      : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                                  }`}
+                                                >
+                                                  <Trash2 className="w-4 h-4" />
+                                                </button>
+                                              )}
                                           </td>
                                         </tr>
                                       ))}
                                     <tr>
                                       <td colSpan={5} className="px-4 py-2">
-                                        {isEditMode && (
-                                          <button
-                                            onClick={() =>
-                                              handleAddIngredientLine(item.id)
-                                            }
-                                            className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                                          >
-                                            <Plus className="w-4 h-4" />
-                                            <span className="text-sm">
-                                              Add ingredient
-                                            </span>
-                                          </button>
-                                        )}
+                                        {isEditModeCosting &&
+                                          activeMode === "costing" && (
+                                            <button
+                                              onClick={() =>
+                                                handleAddIngredientLine(item.id)
+                                              }
+                                              className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                                            >
+                                              <Plus className="w-4 h-4" />
+                                              <span className="text-sm">
+                                                Add ingredient
+                                              </span>
+                                            </button>
+                                          )}
                                       </td>
                                     </tr>
                                   </tbody>
@@ -5089,7 +5887,8 @@ export default function CostPage() {
                                           }}
                                         >
                                           <td className="px-4 py-2">
-                                            {isEditMode ? (
+                                            {isEditModeCosting &&
+                                            activeMode === "costing" ? (
                                               <select
                                                 value={line.labor_role || ""}
                                                 onChange={(e) =>
@@ -5134,7 +5933,8 @@ export default function CostPage() {
                                             )}
                                           </td>
                                           <td className="px-4 py-2">
-                                            {isEditMode ? (
+                                            {isEditModeCosting &&
+                                            activeMode === "costing" ? (
                                               <input
                                                 type="text"
                                                 inputMode="numeric"
@@ -5211,41 +6011,43 @@ export default function CostPage() {
                                             )}
                                           </td>
                                           <td className="px-4 py-2">
-                                            {isEditMode && (
-                                              <button
-                                                onClick={() =>
-                                                  handleRecipeLineDeleteClick(
-                                                    item.id,
-                                                    line.id
-                                                  )
-                                                }
-                                                className={`p-2 rounded-md transition-colors ${
-                                                  line.isMarkedForDeletion
-                                                    ? "bg-red-500 text-white hover:bg-red-600"
-                                                    : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                                                }`}
-                                              >
-                                                <Trash2 className="w-4 h-4" />
-                                              </button>
-                                            )}
+                                            {isEditModeCosting &&
+                                              activeMode === "costing" && (
+                                                <button
+                                                  onClick={() =>
+                                                    handleRecipeLineDeleteClick(
+                                                      item.id,
+                                                      line.id
+                                                    )
+                                                  }
+                                                  className={`p-2 rounded-md transition-colors ${
+                                                    line.isMarkedForDeletion
+                                                      ? "bg-red-500 text-white hover:bg-red-600"
+                                                      : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                                  }`}
+                                                >
+                                                  <Trash2 className="w-4 h-4" />
+                                                </button>
+                                              )}
                                           </td>
                                         </tr>
                                       ))}
                                     <tr>
                                       <td colSpan={3} className="px-4 py-2">
-                                        {isEditMode && (
-                                          <button
-                                            onClick={() =>
-                                              handleAddLaborLine(item.id)
-                                            }
-                                            className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                                          >
-                                            <Plus className="w-4 h-4" />
-                                            <span className="text-sm">
-                                              Add labor
-                                            </span>
-                                          </button>
-                                        )}
+                                        {isEditModeCosting &&
+                                          activeMode === "costing" && (
+                                            <button
+                                              onClick={() =>
+                                                handleAddLaborLine(item.id)
+                                              }
+                                              className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                                            >
+                                              <Plus className="w-4 h-4" />
+                                              <span className="text-sm">
+                                                Add labor
+                                              </span>
+                                            </button>
+                                          )}
                                       </td>
                                     </tr>
                                   </tbody>
@@ -5260,9 +6062,14 @@ export default function CostPage() {
                 })}
 
                 {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
-                {isEditMode && (
+                {isEditModeCosting && activeMode === "costing" && (
                   <tr>
-                    <td colSpan={isEditMode ? 6 : 5} className="px-6 py-4">
+                    <td
+                      colSpan={
+                        isEditModeCosting && activeMode === "costing" ? 6 : 5
+                      }
+                      className="px-6 py-4"
+                    >
                       <button
                         onClick={handleAddItemClick}
                         className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
