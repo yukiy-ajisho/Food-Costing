@@ -269,10 +269,10 @@ export async function apiRequest<T>(
   }
 
   // ヘッダーを構築
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Authorization: `Bearer ${session.access_token}`,
-    ...options.headers,
+    ...(options.headers as Record<string, string>),
   };
 
   // 選択されたテナントIDを取得（LocalStorageから）

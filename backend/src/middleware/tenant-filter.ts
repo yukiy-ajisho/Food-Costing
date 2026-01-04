@@ -1,5 +1,4 @@
 import { Request } from "express";
-import { PostgrestQueryBuilder } from "@supabase/postgrest-js";
 
 /**
  * テナントフィルタリング用のヘルパー関数
@@ -10,11 +9,14 @@ import { PostgrestQueryBuilder } from "@supabase/postgrest-js";
  * @param columnName - テナントIDカラム名（デフォルト: "tenant_id"）
  * @returns フィルタリングされたクエリビルダー
  */
-export function withTenantFilter<T>(
-  query: PostgrestQueryBuilder<T>,
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function withTenantFilter(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query: any,
   req: Request,
   columnName: string = "tenant_id"
-): PostgrestQueryBuilder<T> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
   const selectedTenantId =
     req.user?.selected_tenant_id || req.user?.tenant_ids[0];
 

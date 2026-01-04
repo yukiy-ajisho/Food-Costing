@@ -16,7 +16,6 @@ import {
   isShared,
   getAllowedActions,
 } from "./resource-shares";
-import { supabase } from "../config/supabase";
 
 // Cedar PolicySetとSchemaのキャッシュ
 let policySetText: string | null = null;
@@ -299,10 +298,14 @@ export async function authorize(
  * @deprecated 非同期版のauthorizeAsyncを使用してください
  */
 export function authorizeSync(
-  principal: Principal,
-  action: string,
-  resource: Resource,
-  context?: AuthContext
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _principal: Principal,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _action: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _resource: Resource,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _context?: AuthContext
 ): boolean {
   // 同期版は非推奨。非同期版を使用することを推奨
   throw new Error("authorizeSync is deprecated. Use authorizeAsync instead.");
