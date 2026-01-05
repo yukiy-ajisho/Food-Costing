@@ -1187,6 +1187,11 @@ export default function CostPage() {
 
   // データ取得
   useEffect(() => {
+    // selectedTenantIdが設定されるまで待つ
+    if (!selectedTenantId) {
+      return;
+    }
+
     const fetchData = async () => {
       try {
         setLoading(true);

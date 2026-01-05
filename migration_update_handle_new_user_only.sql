@@ -12,7 +12,8 @@ RETURNS trigger AS $$
 BEGIN
   -- public.usersにレコードを作成
   INSERT INTO public.users (id)
-  VALUES (new.id);
+  VALUES (new.id)
+  ON CONFLICT (id) DO NOTHING;
   
   -- proceed_validation_settingsにもレコードを作成（デフォルト設定を割り当てる）
   -- public.usersへのINSERTが成功した後なので、外部キー制約を満たす

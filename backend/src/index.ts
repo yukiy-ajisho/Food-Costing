@@ -20,6 +20,8 @@ import proceedValidationSettingsRouter from "./routes/proceed-validation-setting
 import tenantsRouter from "./routes/tenants";
 import productMappingsRouter from "./routes/product-mappings";
 import resourceSharesRouter from "./routes/resource-shares";
+import inviteRouter from "./routes/invite";
+import webhooksRouter from "./routes/webhooks";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
 try {
@@ -41,6 +43,12 @@ const corsOptions = {
 
 // ミドルウェア
 app.use(cors(corsOptions));
+
+// Webhookエンドポイント専用: 生のボディを取得（署名検証のため）
+// 注意: express.json()より前に配置する必要がある（順序が重要）
+app.use("/webhooks", express.raw({ type: "application/json" }));
+
+// 一般的なJSONボディパーサー（/webhooks以外のすべてのリクエストに適用）
 app.use(express.json());
 
 // ルート
@@ -49,25 +57,41 @@ app.get("/", (req, res) => {
   res.json({ message: "Food Costing API is running" });
 });
 
-// 認証が必要なルート（すべてのAPIエンドポイント）
-app.use("/items", authMiddleware, itemsRouter);
-app.use("/", authMiddleware, recipeLinesItemsRouter);
-app.use("/recipe-lines", authMiddleware, recipeLinesRouter);
-app.use("/", authMiddleware, costRouter);
-app.use("/base-items", authMiddleware, baseItemsRouter);
-app.use("/vendors", authMiddleware, vendorsRouter);
-app.use("/vendor-products", authMiddleware, vendorProductsRouter);
-app.use("/labor-roles", authMiddleware, laborRolesRouter);
-app.use("/non-mass-units", authMiddleware, nonMassUnitsRouter);
-app.use("/item-unit-profiles", authMiddleware, itemUnitProfilesRouter);
+// ============================================
+// 認証不要のルート（最初に配置）
+// ============================================
+// Webhook routes: 認証不要（Resendからの直接アクセス）
+app.use("/webhooks", webhooksRouter);
+// Invite routes: /invite/verify/:token is public, others require auth
+app.use("/invite", inviteRouter);
+
+// ============================================
+// 認証が必要なルート（特定のパスを先に配置）
+// ============================================
+app.use("/items", authMiddleware(), itemsRouter);
+app.use("/recipe-lines", authMiddleware(), recipeLinesRouter);
+app.use("/base-items", authMiddleware(), baseItemsRouter);
+app.use("/vendors", authMiddleware(), vendorsRouter);
+app.use("/vendor-products", authMiddleware(), vendorProductsRouter);
+app.use("/labor-roles", authMiddleware(), laborRolesRouter);
+app.use("/non-mass-units", authMiddleware(), nonMassUnitsRouter);
+app.use("/item-unit-profiles", authMiddleware(), itemUnitProfilesRouter);
 app.use(
   "/proceed-validation-settings",
-  authMiddleware,
+  authMiddleware(),
   proceedValidationSettingsRouter
 );
-app.use("/tenants", authMiddleware, tenantsRouter);
-app.use("/product-mappings", authMiddleware, productMappingsRouter);
-app.use("/resource-shares", authMiddleware, resourceSharesRouter);
+app.use("/tenants", authMiddleware(), tenantsRouter);
+app.use("/product-mappings", authMiddleware(), productMappingsRouter);
+app.use("/resource-shares", authMiddleware(), resourceSharesRouter);
+
+// ============================================
+// 認証が必要なルート（汎用パス - 最後に配置）
+// ============================================
+// recipeLinesItemsRouter: /items/:id/recipe, /items/recipes を処理
+app.use("/", authMiddleware(), recipeLinesItemsRouter);
+// costRouter: /items/:id/cost, /items/costs などを処理
+app.use("/", authMiddleware(), costRouter);
 
 // サーバー起動
 app.listen(PORT, () => {

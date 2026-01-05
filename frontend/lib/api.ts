@@ -275,9 +275,9 @@ export async function apiRequest<T>(
     ...(options.headers as Record<string, string>),
   };
 
-  // 選択されたテナントIDを取得（LocalStorageから）
-  let selectedTenantId: string | null = null;
-  if (typeof window !== "undefined") {
+  // 選択されたテナントIDを取得（tenantIdパラメータを優先、なければLocalStorageから）
+  let selectedTenantId: string | null = tenantId ?? null;
+  if (!selectedTenantId && typeof window !== "undefined") {
     selectedTenantId = localStorage.getItem("selectedTenantId");
   }
 

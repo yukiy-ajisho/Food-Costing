@@ -22,6 +22,7 @@ import {
   isNonMassUnit,
 } from "@/lib/constants";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useTenant } from "@/contexts/TenantContext";
 
 type TabType = "items" | "raw-items" | "vendors";
 
@@ -53,6 +54,7 @@ interface VendorUI {
 
 export default function ItemsPage() {
   const { theme } = useTheme();
+  const { selectedTenantId } = useTenant();
   const isDark = theme === "dark";
   const [activeTab, setActiveTab] = useState<TabType>("items");
 
@@ -106,6 +108,8 @@ export default function ItemsPage() {
   // =========================================================
   useEffect(() => {
     if (activeTab !== "items") return;
+    // selectedTenantIdが設定されるまで待つ
+    if (!selectedTenantId) return;
 
     // 既にデータが存在する場合は再取得をスキップ
     if (
@@ -211,6 +215,8 @@ export default function ItemsPage() {
   // =========================================================
   useEffect(() => {
     if (activeTab !== "raw-items") return;
+    // selectedTenantIdが設定されるまで待つ
+    if (!selectedTenantId) return;
 
     // 既にデータが存在する場合は再取得をスキップ
     if (baseItemsUI.length > 0) {
@@ -270,13 +276,15 @@ export default function ItemsPage() {
 
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, selectedTenantId]);
 
   // =========================================================
   // Vendorsタブのデータ取得
   // =========================================================
   useEffect(() => {
     if (activeTab !== "vendors") return;
+    // selectedTenantIdが設定されるまで待つ
+    if (!selectedTenantId) return;
 
     // 既にデータが存在する場合は再取得をスキップ
     if (vendorsUI.length > 0) {
@@ -309,7 +317,7 @@ export default function ItemsPage() {
 
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, selectedTenantId]);
 
   // =========================================================
   // Itemsタブのハンドラー（vendor_productsテーブルを操作）

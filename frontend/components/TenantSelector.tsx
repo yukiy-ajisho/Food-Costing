@@ -37,9 +37,16 @@ export function TenantSelector() {
   }
 
   if (tenants.length === 0) {
-    // デバッグ用: テナントが取得できていない場合
-    console.warn("TenantSelector: No tenants found");
-    return null;
+    // テナントを持たない場合の表示
+    return (
+      <div
+        className={`px-3 py-2 text-sm ${
+          isDark ? "text-slate-400" : "text-gray-500"
+        }`}
+      >
+        No Tenant
+      </div>
+    );
   }
 
   // テナントが1つだけの場合でも表示する（ユーザー要求に基づく）
