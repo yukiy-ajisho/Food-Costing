@@ -4,6 +4,75 @@ import { supabase } from "../config/supabase";
 const router = Router();
 
 /**
+ * POST /tenants
+ * 新しいテナントを作成（認証済みユーザーであれば誰でも可能）
+ */
+router.post("/", async (req, res) => {
+  try {
+    const { name, type } = req.body;
+
+    // バリデーション
+    if (!name || typeof name !== "string") {
+      return res.status(400).json({ error: "name is required" });
+    }
+
+    if (name.length < 5 || name.length > 50) {
+      return res.status(400).json({
+        error: "name must be between 5 and 50 characters",
+      });
+    }
+
+    if (!type || typeof type !== "string") {
+      return res.status(400).json({ error: "type is required" });
+    }
+
+    if (!["restaurant", "vendor"].includes(type)) {
+      return res.status(400).json({
+        error: "type must be one of: restaurant, vendor",
+      });
+    }
+
+    // テナントを作成
+    const { data: tenant, error: tenantError } = await supabase
+      .from("tenants")
+      .insert([{ name, type }])
+      .select()
+      .single();
+
+    if (tenantError || !tenant) {
+      return res.status(500).json({
+        error: tenantError?.message || "Failed to create tenant",
+      });
+    }
+
+    // 作成者をadminロールでprofilesに追加
+    const { error: profileError } = await supabase.from("profiles").insert([
+      {
+        user_id: req.user!.id,
+        tenant_id: tenant.id,
+        role: "admin",
+      },
+    ]);
+
+    if (profileError) {
+      // プロファイル作成に失敗した場合、テナントを削除してロールバック
+      await supabase.from("tenants").delete().eq("id", tenant.id);
+      return res.status(500).json({
+        error: profileError.message || "Failed to create profile",
+      });
+    }
+
+    res.status(201).json({
+      ...tenant,
+      role: "admin",
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * GET /tenants
  * ユーザーが属するテナント一覧を取得
  */
