@@ -112,7 +112,7 @@ router.post(
       }
 
       // 招待者の名前を取得（auth.usersから）
-      const { data: inviterAuthUser, error: inviterAuthError } =
+      const { data: inviterAuthUser } =
         await supabase.auth.admin.getUserById(userId);
 
       // ユーザー情報が取得できない場合はデフォルト名を使用
@@ -349,7 +349,7 @@ router.post(
   authMiddleware({ allowNoProfiles: true }),
   async (req, res) => {
     try {
-      const { token, first_name, last_name } = req.body;
+      const { token } = req.body;
       const userId = req.user!.id;
 
       if (!token) {

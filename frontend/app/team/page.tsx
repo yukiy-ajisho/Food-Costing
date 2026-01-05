@@ -120,7 +120,8 @@ export default function TeamPage() {
     } catch (error) {
       console.error("Failed to fetch invitations:", error);
       // 403エラー（Adminでない場合）は無視
-      if ((error as any)?.status !== 403) {
+      const apiError = error as { status?: number };
+      if (apiError?.status !== 403) {
         setInvitations([]);
       }
     } finally {
@@ -287,9 +288,10 @@ export default function TeamPage() {
 
       // 招待一覧を再取得
       await fetchInvitations();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Failed to send invitation:", error);
-      alert(error.details || error.error || "Failed to send invitation");
+      const apiError = error as { details?: string; error?: string };
+      alert(apiError.details || apiError.error || "Failed to send invitation");
     } finally {
       setSendingInvite((prev) => {
         const next = new Set(prev);

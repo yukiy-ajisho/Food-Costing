@@ -61,8 +61,9 @@ function JoinPageContent() {
           `/invite/verify/${token}`
         );
         setInvitation(data);
-      } catch (err: any) {
-        setError(err.details || err.error || "Invalid invitation");
+      } catch (err: unknown) {
+        const error = err as { details?: string; error?: string };
+        setError(error.details || error.error || "Invalid invitation");
       } finally {
         setIsVerifying(false);
       }
@@ -99,8 +100,9 @@ function JoinPageContent() {
       setTimeout(() => {
         router.push("/");
       }, 1500);
-    } catch (err: any) {
-      setError(err.details || err.error || "Failed to accept invitation");
+    } catch (err: unknown) {
+      const error = err as { details?: string; error?: string };
+      setError(error.details || error.error || "Failed to accept invitation");
       setIsAccepting(false);
     }
   };
@@ -194,7 +196,7 @@ function JoinPageContent() {
             isDark ? "text-slate-300" : "text-gray-600"
           }`}
         >
-          You've been invited to join a team on Food Costing.
+          You&apos;ve been invited to join a team on Food Costing.
         </p>
 
         <div
