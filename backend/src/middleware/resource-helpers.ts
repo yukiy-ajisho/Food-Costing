@@ -148,6 +148,35 @@ export async function getCreateResource(
 }
 
 /**
+ * Invitationリソースを取得
+ */
+export async function getInvitationResource(
+  req: Request
+): Promise<Resource | null> {
+  const { id } = req.params;
+  if (!id) {
+    return null;
+  }
+
+  let query = supabase
+    .from("invitations")
+    .select("id, tenant_id")
+    .eq("id", id);
+  query = withTenantFilter(query, req);
+  const { data, error } = await query.single();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return {
+    id: data.id,
+    resource_type: "invitation",
+    owner_tenant_id: data.tenant_id,
+  };
+}
+
+/**
  * 一覧取得時のコレクションレベル認可チェック用リソース取得
  * リソースタイプベースの認可チェック（入口チェック）に使用
  */

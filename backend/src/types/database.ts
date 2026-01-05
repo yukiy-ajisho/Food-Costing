@@ -136,6 +136,20 @@ export interface Profile {
   created_at?: string;
 }
 
+export interface Invitation {
+  id: string;
+  email: string;
+  role: "manager" | "staff";
+  tenant_id: string; // FK to tenants(id)
+  token: string;
+  status: "pending" | "accepted" | "expired" | "canceled";
+  email_status?: "delivered" | "failed" | null;
+  email_id?: string | null; // Resendが返すメール送信の一意ID（Webhook更新用）
+  created_by: string; // FK to users(id)
+  created_at?: string;
+  expires_at: string;
+}
+
 // Phase 2: Authorization & Sharing
 export interface ResourceShare {
   id: string;

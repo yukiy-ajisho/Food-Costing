@@ -21,21 +21,37 @@ interface TenantContextType {
 const TenantContext = createContext<TenantContextType | undefined>(undefined);
 
 export function TenantProvider({ children }: { children: ReactNode }) {
-  const [selectedTenantId, setSelectedTenantIdState] = useState<string | null>(null);
+  // LocalStorageから選択されたテナントIDを同期的に読み込む（SSR対応）
+  const [selectedTenantId, setSelectedTenantIdState] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("selectedTenantId");
+    }
+    return null;
+  });
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // LocalStorageから選択されたテナントIDを読み込む
+  // 複数タブ間の同期: storageイベントをリッスン
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const savedTenantId = localStorage.getItem("selectedTenantId");
-      if (savedTenantId) {
-        setSelectedTenantIdState(savedTenantId);
-      }
-    }
-  }, []);
+    if (typeof window === "undefined") return;
 
-  // テナント一覧を取得（初回ロード時のみ）
+    const handleStorageChange = (e: StorageEvent) => {
+      // storageイベントは他のタブでの変更のみ発火する
+      if (e.key === "selectedTenantId") {
+        const newTenantId = e.newValue;
+        if (newTenantId !== selectedTenantId) {
+          setSelectedTenantIdState(newTenantId);
+        }
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [selectedTenantId]);
+
+  // テナント一覧を取得（selectedTenantIdが設定された後、または初回ロード時）
   useEffect(() => {
     const fetchTenants = async () => {
       try {
@@ -52,7 +68,12 @@ export function TenantProvider({ children }: { children: ReactNode }) {
             const firstTenantId = data.tenants[0].id;
             setSelectedTenantIdState(firstTenantId);
             if (typeof window !== "undefined") {
-              localStorage.setItem("selectedTenantId", firstTenantId);
+              try {
+                localStorage.setItem("selectedTenantId", firstTenantId);
+              } catch (error) {
+                // プライベートモードなどでlocalStorageが使用できない場合
+                console.warn("Failed to save selectedTenantId to localStorage:", error);
+              }
             }
           } else {
             // 選択されているが、テナント一覧に存在しない場合は最初のテナントを設定
@@ -61,7 +82,12 @@ export function TenantProvider({ children }: { children: ReactNode }) {
               const firstTenantId = data.tenants[0].id;
               setSelectedTenantIdState(firstTenantId);
               if (typeof window !== "undefined") {
-                localStorage.setItem("selectedTenantId", firstTenantId);
+                try {
+                  localStorage.setItem("selectedTenantId", firstTenantId);
+                } catch (error) {
+                  // プライベートモードなどでlocalStorageが使用できない場合
+                  console.warn("Failed to save selectedTenantId to localStorage:", error);
+                }
               }
             }
           }
@@ -75,16 +101,23 @@ export function TenantProvider({ children }: { children: ReactNode }) {
 
     fetchTenants();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // 初回ロード時のみ実行
+  }, [selectedTenantId]); // selectedTenantIdに依存（テナント一覧取得後に検証）
 
   // 選択されたテナントIDを設定（LocalStorageにも保存）
   const setSelectedTenantId = (tenantId: string | null) => {
     setSelectedTenantIdState(tenantId);
     if (typeof window !== "undefined") {
-      if (tenantId) {
-        localStorage.setItem("selectedTenantId", tenantId);
-      } else {
-        localStorage.removeItem("selectedTenantId");
+      try {
+        if (tenantId) {
+          localStorage.setItem("selectedTenantId", tenantId);
+        } else {
+          localStorage.removeItem("selectedTenantId");
+        }
+        // 同じタブ内ではReact Contextが自動的に変更を通知するため、カスタムイベントは不要
+        // storageイベントは他のタブでの変更を検知するために使用される
+      } catch (error) {
+        // プライベートモードなどでlocalStorageが使用できない場合
+        console.warn("Failed to save selectedTenantId to localStorage:", error);
       }
     }
   };

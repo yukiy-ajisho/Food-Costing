@@ -10,6 +10,7 @@ import {
   type ProceedValidationSettings,
 } from "@/lib/api";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useTenant } from "@/contexts/TenantContext";
 
 type TabType = "labor" | "overweight";
 
@@ -20,6 +21,7 @@ interface LaborRoleUI extends LaborRole {
 
 export default function SettingsPage() {
   const { theme } = useTheme();
+  const { selectedTenantId } = useTenant();
   const isDark = theme === "dark";
   const [activeTab, setActiveTab] = useState<TabType>("labor");
 
@@ -52,11 +54,8 @@ export default function SettingsPage() {
   // =========================================================
   useEffect(() => {
     if (activeTab !== "labor") return;
-
-    // 既にデータが存在する場合は再取得をスキップ
-    if (laborRoles.length > 0) {
-      return;
-    }
+    // selectedTenantIdが設定されるまで待つ
+    if (!selectedTenantId) return;
 
     // 初回ロード時のみローディング状態を表示
     const isFirstLoad = !hasLoadedLaborOnce;
@@ -80,7 +79,16 @@ export default function SettingsPage() {
 
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, selectedTenantId]);
+
+  // selectedTenantIdが変更されたときに、hasLoadedLaborOnceとデータをリセット
+  useEffect(() => {
+    if (activeTab === "labor") {
+      setHasLoadedLaborOnce(false);
+      setLaborRoles([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTenantId]);
 
   // =========================================================
   // Overweightタブのデータ取得
