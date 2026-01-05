@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/api";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
-import { Edit, Save, X, Trash2, User, UserPlus, Mail } from "lucide-react";
+import { Edit, Save, X, Trash2, User, UserPlus, Mail, Plus } from "lucide-react";
 
 interface TenantMember {
   user_id: string;
@@ -37,7 +37,7 @@ interface Invitation {
 
 export default function TeamPage() {
   const { theme } = useTheme();
-  const { selectedTenantId } = useTenant();
+  const { selectedTenantId, setSelectedTenantId } = useTenant();
   // Phase 1a: すべてのテナントの情報を表示
   const [tenantsWithMembers, setTenantsWithMembers] = useState<
     TenantWithMembers[]
@@ -62,6 +62,12 @@ export default function TeamPage() {
   const [sendingInvite, setSendingInvite] = useState<Set<string>>(new Set());
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loadingInvitations, setLoadingInvitations] = useState(false);
+  const [showCreateTenantModal, setShowCreateTenantModal] = useState(false);
+  const [newTenantName, setNewTenantName] = useState("");
+  const [newTenantType, setNewTenantType] = useState<"restaurant" | "vendor">(
+    "restaurant"
+  );
+  const [creatingTenant, setCreatingTenant] = useState(false);
 
   const isDark = theme === "dark";
 
@@ -134,6 +140,48 @@ export default function TeamPage() {
     fetchInvitations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTenantId]);
+
+  // テナントを作成
+  const handleCreateTenant = async () => {
+    if (!newTenantName.trim() || newTenantName.length < 5 || newTenantName.length > 50) {
+      alert("Tenant name must be between 5 and 50 characters");
+      return;
+    }
+
+    try {
+      setCreatingTenant(true);
+      const newTenant = await apiRequest<{
+        id: string;
+        name: string;
+        type: string;
+        created_at: string;
+        role: string;
+      }>("/tenants", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newTenantName.trim(),
+          type: newTenantType,
+        }),
+      });
+
+      // 作成したテナントを自動選択
+      setSelectedTenantId(newTenant.id);
+
+      // モーダルを閉じてフォームをリセット
+      setShowCreateTenantModal(false);
+      setNewTenantName("");
+      setNewTenantType("restaurant");
+
+      // テナント一覧はTenantContextが自動的に再取得するため、手動で更新する必要はない
+      // ただし、selectedTenantIdが変更されるため、useEffectが発火してテナント情報が再取得される
+    } catch (error: unknown) {
+      console.error("Failed to create tenant:", error);
+      const apiError = error as { details?: string; error?: string };
+      alert(apiError.details || apiError.error || "Failed to create tenant");
+    } finally {
+      setCreatingTenant(false);
+    }
+  };
 
   // 統合ステータスを取得する関数
   const getDisplayStatus = (invitation: Invitation): string => {
@@ -311,19 +359,135 @@ export default function TeamPage() {
     );
   }
 
-  if (tenantsWithMembers.length === 0) {
-    return (
-      <div className="p-8">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-lg">No tenants found</div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="p-8">
       <div className="max-w-4xl mx-auto space-y-8">
+        {/* Create New Tenant Button */}
+        <div className="flex justify-end">
+          <button
+            onClick={() => setShowCreateTenantModal(true)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+              isDark
+                ? "bg-blue-600 hover:bg-blue-700 text-white"
+                : "bg-blue-500 hover:bg-blue-600 text-white"
+            }`}
+          >
+            <Plus className="h-4 w-4" />
+            Create New Tenant
+          </button>
+        </div>
+
+        {tenantsWithMembers.length === 0 ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="text-lg">No tenants found</div>
+          </div>
+        ) : null}
+
+        {/* Create Tenant Modal */}
+        {showCreateTenantModal && (
+          <div
+            className={`fixed inset-0 flex items-center justify-center z-50 ${
+              isDark ? "bg-black/70" : "bg-black/50"
+            }`}
+          >
+            <div
+              className={`p-6 rounded-lg max-w-md w-full mx-4 ${
+                isDark ? "bg-slate-800" : "bg-white"
+              }`}
+            >
+              <h2 className="text-xl font-semibold mb-4">Create New Tenant</h2>
+              <div className="space-y-4">
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      isDark ? "text-slate-300" : "text-gray-700"
+                    }`}
+                  >
+                    Tenant Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newTenantName}
+                    onChange={(e) => setNewTenantName(e.target.value)}
+                    placeholder="Enter tenant name (5-50 characters)"
+                    className={`w-full px-3 py-2 rounded border ${
+                      isDark
+                        ? "bg-slate-600 border-slate-500 text-slate-200"
+                        : "bg-white border-gray-300 text-gray-900"
+                    }`}
+                    disabled={creatingTenant}
+                    minLength={5}
+                    maxLength={50}
+                  />
+                  <p
+                    className={`mt-1 text-xs ${
+                      isDark ? "text-slate-400" : "text-gray-500"
+                    }`}
+                  >
+                    {newTenantName.length}/50 characters
+                  </p>
+                </div>
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      isDark ? "text-slate-300" : "text-gray-700"
+                    }`}
+                  >
+                    Tenant Type
+                  </label>
+                  <select
+                    value={newTenantType}
+                    onChange={(e) =>
+                      setNewTenantType(e.target.value as "restaurant" | "vendor")
+                    }
+                    className={`w-full px-3 py-2 rounded border ${
+                      isDark
+                        ? "bg-slate-600 border-slate-500 text-slate-200"
+                        : "bg-white border-gray-300 text-gray-900"
+                    }`}
+                    disabled={creatingTenant}
+                  >
+                    <option value="restaurant">Restaurant</option>
+                    <option value="vendor">Vendor</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2 justify-end">
+                  <button
+                    onClick={() => {
+                      setShowCreateTenantModal(false);
+                      setNewTenantName("");
+                      setNewTenantType("restaurant");
+                    }}
+                    disabled={creatingTenant}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                      isDark
+                        ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
+                        : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                    }`}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCreateTenant}
+                    disabled={
+                      creatingTenant ||
+                      newTenantName.trim().length < 5 ||
+                      newTenantName.trim().length > 50
+                    }
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                      isDark
+                        ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-600"
+                        : "bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-400"
+                    }`}
+                  >
+                    {creatingTenant ? "Creating..." : "Create Tenant"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {tenantsWithMembers.map((tenant) => {
           const isAdmin = tenant.role === "admin";
           const isEditing = editingTenantId === tenant.id;
