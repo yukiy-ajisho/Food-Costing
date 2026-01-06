@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { authMiddleware } from "../middleware/auth";
 
 const router = Router();
 
@@ -7,7 +8,7 @@ const router = Router();
  * POST /tenants
  * 新しいテナントを作成（認証済みユーザーであれば誰でも可能）
  */
-router.post("/", async (req, res) => {
+router.post("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
   try {
     const { name, type } = req.body;
 
@@ -76,7 +77,7 @@ router.post("/", async (req, res) => {
  * GET /tenants
  * ユーザーが属するテナント一覧を取得
  */
-router.get("/", async (req, res) => {
+router.get("/", authMiddleware(), async (req, res) => {
   try {
     // ユーザーが属するテナント一覧を取得
     const { data: profiles, error: profilesError } = await supabase
@@ -125,7 +126,7 @@ router.get("/", async (req, res) => {
  * GET /tenants/:id
  * テナント情報を取得
  */
-router.get("/:id", async (req, res) => {
+router.get("/:id", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: profile, error: profileError } = await supabase
@@ -166,7 +167,7 @@ router.get("/:id", async (req, res) => {
  * GET /tenants/:id/members
  * テナントのメンバー一覧を取得
  */
-router.get("/:id/members", async (req, res) => {
+router.get("/:id/members", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: userProfile, error: userProfileError } = await supabase
@@ -241,7 +242,7 @@ router.get("/:id/members", async (req, res) => {
  * PUT /tenants/:id
  * テナント名を更新（テナントに属しているユーザーであれば誰でも可能）
  */
-router.put("/:id", async (req, res) => {
+router.put("/:id", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: profile, error: profileError } = await supabase
@@ -288,7 +289,7 @@ router.put("/:id", async (req, res) => {
  * PUT /tenants/:id/members/:userId/role
  * メンバーの役割を変更（テナントに属しているユーザーであれば誰でも可能）
  */
-router.put("/:id/members/:userId/role", async (req, res) => {
+router.put("/:id/members/:userId/role", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: userProfile, error: userProfileError } = await supabase
@@ -338,7 +339,7 @@ router.put("/:id/members/:userId/role", async (req, res) => {
  * DELETE /tenants/:id/members/:userId
  * メンバーをテナントから削除（テナントに属しているユーザーであれば誰でも可能）
  */
-router.delete("/:id/members/:userId", async (req, res) => {
+router.delete("/:id/members/:userId", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: userProfile, error: userProfileError } = await supabase

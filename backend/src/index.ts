@@ -22,6 +22,7 @@ import productMappingsRouter from "./routes/product-mappings";
 import resourceSharesRouter from "./routes/resource-shares";
 import inviteRouter from "./routes/invite";
 import webhooksRouter from "./routes/webhooks";
+import accessRequestsRouter from "./routes/access-requests";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
 try {
@@ -64,6 +65,8 @@ app.get("/", (req, res) => {
 app.use("/webhooks", webhooksRouter);
 // Invite routes: /invite/verify/:token is public, others require auth
 app.use("/invite", inviteRouter);
+// Access requests: POST is public, others require System Admin
+app.use("/access-requests", accessRequestsRouter);
 
 // ============================================
 // 認証が必要なルート（特定のパスを先に配置）
@@ -81,7 +84,7 @@ app.use(
   authMiddleware(),
   proceedValidationSettingsRouter
 );
-app.use("/tenants", authMiddleware(), tenantsRouter);
+app.use("/tenants", tenantsRouter);
 app.use("/product-mappings", authMiddleware(), productMappingsRouter);
 app.use("/resource-shares", authMiddleware(), resourceSharesRouter);
 

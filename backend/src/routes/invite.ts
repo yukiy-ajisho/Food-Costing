@@ -464,6 +464,28 @@ router.post(
         // エラーを返さない（プロフィールは作成済み）
       }
 
+      // allowlistに追加（なければ）
+      const { error: allowlistError } = await supabase
+        .from("allowlist")
+        .insert({
+          email: invitation.email,
+          status: "approved",
+          approved_at: new Date().toISOString(),
+          approved_by: "invitation_accept",
+          note: `Accepted invitation from tenant ${invitation.tenant_id}`,
+        })
+        .select()
+        .maybeSingle();
+
+      // 既に存在する場合（UNIQUE制約エラー）は無視
+      if (allowlistError && allowlistError.code !== "23505") {
+        console.error(
+          "[POST /invite/accept] Warning: Failed to add to allowlist:",
+          allowlistError
+        );
+        // エラーを返さない（プロフィールは作成済み）
+      }
+
       console.log("[POST /invite/accept] Invitation accepted successfully");
       res.status(200).json({
         message: "Invitation accepted successfully",

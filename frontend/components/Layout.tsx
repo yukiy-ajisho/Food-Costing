@@ -10,11 +10,13 @@ import {
   Sun,
   Users,
   Menu,
+  Shield,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
 import { TenantSelector } from "./TenantSelector";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createClient } from "@/lib/supabase-client";
 
 // ナビゲーション項目
 const navigationItems = [
@@ -50,6 +52,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme } = useTheme();
   const [sidebarMode, setSidebarMode] = useState<"compact" | "full">("compact");
   const [isHovered, setIsHovered] = useState(false);
+  const [isSystemAdmin, setIsSystemAdmin] = useState(false);
+  const supabase = createClient();
+
+  // System Adminチェック
+  useEffect(() => {
+    const checkSystemAdmin = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.email === "yukiy@ajisho-usa.com") {
+        setIsSystemAdmin(true);
+      }
+    };
+    checkSystemAdmin();
+  }, [supabase]);
 
   // 現在のページに応じたタイトルを取得
   const getPageTitle = () => {
@@ -235,6 +252,59 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   </Link>
                 );
               })}
+
+              {/* System Admin Panel Link */}
+              {isSystemAdmin && (
+                <Link
+                  href="/admin"
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
+                    pathname === "/admin"
+                      ? isDark
+                        ? "text-blue-400 font-semibold"
+                        : "text-blue-700 font-semibold"
+                      : isDark
+                      ? "text-slate-300 hover:text-blue-400"
+                      : "text-gray-600 hover:text-blue-700"
+                  }`}
+                  style={{
+                    backgroundColor: isDark ? "#1e293b" : "white",
+                    transition:
+                      "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
+                    color:
+                      pathname === "/admin"
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#334155"
+                      : "#dbeafe";
+                    e.currentTarget.style.color = isDark ? "#60a5fa" : "#1d4ed8";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#1e293b"
+                      : "white";
+                    e.currentTarget.style.color =
+                      pathname === "/admin"
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280";
+                  }}
+                >
+                  <Shield className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <span className="text-sm whitespace-nowrap">Admin Panel</span>
+                  )}
+                </Link>
+              )}
             </div>
           </nav>
 
