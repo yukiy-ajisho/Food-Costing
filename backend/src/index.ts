@@ -23,6 +23,7 @@ import resourceSharesRouter from "./routes/resource-shares";
 import inviteRouter from "./routes/invite";
 import webhooksRouter from "./routes/webhooks";
 import accessRequestsRouter from "./routes/access-requests";
+import meRouter from "./routes/me";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
 try {
@@ -67,6 +68,8 @@ app.use("/webhooks", webhooksRouter);
 app.use("/invite", inviteRouter);
 // Access requests: POST is public, others require System Admin
 app.use("/access-requests", accessRequestsRouter);
+// Me endpoint: Get current user info (authenticated)
+app.use("/me", meRouter);
 
 // ============================================
 // 認証が必要なルート（特定のパスを先に配置）

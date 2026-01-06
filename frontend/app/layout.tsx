@@ -17,13 +17,13 @@ export default async function RootLayout({
 }>) {
   const headersList = await headers();
   const pathname = headersList.get("x-pathname") || "";
-  const isLoginPage = pathname === "/login";
+  const isPublicPage = pathname === "/login" || pathname === "/request-access";
 
   return (
     <html lang="en">
       <body>
         <ThemeProvider>
-          {isLoginPage ? (
+          {isPublicPage ? (
             children
           ) : (
             <TenantProvider>

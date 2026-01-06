@@ -35,31 +35,37 @@ COMMENT ON COLUMN allowlist.request_count IS 'Number of access requests from thi
 -- =========================================================
 -- 2) before.signup Auth Hook function
 -- =========================================================
-CREATE OR REPLACE FUNCTION public.check_before_signup()
-RETURNS trigger
+CREATE OR REPLACE FUNCTION public.check_before_signup(event jsonb)
+RETURNS jsonb
 SECURITY DEFINER
 SET search_path = public
 LANGUAGE plpgsql
 AS $$
+DECLARE
+  user_email text;
 BEGIN
+  -- Extract email from event
+  user_email := event->'user'->>'email';
+  
   -- Check if email is in allowlist (approved) OR invitations (pending)
   IF NOT EXISTS (
     SELECT 1 FROM allowlist 
-    WHERE email = NEW.email 
+    WHERE email = user_email 
     AND status = 'approved'
   ) AND NOT EXISTS (
     SELECT 1 FROM invitations
-    WHERE email = NEW.email 
+    WHERE email = user_email 
     AND status = 'pending'
   ) THEN
     RAISE EXCEPTION 'Access denied. Please request access or wait for an invitation.';
   END IF;
   
-  RETURN NEW;
+  -- Return the event unmodified
+  RETURN event;
 END;
 $$;
 
-COMMENT ON FUNCTION public.check_before_signup() IS 'Auth Hook: Check allowlist or invitations before user signup';
+COMMENT ON FUNCTION public.check_before_signup(jsonb) IS 'Auth Hook: Check allowlist or invitations before user signup';
 
 -- =========================================================
 -- 3) RLS Policies for allowlist

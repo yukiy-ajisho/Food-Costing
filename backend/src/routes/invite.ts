@@ -473,9 +473,7 @@ router.post(
           approved_at: new Date().toISOString(),
           approved_by: "invitation_accept",
           note: `Accepted invitation from tenant ${invitation.tenant_id}`,
-        })
-        .select()
-        .maybeSingle();
+        });
 
       // 既に存在する場合（UNIQUE制約エラー）は無視
       if (allowlistError && allowlistError.code !== "23505") {
@@ -484,6 +482,11 @@ router.post(
           allowlistError
         );
         // エラーを返さない（プロフィールは作成済み）
+      } else if (!allowlistError) {
+        console.log(
+          "[POST /invite/accept] Added to allowlist:",
+          invitation.email
+        );
       }
 
       console.log("[POST /invite/accept] Invitation accepted successfully");

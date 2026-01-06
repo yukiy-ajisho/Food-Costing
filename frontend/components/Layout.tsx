@@ -16,7 +16,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
 import { TenantSelector } from "./TenantSelector";
 import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase-client";
+import { apiRequest } from "@/lib/api";
 
 // ナビゲーション項目
 const navigationItems = [
@@ -53,20 +53,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [sidebarMode, setSidebarMode] = useState<"compact" | "full">("compact");
   const [isHovered, setIsHovered] = useState(false);
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
-  const supabase = createClient();
 
   // System Adminチェック
   useEffect(() => {
     const checkSystemAdmin = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user?.email === "yukiy@ajisho-usa.com") {
-        setIsSystemAdmin(true);
+      try {
+        const data = await apiRequest<{ is_system_admin: boolean }>("/me");
+        setIsSystemAdmin(data.is_system_admin);
+      } catch (error) {
+        console.error("Failed to fetch user info:", error);
       }
     };
     checkSystemAdmin();
-  }, [supabase]);
+  }, []);
 
   // 現在のページに応じたタイトルを取得
   const getPageTitle = () => {
