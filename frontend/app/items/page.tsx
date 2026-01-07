@@ -13,7 +13,6 @@ import {
   type BaseItem as APIBaseItem,
   type Vendor,
   type VendorProduct,
-  type ProductMapping,
 } from "@/lib/api";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import {
@@ -68,7 +67,6 @@ export default function ItemsPage() {
   >([]);
   const [isEditModeItems, setIsEditModeItems] = useState(false);
   const [loadingItems, setLoadingItems] = useState(false);
-  const [hasLoadedItemsOnce, setHasLoadedItemsOnce] = useState(false);
   // 入力中のpurchase_quantityを文字列として保持（vp.id -> 入力中の文字列）
   const [purchaseQuantityInputs, setPurchaseQuantityInputs] = useState<
     Map<string, string>
@@ -83,7 +81,6 @@ export default function ItemsPage() {
   const [originalBaseItems, setOriginalBaseItems] = useState<BaseItemUI[]>([]);
   const [isEditModeBaseItems, setIsEditModeBaseItems] = useState(false);
   const [loadingBaseItems, setLoadingBaseItems] = useState(false);
-  const [hasLoadedBaseItemsOnce, setHasLoadedBaseItemsOnce] = useState(false);
   // 入力中のspecific_weightを文字列として保持（item.id -> 入力中の文字列）
   const [specificWeightInputs, setSpecificWeightInputs] = useState<
     Map<string, string>
@@ -98,7 +95,6 @@ export default function ItemsPage() {
   const [originalVendors, setOriginalVendors] = useState<VendorUI[]>([]);
   const [isEditModeVendors, setIsEditModeVendors] = useState(false);
   const [loadingVendors, setLoadingVendors] = useState(false);
-  const [hasLoadedVendorsOnce, setHasLoadedVendorsOnce] = useState(false);
 
   // 単位オプション（質量単位 + 非質量単位、順番を制御）
   const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
@@ -111,31 +107,22 @@ export default function ItemsPage() {
     // selectedTenantIdが設定されるまで待つ
     if (!selectedTenantId) return;
 
-    // 既にデータが存在する場合は再取得をスキップ
-    if (
-      vendorProducts.length > 0 &&
-      baseItems.length > 0 &&
-      vendors.length > 0
-    ) {
-      return;
-    }
-
-    // 初回ロード時のみローディング状態を表示
-    const isFirstLoad = !hasLoadedItemsOnce;
-
     const fetchData = async () => {
       try {
-        if (isFirstLoad) {
-          setLoadingItems(true);
-        }
-        const [vendorProductsData, baseItemsData, vendorsData, itemsData, mappingsData] =
-          await Promise.all([
-            vendorProductsAPI.getAll(),
-            baseItemsAPI.getAll(),
-            vendorsAPI.getAll(),
-            itemsAPI.getAll({ item_kind: "raw" }),
-            productMappingsAPI.getAll(),
-          ]);
+        setLoadingItems(true);
+        const [
+          vendorProductsData,
+          baseItemsData,
+          vendorsData,
+          itemsData,
+          mappingsData,
+        ] = await Promise.all([
+          vendorProductsAPI.getAll(),
+          baseItemsAPI.getAll(),
+          vendorsAPI.getAll(),
+          itemsAPI.getAll({ item_kind: "raw" }),
+          productMappingsAPI.getAll(),
+        ]);
 
         setBaseItems(baseItemsData);
         setVendors(vendorsData);
@@ -144,7 +131,10 @@ export default function ItemsPage() {
         // product_mappingsからbase_item_idを取得するマップを作成
         const virtualProductToBaseItemMap = new Map<string, string>();
         mappingsData?.forEach((mapping) => {
-          virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+          virtualProductToBaseItemMap.set(
+            mapping.virtual_product_id,
+            mapping.base_item_id
+          );
         });
 
         // VendorProductUI形式に変換（deprecatedを除外）
@@ -159,14 +149,10 @@ export default function ItemsPage() {
             }
 
             // 対応するitemを取得（each_gramsを取得するため）
-            const item = itemsData.find(
-              (i) => i.base_item_id === baseItemId
-            );
+            const item = itemsData.find((i) => i.base_item_id === baseItemId);
 
             // 警告フラグをチェック
-            const baseItem = baseItemsData.find(
-              (b) => b.id === baseItemId
-            );
+            const baseItem = baseItemsData.find((b) => b.id === baseItemId);
             let needsWarning = false;
 
             if (vp.purchase_unit) {
@@ -197,7 +183,6 @@ export default function ItemsPage() {
 
         setVendorProducts(vendorProductsUI);
         setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
-        setHasLoadedItemsOnce(true);
       } catch (error) {
         console.error("Failed to fetch data:", error);
         alert("データの取得に失敗しました");
@@ -207,8 +192,7 @@ export default function ItemsPage() {
     };
 
     fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, selectedTenantId]);
 
   // =========================================================
   // Base Itemsタブのデータ取得
@@ -218,19 +202,9 @@ export default function ItemsPage() {
     // selectedTenantIdが設定されるまで待つ
     if (!selectedTenantId) return;
 
-    // 既にデータが存在する場合は再取得をスキップ
-    if (baseItemsUI.length > 0) {
-      return;
-    }
-
-    // 初回ロード時のみローディング状態を表示
-    const isFirstLoad = !hasLoadedBaseItemsOnce;
-
     const fetchData = async () => {
       try {
-        if (isFirstLoad) {
-          setLoadingBaseItems(true);
-        }
+        setLoadingBaseItems(true);
         // Base Itemsと対応するItemsレコードを取得
         const [baseItemsData, itemsData] = await Promise.all([
           baseItemsAPI.getAll(),
@@ -265,7 +239,6 @@ export default function ItemsPage() {
           });
         setBaseItemsUI(baseItemsUI);
         setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUI)));
-        setHasLoadedBaseItemsOnce(true);
       } catch (error) {
         console.error("Failed to fetch data:", error);
         alert("データの取得に失敗しました");
@@ -275,7 +248,6 @@ export default function ItemsPage() {
     };
 
     fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, selectedTenantId]);
 
   // =========================================================
@@ -286,19 +258,9 @@ export default function ItemsPage() {
     // selectedTenantIdが設定されるまで待つ
     if (!selectedTenantId) return;
 
-    // 既にデータが存在する場合は再取得をスキップ
-    if (vendorsUI.length > 0) {
-      return;
-    }
-
-    // 初回ロード時のみローディング状態を表示
-    const isFirstLoad = !hasLoadedVendorsOnce;
-
     const fetchData = async () => {
       try {
-        if (isFirstLoad) {
-          setLoadingVendors(true);
-        }
+        setLoadingVendors(true);
         const vendorsData = await vendorsAPI.getAll();
         const vendorsUI: VendorUI[] = vendorsData.map((vendor) => ({
           id: vendor.id,
@@ -306,7 +268,6 @@ export default function ItemsPage() {
         }));
         setVendorsUI(vendorsUI);
         setOriginalVendors(JSON.parse(JSON.stringify(vendorsUI)));
-        setHasLoadedVendorsOnce(true);
       } catch (error) {
         console.error("Failed to fetch data:", error);
         alert("データの取得に失敗しました");
@@ -316,7 +277,6 @@ export default function ItemsPage() {
     };
 
     fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, selectedTenantId]);
 
   // =========================================================
@@ -428,14 +388,19 @@ export default function ItemsPage() {
       }
 
       // データを再取得
-      const [vendorProductsData, baseItemsData, vendorsData, itemsData, mappingsData] =
-        await Promise.all([
-          vendorProductsAPI.getAll(),
-          baseItemsAPI.getAll(),
-          vendorsAPI.getAll(),
-          itemsAPI.getAll({ item_kind: "raw" }),
-          productMappingsAPI.getAll(),
-        ]);
+      const [
+        vendorProductsData,
+        baseItemsData,
+        vendorsData,
+        itemsData,
+        mappingsData,
+      ] = await Promise.all([
+        vendorProductsAPI.getAll(),
+        baseItemsAPI.getAll(),
+        vendorsAPI.getAll(),
+        itemsAPI.getAll({ item_kind: "raw" }),
+        productMappingsAPI.getAll(),
+      ]);
 
       setBaseItems(baseItemsData);
       setVendors(vendorsData);
@@ -444,7 +409,10 @@ export default function ItemsPage() {
       // product_mappingsからbase_item_idを取得するマップを作成
       const virtualProductToBaseItemMap = new Map<string, string>();
       mappingsData?.forEach((mapping) => {
-        virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+        virtualProductToBaseItemMap.set(
+          mapping.virtual_product_id,
+          mapping.base_item_id
+        );
       });
 
       const vendorProductsUI: VendorProductUI[] = vendorProductsData
@@ -456,9 +424,7 @@ export default function ItemsPage() {
             return null;
           }
 
-          const item = itemsData.find(
-            (i) => i.base_item_id === baseItemId
-          );
+          const item = itemsData.find((i) => i.base_item_id === baseItemId);
           const baseItem = baseItemsData.find((b) => b.id === baseItemId);
           let needsWarning = false;
 
@@ -593,7 +559,10 @@ export default function ItemsPage() {
       // product_mappingsからbase_item_idを取得するマップを作成
       const virtualProductToBaseItemMap = new Map<string, string>();
       allMappings?.forEach((mapping) => {
-        virtualProductToBaseItemMap.set(mapping.virtual_product_id, mapping.base_item_id);
+        virtualProductToBaseItemMap.set(
+          mapping.virtual_product_id,
+          mapping.base_item_id
+        );
       });
 
       // vendorProductsにbase_item_idを追加（表示用）

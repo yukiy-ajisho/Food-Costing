@@ -3,6 +3,7 @@ import { supabase } from "../config/supabase";
 import { Vendor } from "../types/database";
 import { authorizationMiddleware } from "../middleware/authorization";
 import { getCollectionResource } from "../middleware/resource-helpers";
+import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
 
@@ -16,23 +17,24 @@ router.get(
     getCollectionResource(req, "vendor")
   ),
   async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("vendors")
-      .select("*")
-      .in("tenant_id", req.user!.tenant_ids)
-      .order("name", { ascending: true });
+    try {
+      let query = supabase.from("vendors").select("*");
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+      query = withTenantFilter(query, req);
+
+      const { data, error } = await query.order("name", { ascending: true });
+
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+
+      res.json(data || []);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json(data || []);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * GET /vendors/:id
@@ -40,12 +42,11 @@ router.get(
  */
 router.get("/:id", async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from("vendors")
-      .select("*")
-      .eq("id", req.params.id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .single();
+    let query = supabase.from("vendors").select("*").eq("id", req.params.id);
+
+    query = withTenantFilter(query, req);
+
+    const { data, error } = await query.single();
 
     if (error) {
       return res.status(404).json({ error: error.message });
@@ -71,10 +72,11 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name is required" });
     }
 
-    // tenant_idを自動設定
+    // tenant_idとuser_idを自動設定
     const vendorWithTenantId = {
       ...vendor,
       tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+      user_id: req.user!.id, // 作成者を記録
     };
 
     const { data, error } = await supabase
@@ -105,14 +107,18 @@ router.put("/:id", async (req, res) => {
 
     // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...vendorWithoutIds } = vendor;
-    const { data, error } = await supabase
-      .from("vendors")
-      .update(vendorWithoutIds)
-      .eq("id", id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .select()
-      .single();
+    const {
+      user_id: _user_id,
+      tenant_id: _tenant_id,
+      id: _id,
+      ...vendorWithoutIds
+    } = vendor;
+
+    let query = supabase.from("vendors").update(vendorWithoutIds).eq("id", id);
+
+    query = withTenantFilter(query, req);
+
+    const { data, error } = await query.select().single();
 
     if (error) {
       return res.status(400).json({ error: error.message });
@@ -135,11 +141,11 @@ router.put("/:id", async (req, res) => {
  */
 router.delete("/:id", async (req, res) => {
   try {
-    const { error } = await supabase
-      .from("vendors")
-      .delete()
-      .eq("id", req.params.id)
-      .in("tenant_id", req.user!.tenant_ids);
+    let query = supabase.from("vendors").delete().eq("id", req.params.id);
+
+    query = withTenantFilter(query, req);
+
+    const { error } = await query;
 
     if (error) {
       return res.status(400).json({ error: error.message });

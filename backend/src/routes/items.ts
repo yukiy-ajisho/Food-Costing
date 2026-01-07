@@ -190,6 +190,7 @@ router.post(
       const itemWithTenantId = {
         ...item,
         tenant_id: selectedTenantId,
+        user_id: req.user!.id, // 作成者を記録
         responsible_user_id: item.responsible_user_id || req.user!.id, // デフォルトは作成者
       };
 

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
+import { authMiddleware } from "../middleware/auth";
 
 const router = Router();
 
@@ -7,76 +8,80 @@ const router = Router();
  * POST /tenants
  * 新しいテナントを作成（認証済みユーザーであれば誰でも可能）
  */
-router.post("/", async (req, res) => {
-  try {
-    const { name, type } = req.body;
+router.post(
+  "/",
+  authMiddleware({ allowNoProfiles: true }),
+  async (req, res) => {
+    try {
+      const { name, type } = req.body;
 
-    // バリデーション
-    if (!name || typeof name !== "string") {
-      return res.status(400).json({ error: "name is required" });
-    }
+      // バリデーション
+      if (!name || typeof name !== "string") {
+        return res.status(400).json({ error: "name is required" });
+      }
 
-    if (name.length < 5 || name.length > 50) {
-      return res.status(400).json({
-        error: "name must be between 5 and 50 characters",
-      });
-    }
+      if (name.length < 5 || name.length > 50) {
+        return res.status(400).json({
+          error: "name must be between 5 and 50 characters",
+        });
+      }
 
-    if (!type || typeof type !== "string") {
-      return res.status(400).json({ error: "type is required" });
-    }
+      if (!type || typeof type !== "string") {
+        return res.status(400).json({ error: "type is required" });
+      }
 
-    if (!["restaurant", "vendor"].includes(type)) {
-      return res.status(400).json({
-        error: "type must be one of: restaurant, vendor",
-      });
-    }
+      if (!["restaurant", "vendor"].includes(type)) {
+        return res.status(400).json({
+          error: "type must be one of: restaurant, vendor",
+        });
+      }
 
-    // テナントを作成
-    const { data: tenant, error: tenantError } = await supabase
-      .from("tenants")
-      .insert([{ name, type }])
-      .select()
-      .single();
+      // テナントを作成
+      const { data: tenant, error: tenantError } = await supabase
+        .from("tenants")
+        .insert([{ name, type }])
+        .select()
+        .single();
 
-    if (tenantError || !tenant) {
-      return res.status(500).json({
-        error: tenantError?.message || "Failed to create tenant",
-      });
-    }
+      if (tenantError || !tenant) {
+        return res.status(500).json({
+          error: tenantError?.message || "Failed to create tenant",
+        });
+      }
 
-    // 作成者をadminロールでprofilesに追加
-    const { error: profileError } = await supabase.from("profiles").insert([
-      {
-        user_id: req.user!.id,
-        tenant_id: tenant.id,
+      // 作成者をadminロールでprofilesに追加
+      const { error: profileError } = await supabase.from("profiles").insert([
+        {
+          user_id: req.user!.id,
+          tenant_id: tenant.id,
+          role: "admin",
+        },
+      ]);
+
+      if (profileError) {
+        // プロファイル作成に失敗した場合、テナントを削除してロールバック
+        await supabase.from("tenants").delete().eq("id", tenant.id);
+        return res.status(500).json({
+          error: profileError.message || "Failed to create profile",
+        });
+      }
+
+      res.status(201).json({
+        ...tenant,
         role: "admin",
-      },
-    ]);
-
-    if (profileError) {
-      // プロファイル作成に失敗した場合、テナントを削除してロールバック
-      await supabase.from("tenants").delete().eq("id", tenant.id);
-      return res.status(500).json({
-        error: profileError.message || "Failed to create profile",
       });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.status(201).json({
-      ...tenant,
-      role: "admin",
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * GET /tenants
  * ユーザーが属するテナント一覧を取得
  */
-router.get("/", async (req, res) => {
+router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
   try {
     // ユーザーが属するテナント一覧を取得
     const { data: profiles, error: profilesError } = await supabase
@@ -125,7 +130,7 @@ router.get("/", async (req, res) => {
  * GET /tenants/:id
  * テナント情報を取得
  */
-router.get("/:id", async (req, res) => {
+router.get("/:id", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: profile, error: profileError } = await supabase
@@ -166,7 +171,7 @@ router.get("/:id", async (req, res) => {
  * GET /tenants/:id/members
  * テナントのメンバー一覧を取得
  */
-router.get("/:id/members", async (req, res) => {
+router.get("/:id/members", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: userProfile, error: userProfileError } = await supabase
@@ -241,7 +246,7 @@ router.get("/:id/members", async (req, res) => {
  * PUT /tenants/:id
  * テナント名を更新（テナントに属しているユーザーであれば誰でも可能）
  */
-router.put("/:id", async (req, res) => {
+router.put("/:id", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: profile, error: profileError } = await supabase
@@ -288,7 +293,7 @@ router.put("/:id", async (req, res) => {
  * PUT /tenants/:id/members/:userId/role
  * メンバーの役割を変更（テナントに属しているユーザーであれば誰でも可能）
  */
-router.put("/:id/members/:userId/role", async (req, res) => {
+router.put("/:id/members/:userId/role", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: userProfile, error: userProfileError } = await supabase
@@ -338,7 +343,7 @@ router.put("/:id/members/:userId/role", async (req, res) => {
  * DELETE /tenants/:id/members/:userId
  * メンバーをテナントから削除（テナントに属しているユーザーであれば誰でも可能）
  */
-router.delete("/:id/members/:userId", async (req, res) => {
+router.delete("/:id/members/:userId", authMiddleware(), async (req, res) => {
   try {
     // ユーザーがそのテナントに属しているか確認
     const { data: userProfile, error: userProfileError } = await supabase

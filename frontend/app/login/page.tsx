@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase-client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
+import Link from "next/link";
 
 function LoginPageContent() {
   const router = useRouter();
@@ -45,7 +46,9 @@ function LoginPageContent() {
           setError("Session verification failed. Please try again.");
           break;
         case "no_code":
-          setError("Authentication code was not provided. Please try again.");
+          setError(
+            "Access denied. Please request access or wait for an invitation."
+          );
           break;
         default:
           setError("An error occurred. Please try again.");
@@ -55,10 +58,19 @@ function LoginPageContent() {
 
   const handleGoogleLogin = async () => {
     setError(null);
+
+    // returnUrlがある場合は、callbackに渡す
+    const returnUrl = searchParams.get("returnUrl");
+    const callbackUrl = returnUrl
+      ? `${window.location.origin}/auth/callback?returnUrl=${encodeURIComponent(
+          returnUrl
+        )}`
+      : `${window.location.origin}/auth/callback`;
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: callbackUrl,
       },
     });
 
@@ -139,6 +151,26 @@ function LoginPageContent() {
             Sign in with Google
           </span>
         </button>
+
+        {/* Divider */}
+        <div className="relative my-6">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-gray-300 dark:border-slate-600"></div>
+          </div>
+          <div className="relative flex justify-center text-sm">
+            <span className="px-2 bg-white/80 dark:bg-slate-800/80 text-gray-500 dark:text-gray-400">
+              or
+            </span>
+          </div>
+        </div>
+
+        {/* Request Access Link */}
+        <Link
+          href="/request-access"
+          className="block w-full text-center px-6 py-3.5 border-2 border-gray-300 dark:border-slate-600 rounded-xl hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-200 text-gray-700 dark:text-gray-300 font-medium hover:bg-gray-50 dark:hover:bg-slate-700"
+        >
+          Request Access
+        </Link>
       </div>
     </div>
   );

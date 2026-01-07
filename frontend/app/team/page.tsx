@@ -37,7 +37,7 @@ interface Invitation {
 
 export default function TeamPage() {
   const { theme } = useTheme();
-  const { selectedTenantId, setSelectedTenantId } = useTenant();
+  const { selectedTenantId, setSelectedTenantId, loading: tenantLoading } = useTenant();
   // Phase 1a: すべてのテナントの情報を表示
   const [tenantsWithMembers, setTenantsWithMembers] = useState<
     TenantWithMembers[]
@@ -73,6 +73,13 @@ export default function TeamPage() {
 
   // テナント情報とメンバー一覧を取得
   useEffect(() => {
+    // TenantContextのloadingがfalseで、selectedTenantIdがnullの場合
+    // テナントがないことが確定したので、loadingをfalseにする
+    if (!tenantLoading && !selectedTenantId) {
+      setLoading(false);
+      return;
+    }
+
     // selectedTenantIdが設定されるまで待つ（テナント選択の変更を検知するため）
     if (!selectedTenantId) return;
 
@@ -89,22 +96,22 @@ export default function TeamPage() {
             created_at: string;
             role: string;
           }>(`/tenants/${selectedTenantId}`),
-          apiRequest<{ members: TenantMember[] }>(
+                apiRequest<{ members: TenantMember[] }>(
             `/tenants/${selectedTenantId}/members`
-          ),
-        ]);
+                ),
+              ]);
 
         const tenantWithMembers = {
-          ...tenantDetail,
-          members: membersData.members || [],
-        };
+                ...tenantDetail,
+                members: membersData.members || [],
+              };
 
         setTenantsWithMembers([tenantWithMembers]);
 
-        // 編集用のテナント名を初期化
-        const namesMap = new Map<string, string>();
+          // 編集用のテナント名を初期化
+          const namesMap = new Map<string, string>();
         namesMap.set(tenantWithMembers.id, tenantWithMembers.name);
-        setEditedTenantNames(namesMap);
+          setEditedTenantNames(namesMap);
       } catch (error) {
         console.error("Failed to fetch team data:", error);
       } finally {
@@ -113,7 +120,7 @@ export default function TeamPage() {
     };
 
     fetchTeamData();
-  }, [selectedTenantId]);
+  }, [selectedTenantId, tenantLoading]);
 
   // 招待一覧を取得する関数
   const fetchInvitations = async () => {
@@ -630,8 +637,8 @@ export default function TeamPage() {
               >
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-semibold">
-                    Team Members ({tenant.members.length})
-                  </h2>
+                  Team Members ({tenant.members.length})
+                </h2>
                   {isAdmin && (
                     <button
                       onClick={() => {

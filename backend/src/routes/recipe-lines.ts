@@ -133,145 +133,148 @@ router.post(
     getCreateResource(req, "recipe_line")
   ),
   async (req, res) => {
-  try {
-    const line: Partial<RecipeLine> = req.body;
+    try {
+      const line: Partial<RecipeLine> = req.body;
 
-    // バリデーション
-    if (!line.parent_item_id || !line.line_type) {
-      return res.status(400).json({
-        error: "parent_item_id and line_type are required",
-      });
-    }
-
-    if (line.line_type === "ingredient") {
-      if (!line.child_item_id || !line.quantity || !line.unit) {
+      // バリデーション
+      if (!line.parent_item_id || !line.line_type) {
         return res.status(400).json({
-          error: "ingredient line requires child_item_id, quantity, and unit",
+          error: "parent_item_id and line_type are required",
         });
       }
-    } else if (line.line_type === "labor") {
-      if (!line.minutes || line.minutes <= 0) {
-        return res.status(400).json({
-          error: "labor line requires minutes > 0",
-        });
-      }
-      // labor_roleの存在チェック
-      if (line.labor_role) {
-        const laborRoleValidation = await validateLaborRoleExists(
-          line.labor_role,
-          req.user!.tenant_ids
-        );
-        if (!laborRoleValidation.valid) {
-          return res.status(400).json({ error: laborRoleValidation.error });
+
+      if (line.line_type === "ingredient") {
+        if (!line.child_item_id || !line.quantity || !line.unit) {
+          return res.status(400).json({
+            error: "ingredient line requires child_item_id, quantity, and unit",
+          });
+        }
+      } else if (line.line_type === "labor") {
+        if (!line.minutes || line.minutes <= 0) {
+          return res.status(400).json({
+            error: "labor line requires minutes > 0",
+          });
+        }
+        // labor_roleの存在チェック
+        if (line.labor_role) {
+          const laborRoleValidation = await validateLaborRoleExists(
+            line.labor_role,
+            req.user!.tenant_ids
+          );
+          if (!laborRoleValidation.valid) {
+            return res.status(400).json({ error: laborRoleValidation.error });
+          }
         }
       }
-    }
 
-    // 循環参照チェック（ingredient lineの場合）
-    if (line.line_type === "ingredient" && line.child_item_id) {
-      // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
-      const { data: allItems } = await supabase
-        .from("items")
-        .select("*")
-        .in("tenant_id", req.user!.tenant_ids);
+      // 循環参照チェック（ingredient lineの場合）
+      if (line.line_type === "ingredient" && line.child_item_id) {
+        // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
+        const { data: allItems } = await supabase
+          .from("items")
+          .select("*")
+          .in("tenant_id", req.user!.tenant_ids);
 
-      // マップを作成
-      const itemsMap = new Map<string, Item>();
-      allItems?.forEach((i) => itemsMap.set(i.id, i));
+        // マップを作成
+        const itemsMap = new Map<string, Item>();
+        allItems?.forEach((i) => itemsMap.set(i.id, i));
 
-      // すべてのレシピラインを取得（既存データとの整合性を確保）
-      const { data: allRecipeLines } = await supabase
-        .from("recipe_lines")
-        .select("*")
-        .eq("line_type", "ingredient")
-        .in("tenant_id", req.user!.tenant_ids);
+        // すべてのレシピラインを取得（既存データとの整合性を確保）
+        const { data: allRecipeLines } = await supabase
+          .from("recipe_lines")
+          .select("*")
+          .eq("line_type", "ingredient")
+          .in("tenant_id", req.user!.tenant_ids);
 
-      // 新しいレシピラインを含むマップを作成
-      const recipeLinesMap = new Map<string, RecipeLine[]>();
-      allRecipeLines?.forEach((rl) => {
-        const existing = recipeLinesMap.get(rl.parent_item_id) || [];
-        existing.push(rl);
-        recipeLinesMap.set(rl.parent_item_id, existing);
-      });
-
-      // 新しいレシピラインを追加
-      const newRecipeLine: RecipeLine = {
-        id: "", // 一時的なID
-        parent_item_id: line.parent_item_id!,
-        line_type: line.line_type as "ingredient" | "labor",
-        child_item_id: line.child_item_id,
-        quantity: line.quantity || null,
-        unit: line.unit || null,
-        labor_role: null,
-        tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
-        user_id: req.user!.id, // Required field
-        minutes: null,
-      };
-      const existing = recipeLinesMap.get(line.parent_item_id!) || [];
-      existing.push(newRecipeLine);
-      recipeLinesMap.set(line.parent_item_id!, existing);
-
-      // 循環参照をチェック（既存データも含めてチェック）
-      try {
-        await checkCycle(
-          line.parent_item_id!,
-          req.user!.tenant_ids, // Phase 2で改善予定
-          new Set(),
-          itemsMap,
-          recipeLinesMap,
-          []
-        );
-      } catch (cycleError: unknown) {
-        const message =
-          cycleError instanceof Error ? cycleError.message : String(cycleError);
-        return res.status(400).json({
-          error: message,
+        // 新しいレシピラインを含むマップを作成
+        const recipeLinesMap = new Map<string, RecipeLine[]>();
+        allRecipeLines?.forEach((rl) => {
+          const existing = recipeLinesMap.get(rl.parent_item_id) || [];
+          existing.push(rl);
+          recipeLinesMap.set(rl.parent_item_id, existing);
         });
+
+        // 新しいレシピラインを追加
+        const newRecipeLine: RecipeLine = {
+          id: "", // 一時的なID
+          parent_item_id: line.parent_item_id!,
+          line_type: line.line_type as "ingredient" | "labor",
+          child_item_id: line.child_item_id,
+          quantity: line.quantity || null,
+          unit: line.unit || null,
+          labor_role: null,
+          tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+          user_id: req.user!.id, // Required field
+          minutes: null,
+        };
+        const existing = recipeLinesMap.get(line.parent_item_id!) || [];
+        existing.push(newRecipeLine);
+        recipeLinesMap.set(line.parent_item_id!, existing);
+
+        // 循環参照をチェック（既存データも含めてチェック）
+        try {
+          await checkCycle(
+            line.parent_item_id!,
+            req.user!.tenant_ids, // Phase 2で改善予定
+            new Set(),
+            itemsMap,
+            recipeLinesMap,
+            []
+          );
+        } catch (cycleError: unknown) {
+          const message =
+            cycleError instanceof Error
+              ? cycleError.message
+              : String(cycleError);
+          return res.status(400).json({
+            error: message,
+          });
+        }
       }
-    }
 
-    // Deprecatedバリデーション
-    const validation = await validateRecipeLineNotDeprecated(
-      line,
-      req.user!.tenant_ids
-    );
-    if (!validation.valid) {
-      return res.status(400).json({ error: validation.error });
-    }
-
-    // tenant_idを自動設定
-    const lineWithTenantId = {
-      ...line,
-      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
-    };
-
-    const { data, error } = await supabase
-      .from("recipe_lines")
-      .insert([lineWithTenantId])
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    // 自動undeprecateをチェック（ingredient lineの場合）
-    if (line.line_type === "ingredient" && line.parent_item_id) {
-      const { autoUndeprecateAfterRecipeLineUpdate } = await import(
-        "../services/deprecation"
-      );
-      await autoUndeprecateAfterRecipeLineUpdate(
-        line.parent_item_id,
+      // Deprecatedバリデーション
+      const validation = await validateRecipeLineNotDeprecated(
+        line,
         req.user!.tenant_ids
       );
-    }
+      if (!validation.valid) {
+        return res.status(400).json({ error: validation.error });
+      }
 
-    res.status(201).json(data);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
+      // tenant_idとuser_idを自動設定
+      const lineWithTenantId = {
+        ...line,
+        tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+        user_id: req.user!.id, // 作成者を記録
+      };
+
+      const { data, error } = await supabase
+        .from("recipe_lines")
+        .insert([lineWithTenantId])
+        .select()
+        .single();
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      // 自動undeprecateをチェック（ingredient lineの場合）
+      if (line.line_type === "ingredient" && line.parent_item_id) {
+        const { autoUndeprecateAfterRecipeLineUpdate } =
+          await import("../services/deprecation");
+        await autoUndeprecateAfterRecipeLineUpdate(
+          line.parent_item_id,
+          req.user!.tenant_ids
+        );
+      }
+
+      res.status(201).json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
   }
-});
+);
 
 /**
  * PUT /recipe-lines/:id
@@ -281,129 +284,137 @@ router.put(
   "/:id",
   authorizationMiddleware("update", getRecipeLineResource),
   async (req, res) => {
-  try {
-    const line: Partial<RecipeLine> = req.body;
-    const { id } = req.params;
+    try {
+      const line: Partial<RecipeLine> = req.body;
+      const { id } = req.params;
 
-    // 既存のレシピラインを取得
-    const { data: existingLine } = await supabase
-      .from("recipe_lines")
-      .select("*")
-      .eq("id", id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .single();
-
-    if (!existingLine) {
-      return res.status(404).json({ error: "Recipe line not found" });
-    }
-
-    // 循環参照チェック（ingredient lineの場合、child_item_idが変更される場合）
-    if (
-      line.line_type === "ingredient" &&
-      line.child_item_id &&
-      line.child_item_id !== existingLine.child_item_id
-    ) {
-      // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
-      const { data: allItems } = await supabase
-        .from("items")
-        .select("*")
-        .in("tenant_id", req.user!.tenant_ids);
-
-      // マップを作成
-      const itemsMap = new Map<string, Item>();
-      allItems?.forEach((i) => itemsMap.set(i.id, i));
-
-      // すべてのレシピラインを取得（既存データとの整合性を確保）
-      const { data: allRecipeLines } = await supabase
+      // 既存のレシピラインを取得
+      const { data: existingLine } = await supabase
         .from("recipe_lines")
         .select("*")
-        .eq("line_type", "ingredient")
-        .in("tenant_id", req.user!.tenant_ids);
+        .eq("id", id)
+        .in("tenant_id", req.user!.tenant_ids)
+        .single();
 
-      // 更新後のレシピラインを含むマップを作成
-      const recipeLinesMap = new Map<string, RecipeLine[]>();
-      allRecipeLines?.forEach((rl) => {
-        if (rl.id === id) {
-          // 更新後のレシピライン
-          const updated = { ...rl, ...line };
-          const existing = recipeLinesMap.get(rl.parent_item_id) || [];
-          existing.push(updated);
-          recipeLinesMap.set(rl.parent_item_id, existing);
-        } else {
-          const existing = recipeLinesMap.get(rl.parent_item_id) || [];
-          existing.push(rl);
-          recipeLinesMap.set(rl.parent_item_id, existing);
-        }
-      });
+      if (!existingLine) {
+        return res.status(404).json({ error: "Recipe line not found" });
+      }
 
-      // 循環参照をチェック（既存データも含めてチェック）
-      try {
-        await checkCycle(
-          existingLine.parent_item_id,
-          req.user!.tenant_ids, // Phase 2で改善予定
-          new Set(),
-          itemsMap,
-          recipeLinesMap,
-          []
-        );
-      } catch (cycleError: unknown) {
-        const message =
-          cycleError instanceof Error ? cycleError.message : String(cycleError);
-        return res.status(400).json({
-          error: message,
+      // 循環参照チェック（ingredient lineの場合、child_item_idが変更される場合）
+      if (
+        line.line_type === "ingredient" &&
+        line.child_item_id &&
+        line.child_item_id !== existingLine.child_item_id
+      ) {
+        // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
+        const { data: allItems } = await supabase
+          .from("items")
+          .select("*")
+          .in("tenant_id", req.user!.tenant_ids);
+
+        // マップを作成
+        const itemsMap = new Map<string, Item>();
+        allItems?.forEach((i) => itemsMap.set(i.id, i));
+
+        // すべてのレシピラインを取得（既存データとの整合性を確保）
+        const { data: allRecipeLines } = await supabase
+          .from("recipe_lines")
+          .select("*")
+          .eq("line_type", "ingredient")
+          .in("tenant_id", req.user!.tenant_ids);
+
+        // 更新後のレシピラインを含むマップを作成
+        const recipeLinesMap = new Map<string, RecipeLine[]>();
+        allRecipeLines?.forEach((rl) => {
+          if (rl.id === id) {
+            // 更新後のレシピライン
+            const updated = { ...rl, ...line };
+            const existing = recipeLinesMap.get(rl.parent_item_id) || [];
+            existing.push(updated);
+            recipeLinesMap.set(rl.parent_item_id, existing);
+          } else {
+            const existing = recipeLinesMap.get(rl.parent_item_id) || [];
+            existing.push(rl);
+            recipeLinesMap.set(rl.parent_item_id, existing);
+          }
         });
+
+        // 循環参照をチェック（既存データも含めてチェック）
+        try {
+          await checkCycle(
+            existingLine.parent_item_id,
+            req.user!.tenant_ids, // Phase 2で改善予定
+            new Set(),
+            itemsMap,
+            recipeLinesMap,
+            []
+          );
+        } catch (cycleError: unknown) {
+          const message =
+            cycleError instanceof Error
+              ? cycleError.message
+              : String(cycleError);
+          return res.status(400).json({
+            error: message,
+          });
+        }
       }
-    }
 
-    // labor_roleの存在チェック（labor lineの場合、labor_roleが設定される場合）
-    if (
-      (existingLine.line_type === "labor" || line.line_type === "labor") &&
-      line.labor_role
-    ) {
-      const laborRoleValidation = await validateLaborRoleExists(
-        line.labor_role,
-        req.user!.tenant_ids
-      );
-      if (!laborRoleValidation.valid) {
-        return res.status(400).json({ error: laborRoleValidation.error });
+      // labor_roleの存在チェック（labor lineの場合、labor_roleが設定される場合）
+      if (
+        (existingLine.line_type === "labor" || line.line_type === "labor") &&
+        line.labor_role
+      ) {
+        const laborRoleValidation = await validateLaborRoleExists(
+          line.labor_role,
+          req.user!.tenant_ids
+        );
+        if (!laborRoleValidation.valid) {
+          return res.status(400).json({ error: laborRoleValidation.error });
+        }
       }
+
+      // user_idとtenant_idを更新から除外（セキュリティのため）
+      // eslint-disable @typescript-eslint/no-unused-vars
+      const {
+        user_id: _user_id,
+        tenant_id: _tenant_id,
+        id: _id,
+        ...lineWithoutIds
+      } = line;
+      // eslint-enable @typescript-eslint/no-unused-vars
+      const { data, error } = await supabase
+        .from("recipe_lines")
+        .update(lineWithoutIds)
+        .eq("id", id)
+        .in("tenant_id", req.user!.tenant_ids)
+        .select()
+        .single();
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      // 自動undeprecateをチェック（ingredient lineの場合）
+      if (
+        existingLine.line_type === "ingredient" &&
+        existingLine.parent_item_id
+      ) {
+        const { autoUndeprecateAfterRecipeLineUpdate } =
+          await import("../services/deprecation");
+        await autoUndeprecateAfterRecipeLineUpdate(
+          existingLine.parent_item_id,
+          req.user!.tenant_ids
+        );
+      }
+
+      res.json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    // user_idとtenant_idを更新から除外（セキュリティのため）
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...lineWithoutIds } = line;
-    const { data, error } = await supabase
-      .from("recipe_lines")
-      .update(lineWithoutIds)
-      .eq("id", id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    // 自動undeprecateをチェック（ingredient lineの場合）
-    if (
-      existingLine.line_type === "ingredient" &&
-      existingLine.parent_item_id
-    ) {
-      const { autoUndeprecateAfterRecipeLineUpdate } = await import(
-        "../services/deprecation"
-      );
-      await autoUndeprecateAfterRecipeLineUpdate(
-        existingLine.parent_item_id,
-        req.user!.tenant_ids
-      );
-    }
-
-    res.json(data);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * DELETE /recipe-lines/:id
@@ -413,23 +424,24 @@ router.delete(
   "/:id",
   authorizationMiddleware("delete", getRecipeLineResource),
   async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from("recipe_lines")
-      .delete()
-      .eq("id", req.params.id)
-      .in("tenant_id", req.user!.tenant_ids);
+    try {
+      const { error } = await supabase
+        .from("recipe_lines")
+        .delete()
+        .eq("id", req.params.id)
+        .in("tenant_id", req.user!.tenant_ids);
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      res.status(204).send();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.status(204).send();
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * POST /recipe-lines/batch
@@ -701,8 +713,14 @@ router.post("/batch", async (req, res) => {
     // 更新
     if (updates.length > 0) {
       for (const update of updates) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const { id, user_id: _user_id, tenant_id: _tenant_id, ...lineData } = update;
+        // eslint-disable @typescript-eslint/no-unused-vars
+        const {
+          id,
+          user_id: _user_id,
+          tenant_id: _tenant_id,
+          ...lineData
+        } = update;
+        // eslint-enable @typescript-eslint/no-unused-vars
         const { data, error: updateError } = await supabase
           .from("recipe_lines")
           .update(lineData)
@@ -722,10 +740,13 @@ router.post("/batch", async (req, res) => {
 
     // 作成
     if (creates.length > 0) {
-      const createsWithTenantId = creates.map((create: Partial<RecipeLine>) => ({
-        ...create,
-        tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
-      }));
+      const createsWithTenantId = creates.map(
+        (create: Partial<RecipeLine>) => ({
+          ...create,
+          tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+          user_id: req.user!.id, // 作成者を記録
+        })
+      );
       const { data: createdData, error: createError } = await supabase
         .from("recipe_lines")
         .insert(createsWithTenantId)
@@ -776,13 +797,15 @@ router.post("/batch", async (req, res) => {
     }
 
     // 自動undeprecateをチェック（影響を受けた親items）
-    const { autoUndeprecateAfterRecipeLineUpdate } = await import(
-      "../services/deprecation"
-    );
+    const { autoUndeprecateAfterRecipeLineUpdate } =
+      await import("../services/deprecation");
 
     // 作成、更新、削除の影響を受けた親itemsをすべてチェック
     for (const parentId of affectedParentIds) {
-      await autoUndeprecateAfterRecipeLineUpdate(parentId, req.user!.tenant_ids);
+      await autoUndeprecateAfterRecipeLineUpdate(
+        parentId,
+        req.user!.tenant_ids
+      );
     }
 
     res.json(results);

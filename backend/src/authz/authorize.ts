@@ -129,39 +129,39 @@ export async function authorize(
         } else {
           // コレクションリソースまたは一時リソースの場合はresource_sharesチェックをスキップ
           if (!shouldSkipResourceSharesCheck) {
-            // 自分が作ったものではない → resource_sharesをチェック
-            const shares = await getResourceShares(
-              resource.resource_type,
-              resource.id,
-              principal.tenant_id,
-              principal.role,
-              principal.id
-            );
+          // 自分が作ったものではない → resource_sharesをチェック
+          const shares = await getResourceShares(
+            resource.resource_type,
+            resource.id,
+            principal.tenant_id,
+            principal.role,
+            principal.id
+          );
 
-            // 除外（FORBID）チェック: is_exclusion = TRUEの場合は即座に拒否
-            if (isExcluded(shares)) {
-              return false;
-            }
+          // 除外（FORBID）チェック: is_exclusion = TRUEの場合は即座に拒否
+          if (isExcluded(shares)) {
+            return false;
+          }
 
-            // 共有されているかチェック
-            if (isShared(shares)) {
-              // 許可されたアクションを取得
-              const allowedActions = getAllowedActions(shares);
+          // 共有されているかチェック
+          if (isShared(shares)) {
+            // 許可されたアクションを取得
+            const allowedActions = getAllowedActions(shares);
               // hide状態（allowed_actionsが空）の場合は、responsible_user_idのユーザー以外はアクセスできない
               if (allowedActions.length === 0) {
                 // hide状態 → 拒否（responsible_user_idのユーザーは上記で処理済み）
                 return false;
               }
-              // リクエストのactionが許可されているかチェック
-              if (!allowedActions.includes(action)) {
-                return false; // 許可されていないaction
-              }
-              // 共有情報をContextに追加（Cedarポリシーで使用）
-              context = context || {};
-              context.is_shared = true;
-            } else {
-              // 共有されていない → 拒否
-              return false;
+            // リクエストのactionが許可されているかチェック
+            if (!allowedActions.includes(action)) {
+              return false; // 許可されていないaction
+            }
+            // 共有情報をContextに追加（Cedarポリシーで使用）
+            context = context || {};
+            context.is_shared = true;
+          } else {
+            // 共有されていない → 拒否
+            return false;
             }
           }
         }
@@ -235,8 +235,8 @@ export async function authorize(
           // （authorize.tsのロジックで使用されるが、Cedarポリシーでは使用されない）
           ...(resource.user_id !== undefined &&
             resource.user_id !== null && {
-              user_id: resource.user_id,
-            }),
+            user_id: resource.user_id,
+          }),
         },
         parents: [],
       },

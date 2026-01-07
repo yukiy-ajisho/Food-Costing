@@ -7,6 +7,7 @@ import {
   getCreateResource,
   getCollectionResource,
 } from "../middleware/resource-helpers";
+import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
 
@@ -20,23 +21,24 @@ router.get(
     getCollectionResource(req, "base_item")
   ),
   async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("base_items")
-      .select("*")
-      .in("tenant_id", req.user!.tenant_ids)
-      .order("name", { ascending: true });
+    try {
+      let query = supabase.from("base_items").select("*");
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+      query = withTenantFilter(query, req);
+
+      const { data, error } = await query.order("name", { ascending: true });
+
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+
+      res.json(data || []);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json(data || []);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * GET /base-items/:id
@@ -46,24 +48,27 @@ router.get(
   "/:id",
   authorizationMiddleware("read", getBaseItemResource),
   async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from("base_items")
-      .select("*")
-      .eq("id", req.params.id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .single();
+    try {
+      let query = supabase
+        .from("base_items")
+        .select("*")
+        .eq("id", req.params.id);
 
-    if (error) {
-      return res.status(404).json({ error: error.message });
+      query = withTenantFilter(query, req);
+
+      const { data, error } = await query.single();
+
+      if (error) {
+        return res.status(404).json({ error: error.message });
+      }
+
+      res.json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json(data);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * POST /base-items
@@ -71,39 +76,43 @@ router.get(
  */
 router.post(
   "/",
-  authorizationMiddleware("create", (req) => getCreateResource(req, "base_item")),
+  authorizationMiddleware("create", (req) =>
+    getCreateResource(req, "base_item")
+  ),
   async (req, res) => {
-  try {
-    const baseItem: Partial<BaseItem> = req.body;
+    try {
+      const baseItem: Partial<BaseItem> = req.body;
 
-    // バリデーション
-    if (!baseItem.name) {
-      return res.status(400).json({ error: "name is required" });
+      // バリデーション
+      if (!baseItem.name) {
+        return res.status(400).json({ error: "name is required" });
+      }
+
+      // tenant_idとuser_idを自動設定
+      const baseItemWithTenantId = {
+        ...baseItem,
+        // tenant_idは自動設定されないため、最初のテナントIDを使用（Phase 2で改善予定）
+        tenant_id: req.user!.tenant_ids[0],
+        user_id: req.user!.id, // 作成者を記録
+      };
+
+      const { data, error } = await supabase
+        .from("base_items")
+        .insert([baseItemWithTenantId])
+        .select()
+        .single();
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      res.status(201).json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    // tenant_idを自動設定
-    const baseItemWithTenantId = {
-      ...baseItem,
-      // tenant_idは自動設定されないため、最初のテナントIDを使用（Phase 2で改善予定）
-      tenant_id: req.user!.tenant_ids[0],
-    };
-
-    const { data, error } = await supabase
-      .from("base_items")
-      .insert([baseItemWithTenantId])
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    res.status(201).json(data);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * PUT /base-items/:id
@@ -113,35 +122,44 @@ router.put(
   "/:id",
   authorizationMiddleware("update", getBaseItemResource),
   async (req, res) => {
-  try {
-    const baseItem: Partial<BaseItem> = req.body;
-    const { id } = req.params;
+    try {
+      const baseItem: Partial<BaseItem> = req.body;
+      const { id } = req.params;
 
-    // user_idとtenant_idを更新から除外（セキュリティのため）
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...baseItemWithoutIds } = baseItem;
-    const { data, error } = await supabase
-      .from("base_items")
-      .update(baseItemWithoutIds)
-      .eq("id", id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .select()
-      .single();
+      // user_idとtenant_idを更新から除外（セキュリティのため）
+      // eslint-disable @typescript-eslint/no-unused-vars
+      const {
+        user_id: _user_id,
+        tenant_id: _tenant_id,
+        id: _id,
+        ...baseItemWithoutIds
+      } = baseItem;
+      // eslint-enable @typescript-eslint/no-unused-vars
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+      let query = supabase
+        .from("base_items")
+        .update(baseItemWithoutIds)
+        .eq("id", id);
+
+      query = withTenantFilter(query, req);
+
+      const { data, error } = await query.select().single();
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      if (!data) {
+        return res.status(404).json({ error: "Base item not found" });
+      }
+
+      res.json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    if (!data) {
-      return res.status(404).json({ error: "Base item not found" });
-    }
-
-    res.json(data);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * PATCH /base-items/:id/deprecate
@@ -173,7 +191,7 @@ router.get("/:id/vendor-products", async (req, res) => {
     const { id } = req.params;
 
     // product_mappings経由でvirtual_vendor_productsを取得
-    const { data: vendorProducts, error } = await supabase
+    let query = supabase
       .from("product_mappings")
       .select(
         `
@@ -193,17 +211,24 @@ router.get("/:id/vendor-products", async (req, res) => {
         )
       `
       )
-      .eq("base_item_id", id)
-      .in("tenant_id", req.user!.tenant_ids);
+      .eq("base_item_id", id);
+
+    query = withTenantFilter(query, req);
+
+    const { data: vendorProducts, error } = await query;
 
     if (error) {
       return res.status(500).json({ error: error.message });
     }
 
     // ネストされた構造をフラット化
-    const products = vendorProducts
-      ?.map((mapping: { virtual_vendor_products: unknown }) => mapping.virtual_vendor_products)
-      .filter((p: unknown) => p !== null) || [];
+    const products =
+      vendorProducts
+        ?.map(
+          (mapping: { virtual_vendor_products: unknown }) =>
+            mapping.virtual_vendor_products
+        )
+        .filter((p: unknown) => p !== null) || [];
 
     res.json(products);
   } catch (error: unknown) {
@@ -220,22 +245,23 @@ router.delete(
   "/:id",
   authorizationMiddleware("delete", getBaseItemResource),
   async (req, res) => {
-  try {
-    const { error } = await supabase
-      .from("base_items")
-      .delete()
-      .eq("id", req.params.id)
-      .in("tenant_id", req.user!.tenant_ids);
+    try {
+      let query = supabase.from("base_items").delete().eq("id", req.params.id);
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+      query = withTenantFilter(query, req);
+
+      const { error } = await query;
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      res.status(204).send();
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.status(204).send();
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 export default router;

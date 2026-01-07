@@ -2,8 +2,9 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { apiRequest } from "@/lib/api";
 import { useTheme } from "@/contexts/ThemeContext";
+import { createClient } from "@/lib/supabase-client";
+import { apiRequest } from "@/lib/api";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 
 interface InvitationData {
@@ -34,9 +35,9 @@ function JoinPageContent() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        // セッションを確認するためにAPIリクエストを試行
-        await apiRequest("/tenants");
-        setIsAuthenticated(true);
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        setIsAuthenticated(!!session);
       } catch (err) {
         setIsAuthenticated(false);
       }
@@ -47,7 +48,15 @@ function JoinPageContent() {
     }
   }, [token]);
 
-  // トークンを検証
+  // エラーパラメータをチェック（自動受け入れ失敗時）
+  useEffect(() => {
+    const errorParam = searchParams.get("error");
+    if (errorParam === "accept_failed") {
+      setError("Failed to accept invitation. Please try again.");
+    }
+  }, [searchParams]);
+
+  // トークンを検証（認証状態に関係なく実行）
   useEffect(() => {
     const verifyToken = async () => {
       if (!token) {
@@ -57,13 +66,20 @@ function JoinPageContent() {
       }
 
       try {
-        const data = await apiRequest<InvitationData>(
-          `/invite/verify/${token}`
-        );
+        // 認証不要のエンドポイントなので直接fetchを使用
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+        const response = await fetch(`${API_URL}/invite/verify/${token}`);
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || errorData.details || "Invalid invitation");
+        }
+        
+        const data = await response.json();
         setInvitation(data);
       } catch (err: unknown) {
-        const error = err as { details?: string; error?: string };
-        setError(error.details || error.error || "Invalid invitation");
+        const error = err as { message?: string };
+        setError(error.message || "Invalid invitation");
       } finally {
         setIsVerifying(false);
       }
@@ -72,20 +88,31 @@ function JoinPageContent() {
     verifyToken();
   }, [token]);
 
-  // 未認証の場合はログインページにリダイレクト
-  useEffect(() => {
-    if (isAuthenticated === false && token) {
-      // トークンをsessionStorageに保存
-      if (typeof window !== "undefined") {
-        sessionStorage.setItem("inviteToken", token);
-      }
-      router.push(`/login?returnUrl=${encodeURIComponent(`/join?token=${token}`)}`);
-    }
-  }, [isAuthenticated, token, router]);
-
   const handleAcceptInvite = async () => {
     if (!token || !invitation) return;
 
+    // 未認証の場合は、Google認証を経由して自動的に招待を受け入れる
+    if (!isAuthenticated) {
+      setIsAccepting(true);
+      const supabase = createClient();
+      const callbackUrl = `${window.location.origin}/auth/callback?autoAcceptToken=${token}`;
+      
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: callbackUrl,
+        },
+      });
+
+      if (error) {
+        console.error("OAuth error:", error);
+        setError("Failed to start authentication. Please try again.");
+        setIsAccepting(false);
+      }
+      return;
+    }
+
+    // 認証済みの場合は、従来通り招待を受け入れる
     setIsAccepting(true);
     try {
       await apiRequest("/invite/accept", {
@@ -96,9 +123,9 @@ function JoinPageContent() {
       // 成功メッセージを表示
       alert("Invitation accepted successfully! Redirecting to dashboard...");
 
-      // ダッシュボードにリダイレクト
+      // ダッシュボードにリダイレクト（フルページリロードでコンテキストを再初期化）
       setTimeout(() => {
-        router.push("/");
+        window.location.href = "/cost";
       }, 1500);
     } catch (err: unknown) {
       const error = err as { details?: string; error?: string };
@@ -107,7 +134,7 @@ function JoinPageContent() {
     }
   };
 
-  if (isVerifying || isAuthenticated === null) {
+  if (isVerifying) {
     return (
       <div className="min-h-screen flex items-center justify-center p-8">
         <div
@@ -156,7 +183,7 @@ function JoinPageContent() {
             {error}
           </p>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => window.location.href = "/cost"}
             className={`w-full px-4 py-2 rounded-lg font-medium ${
               isDark
                 ? "bg-slate-700 hover:bg-slate-600 text-slate-200"

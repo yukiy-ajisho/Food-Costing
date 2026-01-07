@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { apiRequest } from "@/lib/api";
 
 interface Tenant {
@@ -21,6 +22,8 @@ interface TenantContextType {
 const TenantContext = createContext<TenantContextType | undefined>(undefined);
 
 export function TenantProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
+  
   // LocalStorageから選択されたテナントIDを同期的に読み込む（SSR対応）
   const [selectedTenantId, setSelectedTenantIdState] = useState<string | null>(() => {
     if (typeof window !== "undefined") {
@@ -53,6 +56,12 @@ export function TenantProvider({ children }: { children: ReactNode }) {
 
   // テナント一覧を取得（selectedTenantIdが設定された後、または初回ロード時）
   useEffect(() => {
+    // /joinページではAPIリクエストをスキップ（未認証ユーザーが使用するため）
+    if (pathname === "/join") {
+      setLoading(false);
+      return;
+    }
+
     const fetchTenants = async () => {
       try {
         const data = await apiRequest<{
@@ -101,7 +110,7 @@ export function TenantProvider({ children }: { children: ReactNode }) {
 
     fetchTenants();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTenantId]); // selectedTenantIdに依存（テナント一覧取得後に検証）
+  }, [selectedTenantId, pathname]); // selectedTenantIdとpathnameに依存
 
   // 選択されたテナントIDを設定（LocalStorageにも保存）
   const setSelectedTenantId = (tenantId: string | null) => {

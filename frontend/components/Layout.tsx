@@ -10,11 +10,13 @@ import {
   Sun,
   Users,
   Menu,
+  Shield,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
 import { TenantSelector } from "./TenantSelector";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { apiRequest } from "@/lib/api";
 
 // ナビゲーション項目
 const navigationItems = [
@@ -50,6 +52,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { theme, toggleTheme } = useTheme();
   const [sidebarMode, setSidebarMode] = useState<"compact" | "full">("compact");
   const [isHovered, setIsHovered] = useState(false);
+  const [isSystemAdmin, setIsSystemAdmin] = useState(false);
+
+  // System Adminチェック
+  useEffect(() => {
+    // /joinページではAPIリクエストをスキップ（未認証ユーザーが使用するため）
+    if (pathname === "/join") {
+      return;
+    }
+
+    const checkSystemAdmin = async () => {
+      try {
+        const data = await apiRequest<{ is_system_admin: boolean }>("/me");
+        setIsSystemAdmin(data.is_system_admin);
+      } catch (error) {
+        console.error("Failed to fetch user info:", error);
+      }
+    };
+    checkSystemAdmin();
+  }, [pathname]);
 
   // 現在のページに応じたタイトルを取得
   const getPageTitle = () => {
@@ -174,18 +195,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {/* ナビゲーション項目 */}
           <nav className="flex-1 px-3 pb-3 overflow-hidden pt-6">
             <div className="flex flex-col h-full gap-2">
-              {navigationItems.map((item) => {
-                const IconComponent = item.icon;
-                const isActive =
+            {navigationItems.map((item) => {
+              const IconComponent = item.icon;
+              const isActive =
                   pathname === item.href ||
                   pathname.startsWith(item.href + "/");
 
-                return (
-                  <Link
-                    key={item.id}
-                    href={item.href}
+              return (
+                <Link
+                  key={item.id}
+                  href={item.href}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
-                      isActive
+                    isActive
                         ? isDark
                           ? "text-blue-400 font-semibold"
                           : "text-blue-700 font-semibold"
@@ -235,50 +256,103 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   </Link>
                 );
               })}
-            </div>
-          </nav>
+
+              {/* System Admin Panel Link */}
+              {isSystemAdmin && (
+                <Link
+                  href="/admin"
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
+                    pathname === "/admin"
+                      ? isDark
+                        ? "text-blue-400 font-semibold"
+                        : "text-blue-700 font-semibold"
+                      : isDark
+                      ? "text-slate-300 hover:text-blue-400"
+                      : "text-gray-600 hover:text-blue-700"
+                  }`}
+                  style={{
+                    backgroundColor: isDark ? "#1e293b" : "white",
+                    transition:
+                      "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
+                    color:
+                      pathname === "/admin"
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#334155"
+                      : "#dbeafe";
+                    e.currentTarget.style.color = isDark ? "#60a5fa" : "#1d4ed8";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#1e293b"
+                      : "white";
+                    e.currentTarget.style.color =
+                      pathname === "/admin"
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280";
+                  }}
+                >
+                  <Shield className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <span className="text-sm whitespace-nowrap">Admin Panel</span>
+                  )}
+                </Link>
+              )}
+          </div>
+        </nav>
 
           {/* テーマ切り替えスイッチ（サイドバーの下の方） */}
           <div className="px-3 pb-3">
-            <button
-              onClick={toggleTheme}
+          <button
+            onClick={toggleTheme}
               className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-colors ${
-                isDark
-                  ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
-                  : "bg-gray-100 hover:bg-gray-200 text-gray-700"
-              }`}
-              aria-label="Toggle theme"
-            >
-              {isDark ? (
-                <>
+              isDark
+                ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+            }`}
+            aria-label="Toggle theme"
+          >
+            {isDark ? (
+              <>
                   <Sun className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
-                    <span className="text-sm font-medium">Light Mode</span>
+                <span className="text-sm font-medium">Light Mode</span>
                   )}
-                </>
-              ) : (
-                <>
+              </>
+            ) : (
+              <>
                   <Moon className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
-                    <span className="text-sm font-medium">Dark Mode</span>
+                <span className="text-sm font-medium">Dark Mode</span>
                   )}
-                </>
-              )}
-            </button>
-          </div>
+              </>
+            )}
+          </button>
         </div>
+      </div>
 
         {/* コンテンツエリア（右側残り全スペース） */}
         <div className="flex-1 flex flex-col transition-all duration-300 ease-in-out overflow-hidden">
           {/* メインコンテンツ */}
-          <main
-            className={`flex-1 overflow-y-auto transition-colors ${
-              isDark ? "bg-slate-900" : "bg-gray-50"
-            }`}
-            style={{ scrollbarGutter: "stable" }}
-          >
-            {children}
-          </main>
+        <main
+          className={`flex-1 overflow-y-auto transition-colors ${
+            isDark ? "bg-slate-900" : "bg-gray-50"
+          }`}
+          style={{ scrollbarGutter: "stable" }}
+        >
+          {children}
+        </main>
         </div>
       </div>
     </div>
