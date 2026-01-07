@@ -1201,10 +1201,12 @@ export default function ItemsPage() {
                             >
                               {isEditModeItems ? (
                                 <SearchableSelect
-                                  options={baseItems.map((b) => ({
-                                    id: b.id,
-                                    name: b.name,
-                                  }))}
+                                  options={baseItems
+                                    .filter((b) => !b.deprecated)
+                                    .map((b) => ({
+                                      id: b.id,
+                                      name: b.name,
+                                    }))}
                                   value={vp.base_item_id}
                                   onChange={(value) =>
                                     handleVendorProductChange(
