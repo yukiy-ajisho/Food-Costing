@@ -45,7 +45,7 @@ router.post("/", async (req, res) => {
     }
 
     // allowlistに挿入または更新
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("allowlist")
       .upsert(
         {
@@ -58,9 +58,7 @@ router.post("/", async (req, res) => {
         {
           onConflict: "email",
         }
-      )
-      .select()
-      .single();
+      );
 
     if (error) {
       console.error("[POST /access-requests] Error:", error);

@@ -375,13 +375,14 @@ router.put(
       }
 
       // user_idとtenant_idを更新から除外（セキュリティのため）
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      // eslint-disable @typescript-eslint/no-unused-vars
       const {
         user_id: _user_id,
         tenant_id: _tenant_id,
         id: _id,
         ...lineWithoutIds
       } = line;
+      // eslint-enable @typescript-eslint/no-unused-vars
       const { data, error } = await supabase
         .from("recipe_lines")
         .update(lineWithoutIds)

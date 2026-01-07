@@ -117,13 +117,14 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
 
     // user_idとtenant_idを更新から除外（セキュリティのため）
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // eslint-disable @typescript-eslint/no-unused-vars
     const {
       user_id: _user_id,
       tenant_id: _tenant_id,
       id: _id,
       ...roleWithoutIds
     } = role;
+    // eslint-enable @typescript-eslint/no-unused-vars
     let query = supabase
       .from("labor_roles")
       .update(roleWithoutIds)
