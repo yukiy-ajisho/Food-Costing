@@ -76,10 +76,12 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // tenant_idを自動設定
+    // tenant_idを自動設定（選択されたテナントID、または最初のテナント）
+    const selectedTenantId =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
     const profileWithTenantId = {
       ...profile,
-      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+      tenant_id: selectedTenantId,
     };
 
     const { data, error } = await supabase
