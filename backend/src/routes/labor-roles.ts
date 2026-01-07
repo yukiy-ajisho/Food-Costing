@@ -17,23 +17,24 @@ router.get(
     getCollectionResource(req, "labor_role")
   ),
   async (req, res) => {
-  try {
-    let query = supabase.from("labor_roles").select("*");
-    query = withTenantFilter(query, req);
-    query = query.order("name");
+    try {
+      let query = supabase.from("labor_roles").select("*");
+      query = withTenantFilter(query, req);
+      query = query.order("name");
 
-    const { data, error } = await query;
+      const { data, error } = await query;
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+
+      res.json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json(data);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * GET /labor-roles/:id
@@ -80,12 +81,13 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // tenant_idを自動設定（選択されたテナントを使用）
+    // tenant_idとuser_idを自動設定（選択されたテナントを使用）
     const selectedTenantId =
       req.user!.selected_tenant_id || req.user!.tenant_ids[0];
     const roleWithTenantId = {
       ...role,
       tenant_id: selectedTenantId,
+      user_id: req.user!.id, // 作成者を記録
     };
 
     const { data, error } = await supabase
@@ -116,7 +118,12 @@ router.put("/:id", async (req, res) => {
 
     // user_idとtenant_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...roleWithoutIds } = role;
+    const {
+      user_id: _user_id,
+      tenant_id: _tenant_id,
+      id: _id,
+      ...roleWithoutIds
+    } = role;
     let query = supabase
       .from("labor_roles")
       .update(roleWithoutIds)
@@ -145,10 +152,7 @@ router.put("/:id", async (req, res) => {
  */
 router.delete("/:id", async (req, res) => {
   try {
-    let query = supabase
-      .from("labor_roles")
-      .delete()
-      .eq("id", req.params.id);
+    let query = supabase.from("labor_roles").delete().eq("id", req.params.id);
     query = withTenantFilter(query, req);
     const { error } = await query;
 
