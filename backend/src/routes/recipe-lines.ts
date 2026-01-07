@@ -713,13 +713,14 @@ router.post("/batch", async (req, res) => {
     // 更新
     if (updates.length > 0) {
       for (const update of updates) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        // eslint-disable @typescript-eslint/no-unused-vars
         const {
           id,
           user_id: _user_id,
           tenant_id: _tenant_id,
           ...lineData
         } = update;
+        // eslint-enable @typescript-eslint/no-unused-vars
         const { data, error: updateError } = await supabase
           .from("recipe_lines")
           .update(lineData)
