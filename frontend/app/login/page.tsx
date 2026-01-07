@@ -46,7 +46,9 @@ function LoginPageContent() {
           setError("Session verification failed. Please try again.");
           break;
         case "no_code":
-          setError("Authentication code was not provided. Please try again.");
+          setError(
+            "Access denied. Please request access or wait for an invitation."
+          );
           break;
         default:
           setError("An error occurred. Please try again.");
@@ -56,10 +58,19 @@ function LoginPageContent() {
 
   const handleGoogleLogin = async () => {
     setError(null);
+
+    // returnUrlがある場合は、callbackに渡す
+    const returnUrl = searchParams.get("returnUrl");
+    const callbackUrl = returnUrl
+      ? `${window.location.origin}/auth/callback?returnUrl=${encodeURIComponent(
+          returnUrl
+        )}`
+      : `${window.location.origin}/auth/callback`;
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: callbackUrl,
       },
     });
 

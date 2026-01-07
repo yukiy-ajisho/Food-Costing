@@ -1085,7 +1085,7 @@ function AddItemModal({
 export default function CostPage() {
   const { theme } = useTheme();
   const { user, loading: userLoading } = useUser();
-  const { selectedTenantId } = useTenant();
+  const { selectedTenantId, loading: tenantLoading } = useTenant();
   const isDark = theme === "dark";
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
@@ -1187,6 +1187,13 @@ export default function CostPage() {
 
   // データ取得
   useEffect(() => {
+    // TenantContextのloadingがfalseで、selectedTenantIdがnullの場合
+    // テナントがないことが確定したので、loadingをfalseにする
+    if (!tenantLoading && !selectedTenantId) {
+      setLoading(false);
+      return;
+    }
+
     // selectedTenantIdが設定されるまで待つ
     if (!selectedTenantId) {
       return;
@@ -1416,7 +1423,7 @@ export default function CostPage() {
     };
 
     fetchData();
-  }, [selectedTenantId]); // テナント切り替え時にデータを再取得
+  }, [selectedTenantId, tenantLoading]); // テナント切り替え時にデータを再取得
 
   // 現在のユーザーIDを設定（userが取得できた後に設定）
   useEffect(() => {

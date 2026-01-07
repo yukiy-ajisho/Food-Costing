@@ -56,6 +56,54 @@ export async function GET(request: NextRequest) {
         );
       }
 
+      // Check for autoAcceptToken parameter (invitation auto-accept flow)
+      const autoAcceptToken = requestUrl.searchParams.get("autoAcceptToken");
+      if (autoAcceptToken) {
+        try {
+          // Call backend to accept invitation
+          const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+          const response = await fetch(`${API_URL}/invite/accept`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ token: autoAcceptToken }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            console.error("Failed to accept invitation:", errorData);
+            return NextResponse.redirect(
+              `${requestUrl.origin}/join?token=${autoAcceptToken}&error=accept_failed`
+            );
+          }
+
+          // Success - redirect to cost page
+          return NextResponse.redirect(new URL("/cost", requestUrl.origin));
+        } catch (error) {
+          console.error("Error accepting invitation:", error);
+          return NextResponse.redirect(
+            `${requestUrl.origin}/join?token=${autoAcceptToken}&error=accept_failed`
+          );
+        }
+      }
+
+      // Check for returnUrl parameter (e.g., from invitation flow)
+      const returnUrl = requestUrl.searchParams.get("returnUrl");
+      if (returnUrl) {
+        // Validate returnUrl to prevent open redirect
+        try {
+          const returnUrlObj = new URL(returnUrl, requestUrl.origin);
+          // Only allow relative URLs from same origin
+          if (returnUrlObj.origin === requestUrl.origin) {
+            return NextResponse.redirect(returnUrlObj);
+          }
+        } catch (e) {
+          console.error("Invalid returnUrl:", e);
+        }
+      }
+
       // Redirect to cost page after successful authentication
       return NextResponse.redirect(new URL("/cost", requestUrl.origin));
     } catch (error) {

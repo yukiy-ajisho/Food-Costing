@@ -3,6 +3,7 @@ import { supabase } from "../config/supabase";
 import { ProductMapping } from "../types/database";
 import { authorizationMiddleware } from "../middleware/authorization";
 import { getCollectionResource } from "../middleware/resource-helpers";
+import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
 
@@ -19,8 +20,9 @@ router.get(
   try {
     let query = supabase
       .from("product_mappings")
-      .select("*")
-      .in("tenant_id", req.user!.tenant_ids);
+      .select("*");
+    
+    query = withTenantFilter(query, req);
 
     // フィルター
     if (req.query.base_item_id) {
@@ -49,12 +51,14 @@ router.get(
  */
 router.get("/:id", async (req, res) => {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from("product_mappings")
       .select("*")
-      .eq("id", req.params.id)
-      .in("tenant_id", req.user!.tenant_ids)
-      .single();
+      .eq("id", req.params.id);
+    
+    query = withTenantFilter(query, req);
+    
+    const { data, error } = await query.single();
 
     if (error) {
       return res.status(404).json({ error: error.message });
@@ -122,11 +126,14 @@ router.post("/", async (req, res) => {
  */
 router.delete("/:id", async (req, res) => {
   try {
-    const { error } = await supabase
+    let query = supabase
       .from("product_mappings")
       .delete()
-      .eq("id", req.params.id)
-      .in("tenant_id", req.user!.tenant_ids);
+      .eq("id", req.params.id);
+    
+    query = withTenantFilter(query, req);
+    
+    const { error } = await query;
 
     if (error) {
       return res.status(400).json({ error: error.message });

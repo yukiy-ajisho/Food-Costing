@@ -168,6 +168,29 @@ router.post(
         });
       }
 
+      // allowlistに追加（新規ユーザーがAuth Hookを通過できるように）
+      const { error: allowlistError } = await supabase
+        .from("allowlist")
+        .insert({
+          email,
+          status: "approved",
+          approved_at: new Date().toISOString(),
+          approved_by: "invitation_created",
+          source: "invitation",
+          note: `Invited to tenant ${tenant_id} by ${inviterName}`,
+        });
+
+      // 既に存在する場合（UNIQUE制約エラー）は無視
+      if (allowlistError && allowlistError.code !== "23505") {
+        console.error(
+          "[POST /invite] Warning: Failed to add to allowlist:",
+          allowlistError
+        );
+        // エラーを返さない（招待は作成済み）
+      } else if (!allowlistError) {
+        console.log("[POST /invite] Added to allowlist:", email);
+      }
+
       // メールを送信
       const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
       const acceptUrl = `${frontendUrl}/join?token=${token}`;
@@ -333,7 +356,9 @@ router.get(
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[GET /invite] Unexpected error:", error);
-      res.status(500).json({ error: "Internal server error", details: message });
+      res
+        .status(500)
+        .json({ error: "Internal server error", details: message });
     }
   }
 );

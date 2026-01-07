@@ -17,7 +17,7 @@ export default async function RootLayout({
 }>) {
   const headersList = await headers();
   const pathname = headersList.get("x-pathname") || "";
-  const isPublicPage = pathname === "/login" || pathname === "/request-access";
+  const isPublicPage = pathname === "/login" || pathname === "/request-access" || pathname.startsWith("/join");
 
   return (
     <html lang="en">

@@ -47,15 +47,11 @@ BEGIN
   -- Extract email from event
   user_email := event->'user'->>'email';
   
-  -- Check if email is in allowlist (approved) OR invitations (pending)
+  -- Check if email is in allowlist (approved)
   IF NOT EXISTS (
     SELECT 1 FROM allowlist 
     WHERE email = user_email 
     AND status = 'approved'
-  ) AND NOT EXISTS (
-    SELECT 1 FROM invitations
-    WHERE email = user_email 
-    AND status = 'pending'
   ) THEN
     RAISE EXCEPTION 'Access denied. Please request access or wait for an invitation.';
   END IF;
@@ -65,7 +61,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION public.check_before_signup(jsonb) IS 'Auth Hook: Check allowlist or invitations before user signup';
+COMMENT ON FUNCTION public.check_before_signup(jsonb) IS 'Auth Hook: Check allowlist before user signup';
 
 -- =========================================================
 -- 3) RLS Policies for allowlist

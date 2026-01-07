@@ -69,5 +69,6 @@ export const config = {
     "/admin/:path*",
     "/login",
     "/request-access",
+    "/join",
   ],
 };

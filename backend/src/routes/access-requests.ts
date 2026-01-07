@@ -31,7 +31,7 @@ router.post("/", async (req, res) => {
       .eq("email", email)
       .maybeSingle();
 
-    if (existingRequest) {
+    if (existingRequest && existingRequest.last_requested_at) {
       const lastRequested = new Date(existingRequest.last_requested_at);
       if (
         lastRequested > twentyFourHoursAgo &&

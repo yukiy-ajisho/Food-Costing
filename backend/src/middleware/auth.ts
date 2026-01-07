@@ -136,7 +136,10 @@ export function authMiddleware(
       }
 
     // System Adminチェック
-    const isSystemAdmin = user.email === process.env.SYSTEM_ADMIN_EMAIL;
+    const isSystemAdmin =
+      !!user.email &&
+      !!process.env.SYSTEM_ADMIN_EMAIL &&
+      user.email === process.env.SYSTEM_ADMIN_EMAIL;
 
     // リクエストオブジェクトにユーザー情報を追加
     req.user = {
