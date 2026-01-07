@@ -27,7 +27,7 @@ router.post("/", async (req, res) => {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const { data: existingRequest } = await supabase
       .from("allowlist")
-      .select("request_count, last_requested_at")
+      .select("request_count, last_requested_at, status")
       .eq("email", email)
       .maybeSingle();
 
