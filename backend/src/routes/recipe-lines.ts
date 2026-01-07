@@ -195,6 +195,8 @@ router.post(
         });
 
         // 新しいレシピラインを追加
+        const selectedTenantId =
+          req.user!.selected_tenant_id || req.user!.tenant_ids[0];
         const newRecipeLine: RecipeLine = {
           id: "", // 一時的なID
           parent_item_id: line.parent_item_id!,
@@ -203,7 +205,7 @@ router.post(
           quantity: line.quantity || null,
           unit: line.unit || null,
           labor_role: null,
-          tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+          tenant_id: selectedTenantId,
           user_id: req.user!.id, // Required field
           minutes: null,
         };
@@ -241,10 +243,12 @@ router.post(
         return res.status(400).json({ error: validation.error });
       }
 
-      // tenant_idとuser_idを自動設定
+      // tenant_idとuser_idを自動設定（選択されたテナントID、または最初のテナント）
+      const selectedTenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
       const lineWithTenantId = {
         ...line,
-        tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+        tenant_id: selectedTenantId,
         user_id: req.user!.id, // 作成者を記録
       };
 
@@ -528,6 +532,8 @@ router.post("/batch", async (req, res) => {
     }
 
     // 新規作成されるレシピラインを追加
+    const selectedTenantId =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
     for (const create of creates) {
       const newRecipeLine: RecipeLine = {
         id: "", // 一時的なID
@@ -537,7 +543,7 @@ router.post("/batch", async (req, res) => {
         quantity: create.quantity || null,
         unit: create.unit || null,
         specific_child: create.specific_child ?? null, // nullish coalescing: null/undefinedのみnullに
-        tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+        tenant_id: selectedTenantId,
         user_id: req.user!.id, // Required field
         labor_role: create.labor_role || null,
         minutes: create.minutes || null,
@@ -740,10 +746,12 @@ router.post("/batch", async (req, res) => {
 
     // 作成
     if (creates.length > 0) {
+      const selectedTenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
       const createsWithTenantId = creates.map(
         (create: Partial<RecipeLine>) => ({
           ...create,
-          tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+          tenant_id: selectedTenantId,
           user_id: req.user!.id, // 作成者を記録
         })
       );

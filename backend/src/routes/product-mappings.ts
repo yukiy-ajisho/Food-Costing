@@ -17,33 +17,37 @@ router.get(
     getCollectionResource(req, "product_mapping")
   ),
   async (req, res) => {
-  try {
-    let query = supabase
-      .from("product_mappings")
-      .select("*");
-    
-    query = withTenantFilter(query, req);
+    try {
+      let query = supabase.from("product_mappings").select("*");
 
-    // フィルター
-    if (req.query.base_item_id) {
-      query = query.eq("base_item_id", req.query.base_item_id as string);
+      query = withTenantFilter(query, req);
+
+      // フィルター
+      if (req.query.base_item_id) {
+        query = query.eq("base_item_id", req.query.base_item_id as string);
+      }
+      if (req.query.virtual_product_id) {
+        query = query.eq(
+          "virtual_product_id",
+          req.query.virtual_product_id as string
+        );
+      }
+
+      const { data, error } = await query.order("created_at", {
+        ascending: false,
+      });
+
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+
+      res.json(data || []);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-    if (req.query.virtual_product_id) {
-      query = query.eq("virtual_product_id", req.query.virtual_product_id as string);
-    }
-
-    const { data, error } = await query.order("created_at", { ascending: false });
-
-    if (error) {
-      return res.status(500).json({ error: error.message });
-    }
-
-    res.json(data || []);
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * GET /product-mappings/:id
@@ -55,9 +59,9 @@ router.get("/:id", async (req, res) => {
       .from("product_mappings")
       .select("*")
       .eq("id", req.params.id);
-    
+
     query = withTenantFilter(query, req);
-    
+
     const { data, error } = await query.single();
 
     if (error) {
@@ -86,10 +90,12 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // tenant_idを自動設定
+    // tenant_idを自動設定（選択されたテナントID、または最初のテナント）
+    const selectedTenantId =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
     const mappingWithTenantId = {
       ...mapping,
-      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+      tenant_id: selectedTenantId,
     };
 
     const { data, error } = await supabase
@@ -130,9 +136,9 @@ router.delete("/:id", async (req, res) => {
       .from("product_mappings")
       .delete()
       .eq("id", req.params.id);
-    
+
     query = withTenantFilter(query, req);
-    
+
     const { error } = await query;
 
     if (error) {
@@ -147,5 +153,3 @@ router.delete("/:id", async (req, res) => {
 });
 
 export default router;
-
-

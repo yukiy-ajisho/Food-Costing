@@ -1,3 +1,10 @@
+/**
+ * NOTE: This file may be unused.
+ * The same functionality is provided by base-items.ts, which is registered in the routing.
+ * This file is not imported in backend/src/index.ts, so these endpoints are not accessible.
+ * Consider removing this file if it's confirmed to be unused.
+ */
+
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { BaseItem } from "../types/database";
@@ -22,8 +29,7 @@ router.get("/", async (req, res) => {
 
     res.json(data || []);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -47,8 +53,7 @@ router.get("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -66,10 +71,12 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name is required" });
     }
 
-    // tenant_idを自動設定
+    // tenant_idを自動設定（選択されたテナントID、または最初のテナント）
+    const selectedTenantId =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
     const baseItemWithTenantId = {
       ...baseItem,
-      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+      tenant_id: selectedTenantId,
     };
 
     const { data, error } = await supabase
@@ -84,8 +91,7 @@ router.post("/", async (req, res) => {
 
     res.status(201).json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -101,7 +107,12 @@ router.put("/:id", async (req, res) => {
 
     // user_idを更新から除外（セキュリティのため）
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { user_id: _user_id, tenant_id: _tenant_id, id: _id, ...baseItemWithoutIds } = baseItem;
+    const {
+      user_id: _user_id,
+      tenant_id: _tenant_id,
+      id: _id,
+      ...baseItemWithoutIds
+    } = baseItem;
     const { data, error } = await supabase
       .from("base_items")
       .update(baseItemWithoutIds)
@@ -116,8 +127,7 @@ router.put("/:id", async (req, res) => {
 
     res.json(data);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });
@@ -140,8 +150,7 @@ router.delete("/:id", async (req, res) => {
 
     res.status(204).send();
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
 });

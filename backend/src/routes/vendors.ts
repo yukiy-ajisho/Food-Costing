@@ -72,10 +72,12 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "name is required" });
     }
 
-    // tenant_idとuser_idを自動設定
+    // tenant_idとuser_idを自動設定（選択されたテナントID、または最初のテナント）
+    const selectedTenantId =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
     const vendorWithTenantId = {
       ...vendor,
-      tenant_id: req.user!.tenant_ids[0], // Phase 2で改善予定
+      tenant_id: selectedTenantId,
       user_id: req.user!.id, // 作成者を記録
     };
 
