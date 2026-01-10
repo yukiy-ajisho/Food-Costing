@@ -21,22 +21,22 @@ router.get(
     getCollectionResource(req, "base_item")
   ),
   async (req, res) => {
-    try {
+  try {
       let query = supabase.from("base_items").select("*");
 
       query = withTenantFilter(query, req);
 
       const { data, error } = await query.order("name", { ascending: true });
 
-      if (error) {
-        return res.status(500).json({ error: error.message });
-      }
-
-      res.json(data || []);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+    if (error) {
+      return res.status(500).json({ error: error.message });
     }
+
+    res.json(data || []);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
   }
 );
 
@@ -48,25 +48,25 @@ router.get(
   "/:id",
   authorizationMiddleware("read", getBaseItemResource),
   async (req, res) => {
-    try {
+  try {
       let query = supabase
-        .from("base_items")
-        .select("*")
+      .from("base_items")
+      .select("*")
         .eq("id", req.params.id);
 
       query = withTenantFilter(query, req);
 
       const { data, error } = await query.single();
 
-      if (error) {
-        return res.status(404).json({ error: error.message });
-      }
-
-      res.json(data);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+    if (error) {
+      return res.status(404).json({ error: error.message });
     }
+
+    res.json(data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
   }
 );
 
@@ -80,38 +80,38 @@ router.post(
     getCreateResource(req, "base_item")
   ),
   async (req, res) => {
-    try {
-      const baseItem: Partial<BaseItem> = req.body;
+  try {
+    const baseItem: Partial<BaseItem> = req.body;
 
-      // バリデーション
-      if (!baseItem.name) {
-        return res.status(400).json({ error: "name is required" });
-      }
+    // バリデーション
+    if (!baseItem.name) {
+      return res.status(400).json({ error: "name is required" });
+    }
 
       // tenant_idとuser_idを自動設定（選択されたテナントID、または最初のテナント）
       const selectedTenantId =
         req.user!.selected_tenant_id || req.user!.tenant_ids[0];
-      const baseItemWithTenantId = {
-        ...baseItem,
+    const baseItemWithTenantId = {
+      ...baseItem,
         tenant_id: selectedTenantId,
         user_id: req.user!.id, // 作成者を記録
-      };
+    };
 
-      const { data, error } = await supabase
-        .from("base_items")
-        .insert([baseItemWithTenantId])
-        .select()
-        .single();
+    const { data, error } = await supabase
+      .from("base_items")
+      .insert([baseItemWithTenantId])
+      .select()
+      .single();
 
-      if (error) {
-        return res.status(400).json({ error: error.message });
-      }
-
-      res.status(201).json(data);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+    if (error) {
+      return res.status(400).json({ error: error.message });
     }
+
+    res.status(201).json(data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
   }
 );
 
@@ -123,11 +123,11 @@ router.put(
   "/:id",
   authorizationMiddleware("update", getBaseItemResource),
   async (req, res) => {
-    try {
-      const baseItem: Partial<BaseItem> = req.body;
-      const { id } = req.params;
+  try {
+    const baseItem: Partial<BaseItem> = req.body;
+    const { id } = req.params;
 
-      // user_idとtenant_idを更新から除外（セキュリティのため）
+    // user_idとtenant_idを更新から除外（セキュリティのため）
       // eslint-disable @typescript-eslint/no-unused-vars
       const {
         user_id: _user_id,
@@ -138,27 +138,27 @@ router.put(
       // eslint-enable @typescript-eslint/no-unused-vars
 
       let query = supabase
-        .from("base_items")
-        .update(baseItemWithoutIds)
+      .from("base_items")
+      .update(baseItemWithoutIds)
         .eq("id", id);
 
       query = withTenantFilter(query, req);
 
       const { data, error } = await query.select().single();
 
-      if (error) {
-        return res.status(400).json({ error: error.message });
-      }
-
-      if (!data) {
-        return res.status(404).json({ error: "Base item not found" });
-      }
-
-      res.json(data);
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+    if (error) {
+      return res.status(400).json({ error: error.message });
     }
+
+    if (!data) {
+      return res.status(404).json({ error: "Base item not found" });
+    }
+
+    res.json(data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
   }
 );
 
@@ -229,7 +229,7 @@ router.get("/:id/vendor-products", async (req, res) => {
           (mapping: { virtual_vendor_products: unknown }) =>
             mapping.virtual_vendor_products
         )
-        .filter((p: unknown) => p !== null) || [];
+      .filter((p: unknown) => p !== null) || [];
 
     res.json(products);
   } catch (error: unknown) {
@@ -246,22 +246,22 @@ router.delete(
   "/:id",
   authorizationMiddleware("delete", getBaseItemResource),
   async (req, res) => {
-    try {
+  try {
       let query = supabase.from("base_items").delete().eq("id", req.params.id);
 
       query = withTenantFilter(query, req);
 
       const { error } = await query;
 
-      if (error) {
-        return res.status(400).json({ error: error.message });
-      }
-
-      res.status(204).send();
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
+    if (error) {
+      return res.status(400).json({ error: error.message });
     }
+
+    res.status(204).send();
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
   }
 );
 

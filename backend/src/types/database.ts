@@ -46,7 +46,7 @@ export interface ProductMapping {
 
 export interface Item {
   id: string;
-  name: string;
+  name: string | null; // Raw Itemの場合はnull（Base Itemのnameを使用）
   item_kind: "raw" | "prepped";
   is_menu_item: boolean;
   // Raw item fields

@@ -41,6 +41,40 @@ router.get(
         return res.status(500).json({ error: error.message });
       }
 
+      // Raw Itemの場合はBase Itemのnameを使用するため、Base Itemsを取得
+      if (data && data.length > 0) {
+        const rawItemIds = data
+          .filter((item) => item.item_kind === "raw" && item.base_item_id)
+          .map((item) => item.base_item_id!);
+
+        if (rawItemIds.length > 0) {
+          const selectedTenantId =
+            req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+          const baseItemsQuery = supabase
+            .from("base_items")
+            .select("id, name")
+            .in("id", rawItemIds)
+            .eq("tenant_id", selectedTenantId);
+
+          const { data: baseItems } = await baseItemsQuery;
+
+          if (baseItems) {
+            const baseItemsMap = new Map<string, string>();
+            baseItems.forEach((bi) => baseItemsMap.set(bi.id, bi.name));
+
+            // Raw ItemのnameをBase Itemのnameで上書き
+            data.forEach((item) => {
+              if (item.item_kind === "raw" && item.base_item_id) {
+                const baseItemName = baseItemsMap.get(item.base_item_id);
+                if (baseItemName) {
+                  item.name = baseItemName;
+                }
+              }
+            });
+          }
+        }
+      }
+
       // Managerの場合、Prepped Itemsに対してフィルタリングを適用
       const currentTenantId =
         req.user!.selected_tenant_id || req.user!.tenant_ids[0];
@@ -157,6 +191,22 @@ router.get(
         return res.status(404).json({ error: error.message });
       }
 
+      // Raw Itemの場合はBase Itemのnameを使用
+      if (data && data.item_kind === "raw" && data.base_item_id) {
+        const selectedTenantId =
+          req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+        const { data: baseItem } = await supabase
+          .from("base_items")
+          .select("name")
+          .eq("id", data.base_item_id)
+          .eq("tenant_id", selectedTenantId)
+          .single();
+
+        if (baseItem) {
+          data.name = baseItem.name;
+        }
+      }
+
       res.json(data);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -177,9 +227,16 @@ router.post(
       const item: Partial<Item> = req.body;
 
       // バリデーション
-      if (!item.name || !item.item_kind) {
+      if (!item.item_kind) {
         return res.status(400).json({
-          error: "name and item_kind are required",
+          error: "item_kind is required",
+        });
+      }
+
+      // Prepped Itemの場合はnameが必須、Raw Itemの場合はnameは不要（base_item_idから取得）
+      if (item.item_kind === "prepped" && !item.name) {
+        return res.status(400).json({
+          error: "name is required for prepped items",
         });
       }
 
@@ -189,6 +246,8 @@ router.post(
       // responsible_user_idを自動設定（デフォルトはuser_id、つまり作成者）
       const itemWithTenantId = {
         ...item,
+        // Raw Itemの場合はnameをnullにする
+        name: item.item_kind === "raw" ? null : item.name,
         tenant_id: selectedTenantId,
         user_id: req.user!.id, // 作成者を記録
         responsible_user_id: item.responsible_user_id || req.user!.id, // デフォルトは作成者
@@ -424,6 +483,7 @@ router.put(
       }
 
       // user_idとtenant_idを更新から除外（セキュリティのため）
+      // Raw Itemの場合はnameの更新も除外（Base Itemのnameを使用するため）
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -434,6 +494,13 @@ router.put(
         id: _id,
         ...itemWithoutIds
       } = item;
+
+      // Raw Itemの場合はnameの更新を無視
+      if (existingItem && existingItem.item_kind === "raw") {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { name: _name, ...itemWithoutName } = itemWithoutIds;
+        Object.assign(itemWithoutIds, itemWithoutName);
+      }
       let updateQuery = supabase
         .from("items")
         .update(itemWithoutIds)

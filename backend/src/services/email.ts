@@ -47,7 +47,8 @@ export async function sendInvitationEmail(
     );
 
     const { data, error } = await resend.emails.send({
-      from: process.env.RESEND_FROM_EMAIL || "Food Costing <onboarding@resend.dev>",
+      from:
+        process.env.RESEND_FROM_EMAIL || "Food Costing <onboarding@resend.dev>",
       to: [to],
       subject: `You've been invited to join ${tenantName} on Food Costing`,
       html,
