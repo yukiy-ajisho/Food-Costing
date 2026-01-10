@@ -135,6 +135,27 @@ export function getAndClearChangeHistory() {
   }
 }
 
+/**
+ * アイテムの表示名を取得
+ * Raw Itemの場合はBase Itemのnameを使用、Prepped Itemの場合はItemのnameを使用
+ */
+export function getItemDisplayName(
+  item:
+    | Item
+    | {
+        item_kind: "raw" | "prepped";
+        name: string | null;
+        base_item_id?: string | null;
+      },
+  baseItems: BaseItem[]
+): string {
+  if (item.item_kind === "raw" && item.base_item_id) {
+    const baseItem = baseItems.find((b) => b.id === item.base_item_id);
+    return baseItem?.name || item.name || "";
+  }
+  return item.name || "";
+}
+
 // 型定義
 export interface BaseItem {
   id: string;
@@ -173,7 +194,7 @@ export interface ProductMapping {
 
 export interface Item {
   id: string;
-  name: string;
+  name: string | null; // Raw Itemの場合はnull（Base Itemのnameを使用）
   item_kind: "raw" | "prepped";
   is_menu_item: boolean;
   // Raw item fields
@@ -581,10 +602,14 @@ export const nonMassUnitsAPI = {
 export const productMappingsAPI = {
   getAll: (params?: { base_item_id?: string; virtual_product_id?: string }) => {
     const queryParams = new URLSearchParams();
-    if (params?.base_item_id) queryParams.append("base_item_id", params.base_item_id);
-    if (params?.virtual_product_id) queryParams.append("virtual_product_id", params.virtual_product_id);
+    if (params?.base_item_id)
+      queryParams.append("base_item_id", params.base_item_id);
+    if (params?.virtual_product_id)
+      queryParams.append("virtual_product_id", params.virtual_product_id);
     const query = queryParams.toString();
-    return fetchAPI<ProductMapping[]>(`/product-mappings${query ? `?${query}` : ""}`);
+    return fetchAPI<ProductMapping[]>(
+      `/product-mappings${query ? `?${query}` : ""}`
+    );
   },
   getById: (id: string) => fetchAPI<ProductMapping>(`/product-mappings/${id}`),
   create: (mapping: Partial<ProductMapping>) =>
@@ -608,13 +633,19 @@ export const resourceSharesAPI = {
     target_id?: string;
   }) => {
     const queryParams = new URLSearchParams();
-    if (params?.resource_type) queryParams.append("resource_type", params.resource_type);
-    if (params?.resource_id) queryParams.append("resource_id", params.resource_id);
-    if (params?.owner_tenant_id) queryParams.append("owner_tenant_id", params.owner_tenant_id);
-    if (params?.target_type) queryParams.append("target_type", params.target_type);
+    if (params?.resource_type)
+      queryParams.append("resource_type", params.resource_type);
+    if (params?.resource_id)
+      queryParams.append("resource_id", params.resource_id);
+    if (params?.owner_tenant_id)
+      queryParams.append("owner_tenant_id", params.owner_tenant_id);
+    if (params?.target_type)
+      queryParams.append("target_type", params.target_type);
     if (params?.target_id) queryParams.append("target_id", params.target_id);
     const query = queryParams.toString();
-    return fetchAPI<ResourceShare[]>(`/resource-shares${query ? `?${query}` : ""}`);
+    return fetchAPI<ResourceShare[]>(
+      `/resource-shares${query ? `?${query}` : ""}`
+    );
   },
   getById: (id: string) => fetchAPI<ResourceShare>(`/resource-shares/${id}`),
   create: (share: Partial<ResourceShare>) =>
@@ -632,4 +663,3 @@ export const resourceSharesAPI = {
       method: "DELETE",
     }),
 };
-

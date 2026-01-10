@@ -666,10 +666,10 @@ export default function ItemsPage() {
           (i) => i.base_item_id === baseItemId
         );
 
-        // itemsレコードが存在しない場合は作成
+        // itemsレコードが存在しない場合は作成（Raw Itemのnameはnull）
         if (!correspondingItem) {
           const newItem = await itemsAPI.create({
-            name: item.name,
+            name: null, // Raw Itemのnameはnull（Base Itemのnameを使用）
             item_kind: "raw",
             is_menu_item: false,
             base_item_id: baseItemId,
@@ -678,7 +678,7 @@ export default function ItemsPage() {
           correspondingItem = newItem;
           changedItemIds.push(newItem.id);
         } else {
-          // itemsレコードが存在する場合は、each_gramsを更新
+          // itemsレコードが存在する場合は、each_gramsのみ更新（nameは更新しない）
           if (item.each_grams !== undefined) {
             await itemsAPI.update(correspondingItem.id, {
               each_grams: item.each_grams || null,
