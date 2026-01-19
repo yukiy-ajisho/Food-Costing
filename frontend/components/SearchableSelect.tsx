@@ -10,6 +10,7 @@ interface SearchableSelectProps {
     name: string;
     disabled?: boolean;
     deprecated?: boolean;
+    isUnused?: boolean;
   }[];
   value: string;
   onChange: (value: string) => void;
@@ -180,7 +181,7 @@ export function SearchableSelect({
                   type="button"
                   onClick={() => !option.disabled && handleSelect(option.id)}
                   disabled={option.disabled}
-                  className={`block w-full px-4 py-2 text-left transition-colors ${
+                  className={`block w-full px-4 py-2 text-left transition-colors flex justify-between items-center ${
                     option.disabled || option.deprecated
                       ? isDark
                         ? "opacity-50 cursor-not-allowed text-slate-500"
@@ -196,8 +197,17 @@ export function SearchableSelect({
                       : ""
                   }`}
                 >
-                  {option.deprecated && "[Deprecated] "}
-                  {option.name}
+                  <span>
+                    {option.deprecated && "[Deprecated] "}
+                    {option.name}
+                  </span>
+                  {option.isUnused && (
+                    <span
+                      className={`w-2 h-2 rounded-full ml-2 flex-shrink-0 ${
+                        isDark ? "bg-red-500" : "bg-red-600"
+                      }`}
+                    />
+                  )}
                 </button>
               ))
             ) : (
