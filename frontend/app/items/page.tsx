@@ -13,6 +13,7 @@ import {
   type BaseItem as APIBaseItem,
   type Vendor,
   type VendorProduct,
+  type ProductMapping,
 } from "@/lib/api";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import {
@@ -62,6 +63,7 @@ export default function ItemsPage() {
   const [baseItems, setBaseItems] = useState<APIBaseItem[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [items, setItems] = useState<Item[]>([]); // itemsテーブル（each_gramsを取得するため）
+  const [mappings, setMappings] = useState<ProductMapping[]>([]); // product_mappings（未使用base item判定用）
   const [originalVendorProducts, setOriginalVendorProducts] = useState<
     VendorProductUI[]
   >([]);
@@ -127,6 +129,7 @@ export default function ItemsPage() {
         setBaseItems(baseItemsData);
         setVendors(vendorsData);
         setItems(itemsData);
+        setMappings(mappingsData || []);
 
         // product_mappingsからbase_item_idを取得するマップを作成
         const virtualProductToBaseItemMap = new Map<string, string>();
@@ -405,6 +408,7 @@ export default function ItemsPage() {
       setBaseItems(baseItemsData);
       setVendors(vendorsData);
       setItems(itemsData);
+      setMappings(mappingsData || []);
 
       // product_mappingsからbase_item_idを取得するマップを作成
       const virtualProductToBaseItemMap = new Map<string, string>();
@@ -1201,12 +1205,19 @@ export default function ItemsPage() {
                             >
                               {isEditModeItems ? (
                                 <SearchableSelect
-                                  options={baseItems
-                                    .filter((b) => !b.deprecated)
-                                    .map((b) => ({
-                                      id: b.id,
-                                      name: b.name,
-                                    }))}
+                                  options={(() => {
+                                    // 使用済みbase_item_idのSetを作成
+                                    const usedBaseItemIds = new Set(
+                                      mappings.map((m) => m.base_item_id)
+                                    );
+                                    return baseItems
+                                      .filter((b) => !b.deprecated)
+                                      .map((b) => ({
+                                        id: b.id,
+                                        name: b.name,
+                                        isUnused: !usedBaseItemIds.has(b.id),
+                                      }));
+                                  })()}
                                   value={vp.base_item_id}
                                   onChange={(value) =>
                                     handleVendorProductChange(
