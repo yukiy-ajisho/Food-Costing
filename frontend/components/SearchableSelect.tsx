@@ -136,7 +136,7 @@ export function SearchableSelect({
       {isOpen && (
         <div
           ref={menuRef}
-          className={`fixed z-50 border rounded-md shadow-lg max-h-60 overflow-auto transition-colors ${
+          className={`fixed z-50 border rounded-md shadow-lg transition-colors ${
             isDark
               ? "bg-slate-800 border-slate-600"
               : "bg-white border-gray-300"
@@ -145,7 +145,7 @@ export function SearchableSelect({
             top: `${menuPosition.top}px`,
             left: `${menuPosition.left}px`,
             width: menuPosition.width > 0 ? `${menuPosition.width}px` : "auto",
-            minWidth: "200px",
+            minWidth: "250px",
           }}
         >
           <div
@@ -173,7 +173,7 @@ export function SearchableSelect({
               />
             </div>
           </div>
-          <div className="max-h-48 overflow-auto">
+          <div className="max-h-96 overflow-auto">
             {filteredOptions.length > 0 ? (
               filteredOptions.map((option) => (
                 <button
@@ -181,7 +181,7 @@ export function SearchableSelect({
                   type="button"
                   onClick={() => !option.disabled && handleSelect(option.id)}
                   disabled={option.disabled}
-                  className={`block w-full px-4 py-2 text-left transition-colors flex justify-between items-center ${
+                  className={`block w-full px-2 py-2 text-left transition-colors flex justify-between items-center ${
                     option.disabled || option.deprecated
                       ? isDark
                         ? "opacity-50 cursor-not-allowed text-slate-500"
@@ -198,8 +198,8 @@ export function SearchableSelect({
                   }`}
                 >
                   <span>
-                    {option.deprecated && "[Deprecated] "}
-                    {option.name}
+                  {option.deprecated && "[Deprecated] "}
+                  {option.name}
                   </span>
                   {option.isUnused && (
                     <span
