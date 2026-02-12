@@ -3490,6 +3490,25 @@ export default function CostPage() {
                       >
                         Finish Amount
                       </th>
+                      {/* COG */}
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "230px" }}
+                      >
+                        COG
+                      </th>
+                      {/* LABOR */}
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "230px" }}
+                      >
+                        LABOR
+                      </th>
+                      {/* Cost */}
                       <th
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
@@ -4454,6 +4473,94 @@ export default function CostPage() {
                             </div>
                           </td>
 
+                          {/* COG/g or COG/kg */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "230px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  const breakdown = costBreakdown[item.id];
+                                  if (!breakdown) return "-";
+                                  const cogPerGram = breakdown.food_cost_per_gram;
+                                  if (cogPerGram === undefined || cogPerGram === null) return "-";
+                                  if (
+                                    eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams
+                                  ) {
+                                    return `$${(cogPerGram * item.each_grams).toFixed(2)}/each`;
+                                  }
+                                  return costUnit === "g"
+                                    ? `$${cogPerGram.toFixed(6)}/g`
+                                    : `$${(cogPerGram * 1000).toFixed(2)}/kg`;
+                                })()}
+                              </div>
+                            </div>
+                          </td>
+                          {/* LABOR/g or LABOR/kg */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              width: "230px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <div
+                                className={`text-sm ${
+                                  isDark ? "text-slate-100" : "text-gray-900"
+                                }`}
+                                style={{ lineHeight: "20px", height: "20px" }}
+                              >
+                                {(() => {
+                                  const breakdown = costBreakdown[item.id];
+                                  if (!breakdown) return "-";
+                                  const laborPerGram = breakdown.labor_cost_per_gram;
+                                  if (laborPerGram === undefined || laborPerGram === null) return "-";
+                                  if (
+                                    eachMode &&
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams
+                                  ) {
+                                    return `$${(laborPerGram * item.each_grams).toFixed(2)}/each`;
+                                  }
+                                  return costUnit === "g"
+                                    ? `$${laborPerGram.toFixed(6)}/g`
+                                    : `$${(laborPerGram * 1000).toFixed(2)}/kg`;
+                                })()}
+                              </div>
+                            </div>
+                          </td>
                           {/* Cost/g or Cost/kg */}
                           <td
                             className="px-6 whitespace-nowrap"
@@ -4479,19 +4586,39 @@ export default function CostPage() {
                                 }`}
                                 style={{ lineHeight: "20px", height: "20px" }}
                               >
-                                {item.cost_per_gram !== undefined
-                                  ? eachMode &&
+                                {(() => {
+                                  const breakdown = costBreakdown[item.id];
+                                  if (!breakdown) {
+                                    // costBreakdownがない場合は、従来のitem.cost_per_gramを使用（フォールバック）
+                                    if (item.cost_per_gram === undefined) return "-";
+                                    if (
+                                      eachMode &&
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams
+                                    ) {
+                                      return `$${(
+                                        item.cost_per_gram * item.each_grams
+                                      ).toFixed(2)}/each`;
+                                    }
+                                    return costUnit === "g"
+                                      ? `$${item.cost_per_gram.toFixed(6)}/g`
+                                      : `$${(item.cost_per_gram * 1000).toFixed(
+                                          2
+                                        )}/kg`;
+                                  }
+                                  const totalCostPerGram = breakdown.total_cost_per_gram;
+                                  if (totalCostPerGram === undefined || totalCostPerGram === null) return "-";
+                                  if (
+                                    eachMode &&
                                     item.proceed_yield_unit === "each" &&
                                     item.each_grams
-                                    ? `$${(
-                                        item.cost_per_gram * item.each_grams
-                                      ).toFixed(2)}/each`
-                                    : costUnit === "g"
-                                    ? `$${item.cost_per_gram.toFixed(6)}/g`
-                                    : `$${(item.cost_per_gram * 1000).toFixed(
-                                        2
-                                      )}/kg`
-                                  : "-"}
+                                  ) {
+                                    return `$${(totalCostPerGram * item.each_grams).toFixed(2)}/each`;
+                                  }
+                                  return costUnit === "g"
+                                    ? `$${totalCostPerGram.toFixed(6)}/g`
+                                    : `$${(totalCostPerGram * 1000).toFixed(2)}/kg`;
+                                })()}
                               </div>
                             </div>
                           </td>
@@ -5160,7 +5287,7 @@ export default function CostPage() {
                           }
                         >
                           <td
-                            colSpan={14}
+                            colSpan={16}
                             className={`py-4 transition-colors ${
                               isNewItem
                                 ? newItemBgClass
