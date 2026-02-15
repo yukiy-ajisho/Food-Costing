@@ -5388,6 +5388,15 @@ export default function CostPage() {
                                         Unit
                                       </th>
                                       <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
+                                        Cost
+                                      </th>
+                                      <th
                                         className={`px-4 py-2 text-left text-xs font-medium w-16 ${
                                           isDark
                                             ? "text-slate-400"
@@ -5914,6 +5923,157 @@ export default function CostPage() {
                                             )}
                                           </td>
                                           <td className="px-4 py-2">
+                                            {(() => {
+                                              if (
+                                                line.isMarkedForDeletion ||
+                                                !line.child_item_id ||
+                                                !line.quantity ||
+                                                !line.unit
+                                              ) {
+                                                return (
+                                                  <div
+                                                    className={`text-sm ${
+                                                      isDark
+                                                        ? "text-slate-400"
+                                                        : "text-gray-400"
+                                                    }`}
+                                                  >
+                                                    -
+                                                  </div>
+                                                );
+                                              }
+
+                                              const childItem =
+                                                availableItems.find(
+                                                  (i) =>
+                                                    i.id === line.child_item_id
+                                                );
+                                              if (!childItem) {
+                                                return (
+                                                  <div
+                                                    className={`text-sm ${
+                                                      isDark
+                                                        ? "text-slate-400"
+                                                        : "text-gray-400"
+                                                    }`}
+                                                  >
+                                                    -
+                                                  </div>
+                                                );
+                                              }
+
+                                              const quantityGrams =
+                                                convertToGrams(
+                                                  line.unit,
+                                                  line.quantity,
+                                                  line.child_item_id
+                                                );
+
+                                              let costPerGram: number | null =
+                                                null;
+
+                                              if (childItem.item_kind === "raw") {
+                                                // Raw Itemの場合
+                                                const availableVendorProducts =
+                                                  getAvailableVendorProducts(
+                                                    line.child_item_id || "",
+                                                    line.specific_child
+                                                  );
+
+                                                let selectedVendorProduct:
+                                                  | VendorProduct
+                                                  | null = null;
+
+                                                if (
+                                                  line.specific_child === null ||
+                                                  line.specific_child === "lowest"
+                                                ) {
+                                                  // Lowestを選択している場合、最低価格のvendor_productを探す
+                                                  let lowestCost: number | null =
+                                                    null;
+                                                  for (const vp of availableVendorProducts) {
+                                                    const costPerKg =
+                                                      calculateCostPerKg(
+                                                        vp,
+                                                        childItem
+                                                      );
+                                                    if (
+                                                      costPerKg !== null &&
+                                                      (lowestCost === null ||
+                                                        costPerKg < lowestCost)
+                                                    ) {
+                                                      lowestCost = costPerKg;
+                                                      selectedVendorProduct = vp;
+                                                    }
+                                                  }
+                                                } else {
+                                                  // Specific vendor_productを選択している場合
+                                                  selectedVendorProduct =
+                                                    availableVendorProducts.find(
+                                                      (vp) =>
+                                                        vp.id ===
+                                                        line.specific_child
+                                                    ) || null;
+                                                }
+
+                                                if (selectedVendorProduct) {
+                                                  const costPerKg =
+                                                    calculateCostPerKg(
+                                                      selectedVendorProduct,
+                                                      childItem
+                                                    );
+                                                  if (costPerKg !== null) {
+                                                    // costPerKgは$/kgなので、$/gに変換
+                                                    costPerGram =
+                                                      costPerKg / 1000;
+                                                  }
+                                                }
+                                              } else {
+                                                // Prepped Itemの場合
+                                                const breakdown =
+                                                  costBreakdown[
+                                                    line.child_item_id
+                                                  ];
+                                                if (breakdown) {
+                                                  costPerGram =
+                                                    breakdown.food_cost_per_gram;
+                                                }
+                                              }
+
+                                              if (
+                                                costPerGram === null ||
+                                                quantityGrams === 0
+                                              ) {
+                                                return (
+                                                  <div
+                                                    className={`text-sm ${
+                                                      isDark
+                                                        ? "text-slate-400"
+                                                        : "text-gray-400"
+                                                    }`}
+                                                  >
+                                                    -
+                                                  </div>
+                                                );
+                                              }
+
+                                              const totalCost =
+                                                costPerGram * quantityGrams;
+
+                                              return (
+                                                <div
+                                                  className={`text-sm ${
+                                                    isDark
+                                                      ? "text-slate-100"
+                                                      : "text-gray-900"
+                                                  }`}
+                                                >
+                                                  ${totalCost.toFixed(2)}
+                                                </div>
+                                              );
+                                            })()}
+                                          </td>
+                                          <td className="px-4 py-2">
                                             {isEditModeCosting &&
                                               activeMode === "costing" && (
                                                 <button
@@ -5936,7 +6096,7 @@ export default function CostPage() {
                                         </tr>
                                       ))}
                                     <tr>
-                                      <td colSpan={5} className="px-4 py-2">
+                                      <td colSpan={4} className="px-4 py-2">
                                         {isEditModeCosting &&
                                           activeMode === "costing" && (
                                             <button
@@ -5951,6 +6111,149 @@ export default function CostPage() {
                                               </span>
                                             </button>
                                           )}
+                                      </td>
+                                      <td
+                                        className={`px-4 py-2 text-right font-semibold ${
+                                          isDark
+                                            ? "text-slate-100"
+                                            : "text-gray-900"
+                                        }`}
+                                      >
+                                        {(() => {
+                                          let totalCost = 0;
+                                          const ingredientLines =
+                                            item.recipe_lines.filter(
+                                              (line) =>
+                                                line.line_type === "ingredient" &&
+                                                !line.isMarkedForDeletion
+                                            );
+
+                                          for (const line of ingredientLines) {
+                                            if (
+                                              !line.child_item_id ||
+                                              !line.quantity ||
+                                              !line.unit
+                                            ) {
+                                              continue;
+                                            }
+
+                                            const childItem =
+                                              availableItems.find(
+                                                (i) =>
+                                                  i.id === line.child_item_id
+                                              );
+                                            if (!childItem) {
+                                              continue;
+                                            }
+
+                                            const quantityGrams =
+                                              convertToGrams(
+                                                line.unit,
+                                                line.quantity,
+                                                line.child_item_id
+                                              );
+
+                                            let costPerGram: number | null =
+                                              null;
+
+                                            if (
+                                              childItem.item_kind === "raw"
+                                            ) {
+                                              // Raw Itemの場合
+                                              const availableVendorProducts =
+                                                getAvailableVendorProducts(
+                                                  line.child_item_id || "",
+                                                  line.specific_child
+                                                );
+
+                                              let selectedVendorProduct:
+                                                | VendorProduct
+                                                | null = null;
+
+                                              if (
+                                                line.specific_child === null ||
+                                                line.specific_child === "lowest"
+                                              ) {
+                                                // Lowestを選択している場合、最低価格のvendor_productを探す
+                                                let lowestCost: number | null =
+                                                  null;
+                                                for (const vp of availableVendorProducts) {
+                                                  const costPerKg =
+                                                    calculateCostPerKg(
+                                                      vp,
+                                                      childItem
+                                                    );
+                                                  if (
+                                                    costPerKg !== null &&
+                                                    (lowestCost === null ||
+                                                      costPerKg < lowestCost)
+                                                  ) {
+                                                    lowestCost = costPerKg;
+                                                    selectedVendorProduct = vp;
+                                                  }
+                                                }
+                                              } else {
+                                                // Specific vendor_productを選択している場合
+                                                selectedVendorProduct =
+                                                  availableVendorProducts.find(
+                                                    (vp) =>
+                                                      vp.id ===
+                                                      line.specific_child
+                                                  ) || null;
+                                              }
+
+                                              if (selectedVendorProduct) {
+                                                const costPerKg =
+                                                  calculateCostPerKg(
+                                                    selectedVendorProduct,
+                                                    childItem
+                                                  );
+                                                if (costPerKg !== null) {
+                                                  // costPerKgは$/kgなので、$/gに変換
+                                                  costPerGram =
+                                                    costPerKg / 1000;
+                                                }
+                                              }
+                                            } else {
+                                              // Prepped Itemの場合
+                                              const breakdown =
+                                                costBreakdown[
+                                                  line.child_item_id
+                                                ];
+                                              if (breakdown) {
+                                                costPerGram =
+                                                  breakdown.food_cost_per_gram;
+                                              }
+                                            }
+
+                                            if (
+                                              costPerGram !== null &&
+                                              quantityGrams > 0
+                                            ) {
+                                              totalCost +=
+                                                costPerGram * quantityGrams;
+                                            }
+                                          }
+
+                                          if (totalCost === 0) {
+                                            return (
+                                              <span
+                                                className={
+                                                  isDark
+                                                    ? "text-slate-400"
+                                                    : "text-gray-400"
+                                                }
+                                              >
+                                                -
+                                              </span>
+                                            );
+                                          }
+
+                                          return `$${totalCost.toFixed(2)}`;
+                                        })()}
+                                      </td>
+                                      <td className="px-4 py-2">
+                                        {/* ゴミ箱列 */}
                                       </td>
                                     </tr>
                                   </tbody>
@@ -5993,6 +6296,15 @@ export default function CostPage() {
                                         }`}
                                       >
                                         Minutes
+                                      </th>
+                                      <th
+                                        className={`px-4 py-2 text-left text-xs font-medium ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-600"
+                                        }`}
+                                      >
+                                        Cost
                                       </th>
                                       <th
                                         className={`px-4 py-2 text-left text-xs font-medium w-16 ${
@@ -6158,6 +6470,61 @@ export default function CostPage() {
                                             )}
                                           </td>
                                           <td className="px-4 py-2">
+                                            {(() => {
+                                              if (
+                                                line.isMarkedForDeletion ||
+                                                !line.labor_role ||
+                                                line.minutes === null ||
+                                                line.minutes === undefined
+                                              ) {
+                                                return (
+                                                  <div
+                                                    className={`text-sm ${
+                                                      isDark
+                                                        ? "text-slate-400"
+                                                        : "text-gray-400"
+                                                    }`}
+                                                  >
+                                                    -
+                                                  </div>
+                                                );
+                                              }
+
+                                              const laborRole = laborRoles.find(
+                                                (r) => r.name === line.labor_role
+                                              );
+                                              if (!laborRole || !laborRole.hourly_wage) {
+                                                return (
+                                                  <div
+                                                    className={`text-sm ${
+                                                      isDark
+                                                        ? "text-slate-400"
+                                                        : "text-gray-400"
+                                                    }`}
+                                                  >
+                                                    -
+                                                  </div>
+                                                );
+                                              }
+
+                                              const totalCost =
+                                                laborRole.hourly_wage *
+                                                ((line.minutes || 0) / 60);
+
+                                              return (
+                                                <div
+                                                  className={`text-sm ${
+                                                    isDark
+                                                      ? "text-slate-100"
+                                                      : "text-gray-900"
+                                                  }`}
+                                                >
+                                                  ${totalCost.toFixed(2)}
+                                                </div>
+                                              );
+                                            })()}
+                                          </td>
+                                          <td className="px-4 py-2">
                                             {isEditModeCosting &&
                                               activeMode === "costing" && (
                                                 <button
@@ -6180,7 +6547,7 @@ export default function CostPage() {
                                         </tr>
                                       ))}
                                     <tr>
-                                      <td colSpan={3} className="px-4 py-2">
+                                      <td colSpan={2} className="px-4 py-2">
                                         {isEditModeCosting &&
                                           activeMode === "costing" && (
                                             <button
@@ -6195,6 +6562,66 @@ export default function CostPage() {
                                               </span>
                                             </button>
                                           )}
+                                      </td>
+                                      <td
+                                        className={`px-4 py-2 text-right font-semibold ${
+                                          isDark
+                                            ? "text-slate-100"
+                                            : "text-gray-900"
+                                        }`}
+                                      >
+                                        {(() => {
+                                          let totalCost = 0;
+                                          const laborLines =
+                                            item.recipe_lines.filter(
+                                              (line) =>
+                                                line.line_type === "labor" &&
+                                                !line.isMarkedForDeletion
+                                            );
+
+                                          for (const line of laborLines) {
+                                            if (
+                                              !line.labor_role ||
+                                              line.minutes === null ||
+                                              line.minutes === undefined
+                                            ) {
+                                              continue;
+                                            }
+
+                                            const laborRole = laborRoles.find(
+                                              (r) => r.name === line.labor_role
+                                            );
+                                            if (
+                                              !laborRole ||
+                                              !laborRole.hourly_wage
+                                            ) {
+                                              continue;
+                                            }
+
+                                            totalCost +=
+                                              laborRole.hourly_wage *
+                                              ((line.minutes || 0) / 60);
+                                          }
+
+                                          if (totalCost === 0) {
+                                            return (
+                                              <span
+                                                className={
+                                                  isDark
+                                                    ? "text-slate-400"
+                                                    : "text-gray-400"
+                                                }
+                                              >
+                                                -
+                                              </span>
+                                            );
+                                          }
+
+                                          return `$${totalCost.toFixed(2)}`;
+                                        })()}
+                                      </td>
+                                      <td className="px-4 py-2">
+                                        {/* ゴミ箱列 */}
                                       </td>
                                     </tr>
                                   </tbody>
