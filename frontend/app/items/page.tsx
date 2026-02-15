@@ -40,7 +40,7 @@ interface BaseItemUI {
   name: string;
   specific_weight?: number | null;
   each_grams?: number | null; // itemsテーブルのeach_grams（base_item_idで対応するitemsレコードから取得）
-  selectedType?: "specific_weight" | "each" | null; // ラジオボタンの選択状態
+  selectedType?: "specific_weight" | "each" | "none" | null; // ラジオボタンの選択状態
   isMarkedForDeletion?: boolean;
   isNew?: boolean;
 }
@@ -816,7 +816,7 @@ export default function ItemsPage() {
       name: "",
       specific_weight: null,
       each_grams: null,
-      selectedType: null,
+      selectedType: "none",
       isNew: true,
     };
     setBaseItemsUI([...baseItemsUI, newItem]);
@@ -1999,7 +1999,7 @@ export default function ItemsPage() {
                             <input
                               type="radio"
                               name={`type-${item.id}`}
-                              checked={item.selectedType === "none"}
+                              checked={(item.selectedType ?? "none") === "none"}
                               onClick={() =>
                                 handleBaseItemTypeChange(item.id, "none")
                               }
@@ -2035,7 +2035,7 @@ export default function ItemsPage() {
                               type="radio"
                               name={`type-${item.id}`}
                               checked={
-                                item.selectedType === "specific_weight"
+                                (item.selectedType ?? "none") === "specific_weight"
                               }
                               onClick={() =>
                                 handleBaseItemTypeChange(
@@ -2109,7 +2109,7 @@ export default function ItemsPage() {
                                     });
                                   }}
                                   disabled={
-                                    item.selectedType !== "specific_weight"
+                                    (item.selectedType ?? "none") !== "specific_weight"
                                   }
                                   className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
                                     isDark
@@ -2166,7 +2166,7 @@ export default function ItemsPage() {
                             <input
                               type="radio"
                               name={`type-${item.id}`}
-                              checked={item.selectedType === "each"}
+                              checked={(item.selectedType ?? "none") === "each"}
                               onClick={() =>
                                 handleBaseItemTypeChange(item.id, "each")
                               }
@@ -2229,7 +2229,7 @@ export default function ItemsPage() {
                                       return newMap;
                                     });
                                   }}
-                                  disabled={item.selectedType !== "each"}
+                                  disabled={(item.selectedType ?? "none") !== "each"}
                                   className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
                                     isDark
                                       ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
