@@ -40,7 +40,7 @@ interface BaseItemUI {
   name: string;
   specific_weight?: number | null;
   each_grams?: number | null; // itemsテーブルのeach_grams（base_item_idで対応するitemsレコードから取得）
-  selectedType?: "specific_weight" | "each" | null; // ラジオボタンの選択状態
+  selectedType?: "specific_weight" | "each" | "none" | null; // ラジオボタンの選択状態
   isMarkedForDeletion?: boolean;
   isNew?: boolean;
 }
@@ -224,7 +224,7 @@ export default function ItemsPage() {
             const specificWeight = baseItem.specific_weight || null;
             const eachGrams = correspondingItem?.each_grams || null;
             // 既存の値から選択状態を判定
-            let selectedType: "specific_weight" | "each" | null = null;
+            let selectedType: "specific_weight" | "each" | "none" = "none";
             if (specificWeight !== null && specificWeight !== undefined) {
               selectedType = "specific_weight";
             } else if (eachGrams !== null && eachGrams !== undefined) {
@@ -724,7 +724,7 @@ export default function ItemsPage() {
           const specificWeight = baseItem.specific_weight || null;
           const eachGrams = correspondingItem?.each_grams || null;
           // 既存の値から選択状態を判定
-          let selectedType: "specific_weight" | "each" | null = null;
+          let selectedType: "specific_weight" | "each" | "none" = "none";
           if (specificWeight !== null && specificWeight !== undefined) {
             selectedType = "specific_weight";
           } else if (eachGrams !== null && eachGrams !== undefined) {
@@ -767,47 +767,34 @@ export default function ItemsPage() {
 
   const handleBaseItemTypeChange = (
     id: string,
-    type: "specific_weight" | "each"
+    type: "specific_weight" | "each" | "none"
   ) => {
     setBaseItemsUI(
       baseItemsUI.map((item) => {
         if (item.id !== id) return item;
 
-        // 既に選択されているタイプの場合
+        // 既に選択されているタイプの場合は何もしない
         if (item.selectedType === type) {
-          // 現在の値を確認
-          const currentValue =
-            type === "specific_weight" ? item.specific_weight : item.each_grams;
-
-          // 値が空の場合のみ選択解除を許可
-          if (currentValue === null || currentValue === undefined) {
-            return {
-              ...item,
-              selectedType: null,
-            };
-          }
-
-          // 値がある場合は何もしない（選択解除を拒否）
           return item;
         }
 
-        // 別のタイプに切り替える場合、現在の値が空でないとダメ
-        const currentValue =
-          item.selectedType === "specific_weight"
-            ? item.specific_weight
-            : item.selectedType === "each"
-            ? item.each_grams
-            : null;
-
-        // 現在の値が空でない場合は切り替えを許可しない
-        if (currentValue !== null && currentValue !== undefined) {
-          return item;
+        // NONEに切り替える場合
+        if (type === "none") {
+          return {
+            ...item,
+            selectedType: "none",
+            specific_weight: null,
+            each_grams: null,
+          };
         }
 
-        // 値が空の場合のみ切り替えを許可
+        // specific_weightまたはeachに切り替える場合
+        // 切り替える際に、もう一方の値をクリア
         return {
           ...item,
           selectedType: type,
+          specific_weight: type === "specific_weight" ? item.specific_weight : null,
+          each_grams: type === "each" ? item.each_grams : null,
         };
       })
     );
@@ -829,7 +816,7 @@ export default function ItemsPage() {
       name: "",
       specific_weight: null,
       each_grams: null,
-      selectedType: null,
+      selectedType: "none",
       isNew: true,
     };
     setBaseItemsUI([...baseItemsUI, newItem]);
@@ -1133,7 +1120,7 @@ export default function ItemsPage() {
                         }`}
                         style={{ width: "10%" }}
                       >
-                        Unit
+                        Quantity
                       </th>
                       <th
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
@@ -1141,7 +1128,7 @@ export default function ItemsPage() {
                         }`}
                         style={{ width: "10%" }}
                       >
-                        Quantity
+                        Unit
                       </th>
                       <th
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
@@ -1211,10 +1198,10 @@ export default function ItemsPage() {
                                       mappings.map((m) => m.base_item_id)
                                     );
                                     return baseItems
-                                      .filter((b) => !b.deprecated)
-                                      .map((b) => ({
-                                        id: b.id,
-                                        name: b.name,
+                                    .filter((b) => !b.deprecated)
+                                    .map((b) => ({
+                                      id: b.id,
+                                      name: b.name,
                                         isUnused: !usedBaseItemIds.has(b.id),
                                       }));
                                   })()}
@@ -1409,6 +1396,94 @@ export default function ItemsPage() {
                             </div>
                           </td>
 
+                          {/* Quantity */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeItems ? (
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  value={
+                                    purchaseQuantityInputs.has(vp.id)
+                                      ? purchaseQuantityInputs.get(vp.id) || ""
+                                      : vp.purchase_quantity === 0
+                                      ? ""
+                                      : String(vp.purchase_quantity)
+                                  }
+                                  onChange={(e) => {
+                                    const value = e.target.value;
+                                    // 数字と小数点のみを許可（空文字列も許可）
+                                    const numericPattern =
+                                      /^(\d+\.?\d*|\.\d+)?$/;
+                                    if (numericPattern.test(value)) {
+                                      setPurchaseQuantityInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.set(vp.id, value);
+                                        return newMap;
+                                      });
+                                    }
+                                    // マッチしない場合は何もしない（前の値を保持）
+                                  }}
+                                  onBlur={(e) => {
+                                    const value = e.target.value;
+                                    // フォーカスアウト時に数値に変換
+                                    const numValue =
+                                      value === "" || value === "."
+                                        ? 0
+                                        : parseFloat(value) || 0;
+                                    handleVendorProductChange(
+                                      vp.id,
+                                      "purchase_quantity",
+                                      numValue
+                                    );
+                                    // 入力状態をクリア（次回表示時は実際の値から取得）
+                                    setPurchaseQuantityInputs((prev) => {
+                                      const newMap = new Map(prev);
+                                      newMap.delete(vp.id);
+                                      return newMap;
+                                    });
+                                  }}
+                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="0"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {vp.purchase_quantity}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
                           {/* Unit */}
                           <td
                             className="px-6 whitespace-nowrap"
@@ -1502,7 +1577,6 @@ export default function ItemsPage() {
                                           title={disabledReason}
                                         >
                                           {unit}
-                                          {isDisabled && " (setup required)"}
                                         </option>
                                       );
                                     })}
@@ -1542,94 +1616,6 @@ export default function ItemsPage() {
                                   </div>
                                 )}
                               </div>
-                            </div>
-                          </td>
-
-                          {/* Quantity */}
-                          <td
-                            className="px-6 whitespace-nowrap"
-                            style={{
-                              paddingTop: "16px",
-                              paddingBottom: "16px",
-                              boxSizing: "border-box",
-                            }}
-                          >
-                            <div
-                              style={{
-                                height: "20px",
-                                minHeight: "20px",
-                                maxHeight: "20px",
-                                display: "flex",
-                                alignItems: "center",
-                              }}
-                            >
-                              {isEditModeItems ? (
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={
-                                    purchaseQuantityInputs.has(vp.id)
-                                      ? purchaseQuantityInputs.get(vp.id) || ""
-                                      : vp.purchase_quantity === 0
-                                      ? ""
-                                      : String(vp.purchase_quantity)
-                                  }
-                                  onChange={(e) => {
-                                    const value = e.target.value;
-                                    // 数字と小数点のみを許可（空文字列も許可）
-                                    const numericPattern =
-                                      /^(\d+\.?\d*|\.\d+)?$/;
-                                    if (numericPattern.test(value)) {
-                                      setPurchaseQuantityInputs((prev) => {
-                                        const newMap = new Map(prev);
-                                        newMap.set(vp.id, value);
-                                        return newMap;
-                                      });
-                                    }
-                                    // マッチしない場合は何もしない（前の値を保持）
-                                  }}
-                                  onBlur={(e) => {
-                                    const value = e.target.value;
-                                    // フォーカスアウト時に数値に変換
-                                    const numValue =
-                                      value === "" || value === "."
-                                        ? 0
-                                        : parseFloat(value) || 0;
-                                    handleVendorProductChange(
-                                      vp.id,
-                                      "purchase_quantity",
-                                      numValue
-                                    );
-                                    // 入力状態をクリア（次回表示時は実際の値から取得）
-                                    setPurchaseQuantityInputs((prev) => {
-                                      const newMap = new Map(prev);
-                                      newMap.delete(vp.id);
-                                      return newMap;
-                                    });
-                                  }}
-                                  className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                  placeholder="0"
-                                  style={{
-                                    height: "20px",
-                                    minHeight: "20px",
-                                    maxHeight: "20px",
-                                    lineHeight: "20px",
-                                    padding: "0 4px",
-                                    fontSize: "0.875rem",
-                                    boxSizing: "border-box",
-                                    margin: 0,
-                                  }}
-                                />
-                              ) : (
-                                <div
-                                  className={`text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
-                                >
-                                  {vp.purchase_quantity}
-                                </div>
-                              )}
                             </div>
                           </td>
 
@@ -1841,7 +1827,7 @@ export default function ItemsPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "50%" }}
+                        style={{ width: "40%" }}
                       >
                         NAME
                       </th>
@@ -1849,7 +1835,15 @@ export default function ItemsPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "25%" }}
+                        style={{ width: "15%" }}
+                      >
+                        NONE
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "22.5%" }}
                       >
                         <div className="flex items-center gap-1">
                           <span>SPECIFIC WEIGHT (g/ml)</span>
@@ -1868,7 +1862,7 @@ export default function ItemsPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "25%" }}
+                        style={{ width: "22.5%" }}
                       >
                         <div className="flex items-center gap-1">
                           <span>EACH (g)</span>
@@ -1983,6 +1977,41 @@ export default function ItemsPage() {
                           </div>
                         </td>
 
+                        {/* NONE */}
+                        <td
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            <input
+                              type="radio"
+                              name={`type-${item.id}`}
+                              checked={(item.selectedType ?? "none") === "none"}
+                              onClick={() =>
+                                handleBaseItemTypeChange(item.id, "none")
+                              }
+                              onChange={() =>
+                                handleBaseItemTypeChange(item.id, "none")
+                              }
+                              disabled={!isEditModeBaseItems}
+                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                            />
+                          </div>
+                        </td>
+
                         {/* Specific Weight */}
                         <td
                           className="px-6 whitespace-nowrap"
@@ -2002,28 +2031,29 @@ export default function ItemsPage() {
                               gap: "8px",
                             }}
                           >
+                            <input
+                              type="radio"
+                              name={`type-${item.id}`}
+                              checked={
+                                (item.selectedType ?? "none") === "specific_weight"
+                              }
+                              onClick={() =>
+                                handleBaseItemTypeChange(
+                                  item.id,
+                                  "specific_weight"
+                                )
+                              }
+                              onChange={() =>
+                                handleBaseItemTypeChange(
+                                  item.id,
+                                  "specific_weight"
+                                )
+                              }
+                              disabled={!isEditModeBaseItems}
+                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                            />
                             {isEditModeBaseItems ? (
                               <>
-                                <input
-                                  type="radio"
-                                  name={`type-${item.id}`}
-                                  checked={
-                                    item.selectedType === "specific_weight"
-                                  }
-                                  onClick={() =>
-                                    handleBaseItemTypeChange(
-                                      item.id,
-                                      "specific_weight"
-                                    )
-                                  }
-                                  onChange={() =>
-                                    handleBaseItemTypeChange(
-                                      item.id,
-                                      "specific_weight"
-                                    )
-                                  }
-                                  className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                                />
                                 <input
                                   type="text"
                                   inputMode="decimal"
@@ -2061,7 +2091,16 @@ export default function ItemsPage() {
                                       "specific_weight",
                                       numValue
                                     );
-                                    // selectedTypeは保持する（空にしても選択状態は維持）
+                                    // 値が入力された場合、selectedTypeを自動更新
+                                    if (numValue !== null && numValue !== undefined) {
+                                      handleBaseItemTypeChange(
+                                        item.id,
+                                        "specific_weight"
+                                      );
+                                    } else {
+                                      // 値がクリアされた場合、selectedTypeを"none"に更新
+                                      handleBaseItemTypeChange(item.id, "none");
+                                    }
                                     // 入力中の文字列をクリア
                                     setSpecificWeightInputs((prev) => {
                                       const newMap = new Map(prev);
@@ -2070,7 +2109,7 @@ export default function ItemsPage() {
                                     });
                                   }}
                                   disabled={
-                                    item.selectedType !== "specific_weight"
+                                    (item.selectedType ?? "none") !== "specific_weight"
                                   }
                                   className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
                                     isDark
@@ -2124,20 +2163,21 @@ export default function ItemsPage() {
                               gap: "8px",
                             }}
                           >
+                            <input
+                              type="radio"
+                              name={`type-${item.id}`}
+                              checked={(item.selectedType ?? "none") === "each"}
+                              onClick={() =>
+                                handleBaseItemTypeChange(item.id, "each")
+                              }
+                              onChange={() =>
+                                handleBaseItemTypeChange(item.id, "each")
+                              }
+                              disabled={!isEditModeBaseItems}
+                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                            />
                             {isEditModeBaseItems ? (
                               <>
-                                <input
-                                  type="radio"
-                                  name={`type-${item.id}`}
-                                  checked={item.selectedType === "each"}
-                                  onClick={() =>
-                                    handleBaseItemTypeChange(item.id, "each")
-                                  }
-                                  onChange={() =>
-                                    handleBaseItemTypeChange(item.id, "each")
-                                  }
-                                  className="w-4 h-4 text-blue-600 focus:ring-blue-500"
-                                />
                                 <input
                                   type="text"
                                   inputMode="decimal"
@@ -2175,7 +2215,13 @@ export default function ItemsPage() {
                                       "each_grams",
                                       numValue
                                     );
-                                    // selectedTypeは保持する（空にしても選択状態は維持）
+                                    // 値が入力された場合、selectedTypeを自動更新
+                                    if (numValue !== null && numValue !== undefined) {
+                                      handleBaseItemTypeChange(item.id, "each");
+                                    } else {
+                                      // 値がクリアされた場合、selectedTypeを"none"に更新
+                                      handleBaseItemTypeChange(item.id, "none");
+                                    }
                                     // 入力中の文字列をクリア
                                     setEachGramsInputs((prev) => {
                                       const newMap = new Map(prev);
@@ -2183,7 +2229,7 @@ export default function ItemsPage() {
                                       return newMap;
                                     });
                                   }}
-                                  disabled={item.selectedType !== "each"}
+                                  disabled={(item.selectedType ?? "none") !== "each"}
                                   className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
                                     isDark
                                       ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
