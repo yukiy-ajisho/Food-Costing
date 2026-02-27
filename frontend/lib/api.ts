@@ -163,12 +163,14 @@ export interface BaseItem {
   specific_weight?: number | null; // g/ml for non-mass units (gallon, liter, floz)
   deprecated?: string | null; // timestamp when deprecated
   user_id: string; // FK to users
+  created_at?: string;
 }
 
 export interface Vendor {
   id: string;
   name: string;
   user_id: string; // FK to users
+  created_at?: string;
 }
 
 export interface VendorProduct {
@@ -182,6 +184,7 @@ export interface VendorProduct {
   purchase_cost: number;
   deprecated?: string | null; // timestamp when deprecated
   user_id: string; // FK to users
+  created_at?: string;
 }
 
 export interface ProductMapping {

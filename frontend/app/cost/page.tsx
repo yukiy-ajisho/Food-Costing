@@ -3157,7 +3157,7 @@ export default function CostPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="px-8 pb-8">
       <div className="w-full">
         {/* 固定ヘッダーセクション（Add、Edit、Filter） */}
         <div
@@ -4593,17 +4593,17 @@ export default function CostPage() {
                                     if (item.cost_per_gram === undefined) return "-";
                                     if (
                                       eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams
+                                    item.proceed_yield_unit === "each" &&
+                                    item.each_grams
                                     ) {
                                       return `$${(
                                         item.cost_per_gram * item.each_grams
                                       ).toFixed(2)}/each`;
                                     }
                                     return costUnit === "g"
-                                      ? `$${item.cost_per_gram.toFixed(6)}/g`
-                                      : `$${(item.cost_per_gram * 1000).toFixed(
-                                          2
+                                    ? `$${item.cost_per_gram.toFixed(6)}/g`
+                                    : `$${(item.cost_per_gram * 1000).toFixed(
+                                        2
                                         )}/kg`;
                                   }
                                   const totalCostPerGram = breakdown.total_cost_per_gram;
