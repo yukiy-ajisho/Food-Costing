@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment, useEffect } from "react";
+import { useState, Fragment, useEffect, useRef } from "react";
 import { Edit, Save, Plus, Trash2, X } from "lucide-react";
 import {
   vendorProductsAPI,
@@ -43,11 +43,13 @@ interface BaseItemUI {
   selectedType?: "specific_weight" | "each" | "none" | null; // ラジオボタンの選択状態
   isMarkedForDeletion?: boolean;
   isNew?: boolean;
+  created_at?: string;
 }
 
 interface VendorUI {
   id: string;
   name: string;
+  created_at?: string;
   isMarkedForDeletion?: boolean;
   isNew?: boolean;
 }
@@ -97,6 +99,28 @@ export default function ItemsPage() {
   const [originalVendors, setOriginalVendors] = useState<VendorUI[]>([]);
   const [isEditModeVendors, setIsEditModeVendors] = useState(false);
   const [loadingVendors, setLoadingVendors] = useState(false);
+
+  // ソート（タブごとに独立、localStorageで永続化）
+  type SortOrder = "alphabetical" | "created_at";
+  const [sortOrderItems, setSortOrderItems] = useState<SortOrder>(
+    () => (typeof window !== "undefined" ? (localStorage.getItem("items_sort_items") as SortOrder) : null) ?? "created_at"
+  );
+  const [sortOrderBaseItems, setSortOrderBaseItems] = useState<SortOrder>(
+    () => (typeof window !== "undefined" ? (localStorage.getItem("items_sort_base_items") as SortOrder) : null) ?? "created_at"
+  );
+  const [sortOrderVendors, setSortOrderVendors] = useState<SortOrder>(
+    () => (typeof window !== "undefined" ? (localStorage.getItem("items_sort_vendors") as SortOrder) : null) ?? "created_at"
+  );
+
+  // 固定ヘッダーの高さ管理
+  const fixedHeaderRef = useRef<HTMLDivElement>(null);
+  const [fixedHeaderHeight, setFixedHeaderHeight] = useState(0);
+
+  useEffect(() => {
+    if (fixedHeaderRef.current) {
+      setFixedHeaderHeight(fixedHeaderRef.current.offsetHeight);
+    }
+  }, []);
 
   // 単位オプション（質量単位 + 非質量単位、順番を制御）
   const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
@@ -180,6 +204,7 @@ export default function ItemsPage() {
               user_id: vp.user_id, // Required field from VendorProduct
               each_grams: item?.each_grams || null,
               needsWarning,
+              created_at: vp.created_at,
             };
           })
           .filter((vp): vp is VendorProductUI => vp !== null);
@@ -238,6 +263,7 @@ export default function ItemsPage() {
               selectedType: selectedType,
               isNew: false,
               isMarkedForDeletion: false,
+              created_at: baseItem.created_at,
             };
           });
         setBaseItemsUI(baseItemsUI);
@@ -268,6 +294,7 @@ export default function ItemsPage() {
         const vendorsUI: VendorUI[] = vendorsData.map((vendor) => ({
           id: vendor.id,
           name: vendor.name,
+          created_at: vendor.created_at,
         }));
         setVendorsUI(vendorsUI);
         setOriginalVendors(JSON.parse(JSON.stringify(vendorsUI)));
@@ -452,6 +479,7 @@ export default function ItemsPage() {
             user_id: vp.user_id, // Required field from VendorProduct
             each_grams: item?.each_grams || null,
             needsWarning,
+            created_at: vp.created_at,
           };
         })
         .filter((vp): vp is VendorProductUI => vp !== null);
@@ -736,6 +764,7 @@ export default function ItemsPage() {
             specific_weight: specificWeight,
             each_grams: eachGrams,
             selectedType: selectedType,
+            created_at: baseItem.created_at,
           };
         });
 
@@ -780,8 +809,8 @@ export default function ItemsPage() {
 
         // NONEに切り替える場合
         if (type === "none") {
-          return {
-            ...item,
+            return {
+              ...item,
             selectedType: "none",
             specific_weight: null,
             each_grams: null,
@@ -863,6 +892,7 @@ export default function ItemsPage() {
       const vendorsUIUpdated: VendorUI[] = vendorsData.map((vendor) => ({
         id: vendor.id,
         name: vendor.name,
+        created_at: vendor.created_at,
       }));
 
       setVendorsUI(vendorsUIUpdated);
@@ -962,91 +992,183 @@ export default function ItemsPage() {
     else if (activeTab === "vendors") handleSaveClickVendors();
   };
 
+  const makeSortFn = <T extends { created_at?: string; name?: string }>(order: SortOrder) =>
+    (a: T, b: T) => {
+      if (!a.created_at && !b.created_at) return 0;
+      if (!a.created_at) return 1;
+      if (!b.created_at) return -1;
+      if (order === "alphabetical") {
+        return (a.name ?? "").localeCompare(b.name ?? "");
+      }
+      return a.created_at.localeCompare(b.created_at);
+    };
+
+  const sortedVendorProducts = [...vendorProducts].sort((a, b) => {
+    if (!a.created_at && !b.created_at) return 0;
+    if (!a.created_at) return 1;
+    if (!b.created_at) return -1;
+    if (sortOrderItems === "alphabetical") {
+      const nameA = baseItems.find(bi => bi.id === (a as VendorProductUI).base_item_id)?.name ?? a.product_name ?? "";
+      const nameB = baseItems.find(bi => bi.id === (b as VendorProductUI).base_item_id)?.name ?? b.product_name ?? "";
+      return nameA.localeCompare(nameB);
+    }
+    return a.created_at.localeCompare(b.created_at);
+  });
+
+  const sortedBaseItemsUI = [...baseItemsUI].sort(makeSortFn(sortOrderBaseItems));
+  const sortedVendorsUI = [...vendorsUI].sort(makeSortFn(sortOrderVendors));
+
   return (
-    <div className="p-8">
+    <div className="px-8 pb-8">
       <div className="max-w-7xl mx-auto">
-        {/* タブ */}
+        {/* 固定ヘッダー（タブ＋ボタン） */}
         <div
-          className={`mb-6 border-b transition-colors ${
-            isDark ? "border-slate-700" : "border-gray-200"
+          ref={fixedHeaderRef}
+          className={`sticky top-0 z-50 -mx-8 px-8 py-4 ${
+            isDark ? "bg-slate-900" : "bg-gray-50"
           }`}
         >
-          <nav className="flex space-x-8">
-            <button
-              onClick={() => setActiveTab("items")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "items"
-                  ? "border-blue-500 text-blue-600"
-                  : isDark
-                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Vendor Items
-            </button>
-            <button
-              onClick={() => setActiveTab("raw-items")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "raw-items"
-                  ? "border-blue-500 text-blue-600"
-                  : isDark
-                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Base Items
-            </button>
-            <button
-              onClick={() => setActiveTab("vendors")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "vendors"
-                  ? "border-blue-500 text-blue-600"
-                  : isDark
-                  ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Vendors
-            </button>
-          </nav>
-        </div>
-
-        {/* ヘッダーとEdit/Save/Cancelボタン */}
-        <div className="flex justify-end items-center mb-6 gap-2">
-          {isEditMode ? (
-            <>
+          {/* タブ */}
+          <div
+            className={`mb-4 border-b transition-colors ${
+              isDark ? "border-slate-700" : "border-gray-200"
+            }`}
+          >
+            <nav className="flex space-x-8">
               <button
-                onClick={handleCancelClick}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                  isDark
-                    ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
-                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                onClick={() => setActiveTab("items")}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === "items"
+                    ? "border-blue-500 text-blue-600"
+                    : isDark
+                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
                 }`}
               >
-                <X className="w-5 h-5" />
-                Cancel
+                Vendor Items
               </button>
               <button
-                onClick={handleSaveClick}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                onClick={() => setActiveTab("raw-items")}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === "raw-items"
+                    ? "border-blue-500 text-blue-600"
+                    : isDark
+                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
               >
-                <Save className="w-5 h-5" />
-                Save
+                Base Items
               </button>
-            </>
-          ) : (
-            <button
-              onClick={handleEditClick}
-              className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
-                isDark
-                  ? "bg-slate-600 hover:bg-slate-500"
-                  : "bg-gray-600 hover:bg-gray-700"
-              }`}
-            >
-              <Edit className="w-5 h-5" />
-              Edit
-            </button>
-          )}
+              <button
+                onClick={() => setActiveTab("vendors")}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === "vendors"
+                    ? "border-blue-500 text-blue-600"
+                    : isDark
+                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
+              >
+                Vendors
+              </button>
+            </nav>
+          </div>
+
+          {/* ソート＋Edit/Save/Cancelボタン */}
+          <div className="flex justify-between items-center gap-2">
+            {/* ソートドロップダウン（左側・タブごとに独立） */}
+            {activeTab === "items" && (
+              <select
+                value={sortOrderItems}
+                onChange={(e) => {
+                  const v = e.target.value as SortOrder;
+                  setSortOrderItems(v);
+                  localStorage.setItem("items_sort_items", v);
+                }}
+                className={`px-3 py-2 rounded-lg text-sm border transition-colors ${
+                  isDark
+                    ? "bg-slate-700 border-slate-600 text-slate-200"
+                    : "bg-white border-gray-300 text-gray-700"
+                }`}
+              >
+                <option value="created_at">Date added</option>
+                <option value="alphabetical">A-Z</option>
+              </select>
+            )}
+            {activeTab === "raw-items" && (
+              <select
+                value={sortOrderBaseItems}
+                onChange={(e) => {
+                  const v = e.target.value as SortOrder;
+                  setSortOrderBaseItems(v);
+                  localStorage.setItem("items_sort_base_items", v);
+                }}
+                className={`px-3 py-2 rounded-lg text-sm border transition-colors ${
+                  isDark
+                    ? "bg-slate-700 border-slate-600 text-slate-200"
+                    : "bg-white border-gray-300 text-gray-700"
+                }`}
+              >
+                <option value="created_at">Date added</option>
+                <option value="alphabetical">A-Z</option>
+              </select>
+            )}
+            {activeTab === "vendors" && (
+              <select
+                value={sortOrderVendors}
+                onChange={(e) => {
+                  const v = e.target.value as SortOrder;
+                  setSortOrderVendors(v);
+                  localStorage.setItem("items_sort_vendors", v);
+                }}
+                className={`px-3 py-2 rounded-lg text-sm border transition-colors ${
+                  isDark
+                    ? "bg-slate-700 border-slate-600 text-slate-200"
+                    : "bg-white border-gray-300 text-gray-700"
+                }`}
+              >
+                <option value="created_at">Date added</option>
+                <option value="alphabetical">A-Z</option>
+              </select>
+            )}
+            {/* Edit/Save/Cancelボタン（右側） */}
+            <div className="flex items-center gap-2">
+            {isEditMode ? (
+              <>
+                <button
+                  onClick={handleCancelClick}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                    isDark
+                      ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                      : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                  }`}
+                >
+                  <X className="w-5 h-5" />
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveClick}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  <Save className="w-5 h-5" />
+                  Save
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleEditClick}
+                className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
+                  isDark
+                    ? "bg-slate-600 hover:bg-slate-500"
+                    : "bg-gray-600 hover:bg-gray-700"
+                }`}
+              >
+                <Edit className="w-5 h-5" />
+                Edit
+              </button>
+            )}
+            </div>
+          </div>
         </div>
 
         {/* Itemsタブ（vendor_productsテーブルを操作） */}
@@ -1064,7 +1186,7 @@ export default function ItemsPage() {
               </div>
             ) : (
               <div
-                className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+                className={`rounded-lg shadow-sm border transition-colors ${
                   isDark
                     ? "bg-slate-800 border-slate-700"
                     : "bg-white border-gray-200"
@@ -1075,11 +1197,12 @@ export default function ItemsPage() {
                   style={{ tableLayout: "fixed", width: "100%" }}
                 >
                   <thead
-                    className={`border-b transition-colors ${
+                    className={`border-b transition-colors sticky z-10 ${
                       isDark
                         ? "bg-slate-700 border-slate-600"
                         : "bg-gray-50 border-gray-200"
                     }`}
+                    style={{ top: `${fixedHeaderHeight}px` }}
                   >
                     <tr>
                       <th
@@ -1154,7 +1277,7 @@ export default function ItemsPage() {
                       isDark ? "divide-slate-700" : "divide-gray-200"
                     }`}
                   >
-                    {vendorProducts.map((vp) => (
+                    {sortedVendorProducts.map((vp) => (
                       <Fragment key={vp.id}>
                         <tr
                           className={`transition-colors ${
@@ -1805,7 +1928,7 @@ export default function ItemsPage() {
               </div>
             ) : (
               <div
-                className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+                className={`rounded-lg shadow-sm border transition-colors ${
                   isDark
                     ? "bg-slate-800 border-slate-700"
                     : "bg-white border-gray-200"
@@ -1816,11 +1939,12 @@ export default function ItemsPage() {
                   style={{ tableLayout: "fixed", width: "100%" }}
                 >
                   <thead
-                    className={`border-b transition-colors ${
+                    className={`border-b transition-colors sticky z-10 ${
                       isDark
                         ? "bg-slate-700 border-slate-600"
                         : "bg-gray-50 border-gray-200"
                     }`}
+                    style={{ top: `${fixedHeaderHeight}px` }}
                   >
                     <tr>
                       <th
@@ -1900,7 +2024,7 @@ export default function ItemsPage() {
                       isDark ? "divide-slate-700" : "divide-gray-200"
                     }`}
                   >
-                    {baseItemsUI.map((item) => (
+                    {sortedBaseItemsUI.map((item) => (
                       <tr
                         key={item.id}
                         className={`transition-colors ${
@@ -2031,27 +2155,27 @@ export default function ItemsPage() {
                               gap: "8px",
                             }}
                           >
-                            <input
-                              type="radio"
-                              name={`type-${item.id}`}
-                              checked={
+                                <input
+                                  type="radio"
+                                  name={`type-${item.id}`}
+                                  checked={
                                 (item.selectedType ?? "none") === "specific_weight"
-                              }
-                              onClick={() =>
-                                handleBaseItemTypeChange(
-                                  item.id,
-                                  "specific_weight"
-                                )
-                              }
-                              onChange={() =>
-                                handleBaseItemTypeChange(
-                                  item.id,
-                                  "specific_weight"
-                                )
-                              }
+                                  }
+                                  onClick={() =>
+                                    handleBaseItemTypeChange(
+                                      item.id,
+                                      "specific_weight"
+                                    )
+                                  }
+                                  onChange={() =>
+                                    handleBaseItemTypeChange(
+                                      item.id,
+                                      "specific_weight"
+                                    )
+                                  }
                               disabled={!isEditModeBaseItems}
                               className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-                            />
+                                />
                             {isEditModeBaseItems ? (
                               <>
                                 <input
@@ -2163,19 +2287,19 @@ export default function ItemsPage() {
                               gap: "8px",
                             }}
                           >
-                            <input
-                              type="radio"
-                              name={`type-${item.id}`}
+                                <input
+                                  type="radio"
+                                  name={`type-${item.id}`}
                               checked={(item.selectedType ?? "none") === "each"}
-                              onClick={() =>
-                                handleBaseItemTypeChange(item.id, "each")
-                              }
-                              onChange={() =>
-                                handleBaseItemTypeChange(item.id, "each")
-                              }
+                                  onClick={() =>
+                                    handleBaseItemTypeChange(item.id, "each")
+                                  }
+                                  onChange={() =>
+                                    handleBaseItemTypeChange(item.id, "each")
+                                  }
                               disabled={!isEditModeBaseItems}
                               className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-                            />
+                                />
                             {isEditModeBaseItems ? (
                               <>
                                 <input
@@ -2343,7 +2467,7 @@ export default function ItemsPage() {
               </div>
             ) : (
               <div
-                className={`rounded-lg shadow-sm border overflow-hidden transition-colors ${
+                className={`rounded-lg shadow-sm border transition-colors ${
                   isDark
                     ? "bg-slate-800 border-slate-700"
                     : "bg-white border-gray-200"
@@ -2354,11 +2478,12 @@ export default function ItemsPage() {
                   style={{ tableLayout: "fixed", width: "100%" }}
                 >
                   <thead
-                    className={`border-b transition-colors ${
+                    className={`border-b transition-colors sticky z-10 ${
                       isDark
                         ? "bg-slate-700 border-slate-600"
                         : "bg-gray-50 border-gray-200"
                     }`}
+                    style={{ top: `${fixedHeaderHeight}px` }}
                   >
                     <tr>
                       <th
@@ -2385,7 +2510,7 @@ export default function ItemsPage() {
                       isDark ? "divide-slate-700" : "divide-gray-200"
                     }`}
                   >
-                    {vendorsUI.map((vendor) => (
+                    {sortedVendorsUI.map((vendor) => (
                       <tr
                         key={vendor.id}
                         className={`transition-colors ${
