@@ -161,8 +161,29 @@ router.post("/items/costs/differential", async (req, res) => {
  */
 router.get("/items/costs/breakdown", async (req, res) => {
   try {
-    // PostgreSQL関数を呼び出し（複数テナント対応: 各テナントで計算してマージ）
-    // 注意: 現在のPostgreSQL関数は単一テナント対応のため、各テナントで個別に呼び出し
+    // 現在選択されているテナントのみでRPCを1回呼び出し（X-Tenant-ID で指定、他ルートと同様）
+    const tenantIdToUse =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+
+    if (!tenantIdToUse) {
+      return res.json({ costs: {} });
+    }
+
+    const { data, error } = await supabase.rpc(
+      "calculate_item_costs_with_breakdown",
+      { p_tenant_id: tenantIdToUse }
+    );
+
+    if (error) {
+      console.error(
+        `Error calculating breakdown for tenant ${tenantIdToUse}:`,
+        error
+      );
+      return res.status(500).json({
+        error: "Failed to calculate cost breakdown",
+      });
+    }
+
     const allCosts: Record<
       string,
       {
@@ -172,28 +193,13 @@ router.get("/items/costs/breakdown", async (req, res) => {
       }
     > = {};
 
-    for (const tenantId of req.user!.tenant_ids) {
-      const { data, error } = await supabase.rpc(
-        "calculate_item_costs_with_breakdown",
-        { p_tenant_id: tenantId }
-      );
-
-      if (error) {
-        console.error(`Error calculating breakdown for tenant ${tenantId}:`, error);
-        continue;
-      }
-
-      if (data && Array.isArray(data)) {
-    for (const row of data) {
-          // 複数テナントで同じitem_idがある場合、最初に見つかったものを使用
-          if (!(row.out_item_id in allCosts)) {
-            allCosts[row.out_item_id] = {
-        food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
-        labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
-        total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
-      };
-          }
-        }
+    if (data && Array.isArray(data)) {
+      for (const row of data) {
+        allCosts[row.out_item_id] = {
+          food_cost_per_gram: parseFloat(row.out_food_cost_per_gram) || 0,
+          labor_cost_per_gram: parseFloat(row.out_labor_cost_per_gram) || 0,
+          total_cost_per_gram: parseFloat(row.out_total_cost_per_gram) || 0,
+        };
       }
     }
 
