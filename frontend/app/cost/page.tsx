@@ -1188,15 +1188,12 @@ export default function CostPage() {
 
   // データ取得
   useEffect(() => {
-    // TenantContextのloadingがfalseで、selectedTenantIdがnullの場合
-    // テナントがないことが確定したので、loadingをfalseにする
-    if (!tenantLoading && !selectedTenantId) {
-      setLoading(false);
-      return;
-    }
+    // tenantLoadingがtrueの間はフェッチしない（二重fetchを防ぐ）
+    if (tenantLoading) return;
 
-    // selectedTenantIdが設定されるまで待つ
+    // テナントがないことが確定したので、loadingをfalseにする
     if (!selectedTenantId) {
+      setLoading(false);
       return;
     }
 
@@ -1347,18 +1344,6 @@ export default function CostPage() {
           console.error("Failed to fetch recipes:", error);
         }
 
-        // 全アイテムのコストを計算（フル計算）
-        // 注意: 差分更新は使用せず、常に全アイテムのコストを計算します
-        let costsMap: Record<string, number> = {};
-        try {
-          if (itemIds.length > 0) {
-            const costsData = await costAPI.getCosts(itemIds);
-            costsMap = costsData.costs;
-          }
-        } catch (error) {
-          console.error("Failed to calculate costs:", error);
-        }
-
         // 各アイテムのデータを構築
         const itemsWithRecipes: PreppedItem[] = preppedItems
           .filter((item) => {
@@ -1367,7 +1352,6 @@ export default function CostPage() {
           })
           .map((item) => {
             const recipeLines = recipesMap[item.id] || [];
-            const costPerGram = costsMap[item.id];
 
             return {
               id: item.id,
@@ -1404,7 +1388,7 @@ export default function CostPage() {
               }),
               notes: item.notes || "",
               isExpanded: false,
-              cost_per_gram: costPerGram,
+              cost_per_gram: (breakdownData.costs as Record<string, { total_cost_per_gram: number }>)[item.id]?.total_cost_per_gram,
               each_grams: item.each_grams || null,
               deprecated: item.deprecated || null,
               deprecation_reason: item.deprecation_reason || null,
@@ -2359,15 +2343,14 @@ export default function CostPage() {
             }
           }
 
-          // コストを取得
-          let costsMap: Record<string, number> = {};
-          if (itemIds.length > 0) {
-            try {
-              const costsData = await costAPI.getCosts(itemIds);
-              costsMap = costsData.costs;
-            } catch (costError) {
-              console.error("Failed to fetch costs after error:", costError);
-            }
+          // コストbreakdownを取得
+          let errorRecoveryBreakdown: Record<string, { food_cost_per_gram: number; labor_cost_per_gram: number; total_cost_per_gram: number }> = {};
+          try {
+            const breakdownResult = await costAPI.getCostsBreakdown();
+            errorRecoveryBreakdown = breakdownResult.costs;
+            setCostBreakdown(breakdownResult.costs);
+          } catch (costError) {
+            console.error("Failed to fetch cost breakdown after error:", costError);
           }
 
           // アイテムデータを構築
@@ -2378,7 +2361,6 @@ export default function CostPage() {
             })
             .map((item) => {
               const recipeLines = recipesMap[item.id] || [];
-              const costPerGram = costsMap[item.id];
 
               return {
                 id: item.id,
@@ -2399,7 +2381,7 @@ export default function CostPage() {
                 })),
                 notes: item.notes || "",
                 isExpanded: false,
-                cost_per_gram: costPerGram,
+                cost_per_gram: errorRecoveryBreakdown[item.id]?.total_cost_per_gram,
                 each_grams: item.each_grams || null,
               };
             });
@@ -2441,42 +2423,35 @@ export default function CostPage() {
       const allItems = await itemsAPI.getAll();
       setAvailableItems(allItems);
 
-      // 全アイテムのコストを計算（フル計算）
-      // 注意: 差分更新は使用せず、常に全アイテムのコストを計算します
-      let costsMap: Record<string, number> = {};
-      let affectedItemIds: string[] = [];
-      try {
-        const itemIds = preppedItems.map((item) => item.id);
-        if (itemIds.length > 0) {
-          const costsData = await costAPI.getCosts(itemIds);
-          costsMap = costsData.costs;
-          affectedItemIds = itemIds; // 全アイテム
-        }
-      } catch (error) {
-        console.error("Failed to calculate costs:", error);
-      }
+      const allItemIds = preppedItems.map((item) => item.id);
 
-      // 影響を受けるアイテムのレシピのみを取得（最適化）
+      // レシピを取得
       let recipesMap: Record<string, APIRecipeLine[]> = {};
       try {
-        if (affectedItemIds.length > 0) {
-          const recipesData = await recipeLinesAPI.getByItemIds(
-            affectedItemIds
-          );
+        if (allItemIds.length > 0) {
+          const recipesData = await recipeLinesAPI.getByItemIds(allItemIds);
           recipesMap = recipesData.recipes;
         }
       } catch (error) {
         console.error("Failed to fetch recipes:", error);
-        // フォールバック: 全アイテムのレシピを取得
         try {
-          const itemIds = preppedItems.map((item) => item.id);
-          if (itemIds.length > 0) {
-            const recipesData = await recipeLinesAPI.getByItemIds(itemIds);
+          if (allItemIds.length > 0) {
+            const recipesData = await recipeLinesAPI.getByItemIds(allItemIds);
             recipesMap = recipesData.recipes;
           }
         } catch (fallbackError) {
           console.error("Failed to fetch recipes (fallback):", fallbackError);
         }
+      }
+
+      // コストのbreakdownを取得（calculate_item_costs_with_breakdownを使用）
+      let saveBreakdownData: Record<string, { food_cost_per_gram: number; labor_cost_per_gram: number; total_cost_per_gram: number }> = {};
+      try {
+        const breakdownResult = await costAPI.getCostsBreakdown();
+        saveBreakdownData = breakdownResult.costs;
+        setCostBreakdown(saveBreakdownData);
+      } catch (error) {
+        console.error("Failed to fetch cost breakdown after save:", error);
       }
 
       // 各アイテムのデータを構築
@@ -2507,16 +2482,6 @@ export default function CostPage() {
               })) as APIRecipeLine[];
             }
           }
-          // 影響を受けるアイテムのコストは新しく計算したもの、影響を受けていないアイテムのコストは既存のcurrentItemsから取得
-          let costPerGram: number | undefined = costsMap[item.id];
-          if (costPerGram === undefined) {
-            // 既存のcurrentItemsから取得（影響を受けていないアイテムのコストは変更されていない）
-            const existingItem = currentItems.find((i) => i.id === item.id);
-            if (existingItem) {
-              costPerGram = existingItem.cost_per_gram;
-            }
-          }
-
           return {
             id: item.id,
             name: item.name,
@@ -2536,7 +2501,7 @@ export default function CostPage() {
             })),
             notes: item.notes || "",
             isExpanded: false,
-            cost_per_gram: costPerGram,
+            cost_per_gram: saveBreakdownData[item.id]?.total_cost_per_gram,
             each_grams: item.each_grams || null,
             wholesale: item.wholesale || null,
             retail: item.retail || null,
@@ -2547,18 +2512,6 @@ export default function CostPage() {
 
       setItems(itemsWithRecipes);
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
-
-      // costBreakdownを更新（Labor%、COG%、LCOG%の計算に必要）
-      try {
-        const breakdownData = await costAPI.getCostsBreakdown();
-        setCostBreakdown(breakdownData.costs);
-      } catch (breakdownError) {
-        console.error(
-          "Failed to fetch cost breakdown after save:",
-          breakdownError
-        );
-        // costBreakdownの更新失敗は警告のみ（コスト表示には影響しないが、パーセンテージ計算に影響する）
-      }
 
       setIsEditModeCosting(false);
     } catch (error: unknown) {

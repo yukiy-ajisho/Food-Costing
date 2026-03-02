@@ -103,7 +103,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     >
       {/* ヘッダー（上部90px、左端まで） */}
       <header
-        className={`h-[90px] shadow-sm border-b px-8 flex items-center justify-between transition-colors ${
+        className={`relative z-100 h-[90px] shadow-sm border-b px-8 flex items-center justify-between transition-colors ${
           isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"
         }`}
         style={{ paddingLeft: "30px" }}
