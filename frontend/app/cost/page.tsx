@@ -1086,7 +1086,8 @@ function AddItemModal({
 export default function CostPage() {
   const { theme } = useTheme();
   const { user, loading: userLoading } = useUser();
-  const { selectedTenantId, loading: tenantLoading } = useTenant();
+  const { selectedTenantId, loading: tenantLoading, tenants: contextTenants } =
+    useTenant();
   const isDark = theme === "dark";
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
@@ -1203,33 +1204,12 @@ export default function CostPage() {
       try {
         setLoading(true);
 
-        // ① preppedItems・breakdown・tenantsを最初から並列で開始
+        // ① preppedItems・breakdownを並列で開始（tenants は TenantContext のものを利用し二重取得しない）
         const preppedItemsPromise = itemsAPI.getAll({ item_kind: "prepped" });
 
         const breakdownPromise = costAPI.getCostsBreakdown().catch((error) => {
           console.error("Failed to fetch cost breakdown:", error);
           return { costs: {} };
-        });
-
-        const tenantsPromise = apiRequest<{
-          tenants: Array<{
-            id: string;
-            name: string;
-            type: string;
-            created_at: string;
-            role: string;
-          }>;
-        }>("/tenants").catch((error) => {
-          console.error("Failed to fetch user role:", error);
-          return {
-            tenants: [] as Array<{
-              id: string;
-              name: string;
-              type: string;
-              created_at: string;
-              role: string;
-            }>,
-          };
         });
 
         // ② その他のデータも並列で開始
@@ -1254,11 +1234,15 @@ export default function CostPage() {
               })
             : Promise.resolve({ recipes: {} as Record<string, APIRecipeLine[]> });
 
-        // ④ その他のデータとtenantsを並列で待つ（breakdownはまだ待たない）
+        // ④ その他のデータを待つ（breakdownはまだ待たない）
         const [
-          [allItems, baseItemsData, vendorProductsData, vendorsData, roles, mappingsData],
-          tenantsData,
-        ] = await Promise.all([otherDataPromise, tenantsPromise]);
+          allItems,
+          baseItemsData,
+          vendorProductsData,
+          vendorsData,
+          roles,
+          mappingsData,
+        ] = await otherDataPromise;
 
         // product_mappingsからbase_item_idを取得するマップを作成
         const virtualProductToBaseItemMap = new Map<string, string>();
@@ -1282,84 +1266,13 @@ export default function CostPage() {
         setVendors(vendorsData);
         setLaborRoles(roles);
 
-        // ⑤ adminロールチェック・shares と members を並列取得
-        if (tenantsData.tenants && tenantsData.tenants.length > 0) {
-          const role = tenantsData.tenants[0].role as
-            | "admin"
-            | "manager"
-            | "staff";
+        // ⑤ adminロールチェック（TenantContext の tenants を使用。shares と members は Access Control タブ表示時に後出しで取得）
+        if (contextTenants && contextTenants.length > 0) {
+          const currentTenant =
+            contextTenants.find((t) => t.id === selectedTenantId) ||
+            contextTenants[0];
+          const role = currentTenant.role as "admin" | "manager" | "staff";
           setUserRole(role);
-
-          if (role === "admin") {
-            const preppedItemIds = preppedItems.map((item) => item.id);
-            if (preppedItemIds.length > 0) {
-              const currentTenantId =
-                selectedTenantId || tenantsData.tenants[0]?.id;
-
-              // resource-shares と members を並列取得
-              const [allShares, membersData] = await Promise.all([
-                resourceSharesAPI
-                  .getAll({
-                    resource_type: "item",
-                    target_type: "role",
-                    target_id: "manager",
-                  })
-                  .catch((error) => {
-                    console.error("Failed to fetch shares:", error);
-                    return [] as ResourceShare[];
-                  }),
-                currentTenantId
-                  ? apiRequest<{
-                      members: Array<{
-                        user_id: string;
-                        role: string;
-                        member_since: string;
-                        name?: string;
-                        email?: string;
-                      }>;
-                    }>(`/tenants/${currentTenantId}/members`).catch(
-                      (error) => {
-                        console.error("Failed to fetch managers:", error);
-                        return {
-                          members: [] as Array<{
-                            user_id: string;
-                            role: string;
-                            member_since: string;
-                            name?: string;
-                            email?: string;
-                          }>,
-                        };
-                      }
-                    )
-                  : Promise.resolve({
-                      members: [] as Array<{
-                        user_id: string;
-                        role: string;
-                        member_since: string;
-                        name?: string;
-                        email?: string;
-                      }>,
-                    }),
-              ]);
-
-              // フロントエンドでitemIdでフィルタリングしてMapに保存
-              const sharesMap = new Map<string, ResourceShare | null>();
-              preppedItemIds.forEach((itemId) => {
-                const share =
-                  allShares
-                    .filter((s) => s.resource_id === itemId)
-                    .find((s) => s.is_exclusion === false) || null;
-                sharesMap.set(itemId, share);
-              });
-              setItemShares(sharesMap);
-
-              // Managerロールのユーザーのみをフィルタリング
-              const managerList = (membersData.members || []).filter(
-                (member) => member.role === "manager"
-              );
-              setManagers(managerList);
-            }
-          }
         }
 
         // ⑥ recipes を待つ（preppedItems取得完了後に開始済みのため既にほぼ完了）
@@ -1458,7 +1371,9 @@ export default function CostPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedTenantId, tenantLoading]); // テナント切り替え時にデータを再取得
+  // contextTenants は tenantLoading が false のときには Context で既に設定済みのため依存からは除く（二重 fetch 防止）
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- contextTenants を入れると effect が余計に走り items/recipes 等が二重取得される
+  }, [selectedTenantId, tenantLoading]);
 
   // 現在のユーザーIDを設定（userが取得できた後に設定）
   useEffect(() => {
@@ -1478,9 +1393,13 @@ export default function CostPage() {
       setPendingShareChanges(new Map());
       setActiveMode(newMode);
 
-      // Access Controlモードに切り替える場合のみ、共有設定を再取得
+      // Access Controlモードに切り替える場合のみ、shares と members を並列取得
       if (newMode === "access-control") {
-        await refreshItemShares();
+        if (userRole === "admin") {
+          await Promise.all([refreshItemShares(), refreshMembers()]);
+        } else {
+          await refreshItemShares();
+        }
       }
     }
   };
@@ -1516,6 +1435,43 @@ export default function CostPage() {
       console.error("Failed to refresh item shares:", error);
       // エラー時は空のMapを設定
       setItemShares(new Map());
+    }
+  };
+
+  // メンバー一覧の取得（Access Controlモード用・責任者ドロップダウン）
+  const refreshMembers = async () => {
+    if (!selectedTenantId) {
+      setManagers([]);
+      return;
+    }
+    try {
+      const membersData = await apiRequest<{
+        members: Array<{
+          user_id: string;
+          role: string;
+          member_since: string;
+          name?: string;
+          email?: string;
+        }>;
+      }>(`/tenants/${selectedTenantId}/members`).catch((error) => {
+        console.error("Failed to fetch managers:", error);
+        return {
+          members: [] as Array<{
+            user_id: string;
+            role: string;
+            member_since: string;
+            name?: string;
+            email?: string;
+          }>,
+        };
+      });
+      const managerList = (membersData.members || []).filter(
+        (member) => member.role === "manager"
+      );
+      setManagers(managerList);
+    } catch (error) {
+      console.error("Failed to refresh members:", error);
+      setManagers([]);
     }
   };
 

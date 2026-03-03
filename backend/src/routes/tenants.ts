@@ -83,41 +83,26 @@ router.post(
  */
 router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
   try {
-    // ユーザーが属するテナント一覧を取得
-    const { data: profiles, error: profilesError } = await supabase
+    // ユーザーが属するテナント一覧を取得（profiles と tenants を 1 回のクエリで取得）
+    const { data: profilesWithTenants, error } = await supabase
       .from("profiles")
-      .select("tenant_id, role")
+      .select("tenant_id, role, tenants(*)")
       .eq("user_id", req.user!.id);
-
-    if (profilesError) {
-      return res.status(500).json({ error: profilesError.message });
+    if (error) {
+      return res.status(500).json({ error: error.message });
     }
 
-    if (!profiles || profiles.length === 0) {
+    if (!profilesWithTenants || profilesWithTenants.length === 0) {
       return res.json({ tenants: [] });
     }
 
-    // テナントIDのリストを取得
-    const tenantIds = profiles.map((p) => p.tenant_id);
-
-    // テナント情報を取得
-    const { data: tenants, error: tenantsError } = await supabase
-      .from("tenants")
-      .select("*")
-      .in("id", tenantIds);
-
-    if (tenantsError) {
-      return res.status(500).json({ error: tenantsError.message });
-    }
-
-    // 各テナントにユーザーの役割を追加
-    const tenantsWithRole = (tenants || []).map((tenant) => {
-      const profile = profiles.find((p) => p.tenant_id === tenant.id);
-      return {
-        ...tenant,
-        role: profile?.role || null,
-      };
-    });
+    // 各 profile の tenants を展開し、role を付与（従来と同じレスポンス形）
+    const tenantsWithRole = profilesWithTenants
+      .filter((p) => p.tenants != null)
+      .map((p) => ({
+        ...(p.tenants as unknown as Record<string, unknown>),
+        role: p.role,
+      }));
 
     res.json({ tenants: tenantsWithRole });
   } catch (error: unknown) {
