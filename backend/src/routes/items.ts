@@ -41,39 +41,7 @@ router.get(
         return res.status(500).json({ error: error.message });
       }
 
-      // Raw Itemの場合はBase Itemのnameを使用するため、Base Itemsを取得
-      if (data && data.length > 0) {
-        const rawItemIds = data
-          .filter((item) => item.item_kind === "raw" && item.base_item_id)
-          .map((item) => item.base_item_id!);
-
-        if (rawItemIds.length > 0) {
-          const selectedTenantId =
-            req.user!.selected_tenant_id || req.user!.tenant_ids[0];
-          const baseItemsQuery = supabase
-            .from("base_items")
-            .select("id, name")
-            .in("id", rawItemIds)
-            .eq("tenant_id", selectedTenantId);
-
-          const { data: baseItems } = await baseItemsQuery;
-
-          if (baseItems) {
-            const baseItemsMap = new Map<string, string>();
-            baseItems.forEach((bi) => baseItemsMap.set(bi.id, bi.name));
-
-            // Raw ItemのnameをBase Itemのnameで上書き
-            data.forEach((item) => {
-              if (item.item_kind === "raw" && item.base_item_id) {
-                const baseItemName = baseItemsMap.get(item.base_item_id);
-                if (baseItemName) {
-                  item.name = baseItemName;
-                }
-              }
-            });
-          }
-        }
-      }
+      // Raw Itemの表示名はクライアントで base-items を使って解決する（二重取得を避ける）
 
       // Managerの場合、Prepped Itemsに対してフィルタリングを適用
       const currentTenantId =

@@ -98,12 +98,6 @@ export async function authorize(
   }
 
   try {
-    // デバッグログ: Adminの場合の認可チェック
-    if (principal.role === "admin") {
-      console.log(
-        `[AUTHZ DEBUG] Admin authorization check: action=${action}, resource_type=${resource.resource_type}, resource_id=${resource.id}`
-      );
-    }
     // コレクションリソース（collection-で始まるID）または一時リソース（temp-で始まるID）の場合はresource_sharesチェックをスキップ
     const isCollectionResource = resource.id.startsWith("collection-");
     const isTemporaryResource = resource.id.startsWith("temp-");
@@ -273,17 +267,6 @@ export async function authorize(
 
     // decisionが"allow"ならtrue、それ以外（"deny"）ならfalse
     const isAllowed = answer.response.decision === "allow";
-
-    // デバッグログ: Adminの場合の認可結果
-    if (principal.role === "admin") {
-      console.log(
-        `[AUTHZ DEBUG] Admin authorization result: ${
-          isAllowed ? "ALLOWED" : "DENIED"
-        } for action=${action}, resource_type=${
-          resource.resource_type
-        }, resource_id=${resource.id}`
-      );
-    }
 
     return isAllowed;
   } catch (error) {

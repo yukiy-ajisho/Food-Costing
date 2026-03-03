@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import "./globals.css";
 import { Layout } from "@/components/Layout";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { UserProvider } from "@/contexts/UserContext";
 import { TenantProvider } from "@/contexts/TenantContext";
 
 export const metadata: Metadata = {
@@ -26,9 +27,11 @@ export default async function RootLayout({
           {isPublicPage ? (
             children
           ) : (
-            <TenantProvider>
-              <Layout>{children}</Layout>
-            </TenantProvider>
+            <UserProvider>
+              <TenantProvider>
+                <Layout>{children}</Layout>
+              </TenantProvider>
+            </UserProvider>
           )}
         </ThemeProvider>
       </body>

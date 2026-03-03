@@ -1,0 +1,50 @@
+Cost page performance memo (2026-02-24)
+
+1. Current state
+- Backend logs added for: breakdown, tenants, items, base-items, vendors, labor-roles, product-mappings, members, recipes.
+- Base-items GET now also has 4-point timing logs.
+- Cost page:
+  - Costs (breakdown) are applied after table render (post-load).
+  - members and resource-shares (itemShares) are fetched only when Access Control tab is opened.
+  - Tenants are fetched once via TenantContext; Cost page no longer calls /tenants directly.
+
+2. Effects of recent fixes
+- Initial Costing tab load:
+  - No /tenants duplication (single GET /tenants from TenantContext).
+  - No /tenants/:id/members or /resource-shares on first paint.
+  - Remaining heavy APIs on first load (from DevTools):
+    - GET /items?item_kind=prepped (~0.7–1.0s, often 304)
+    - GET /recipes (~1.3s, 200)
+    - GET /items, /base-items, /vendors, /labor-roles, /product-mappings (~0.5–1.0s each)
+    - GET /items/costs/breakdown (~1.0s; called once per selected tenant).
+
+3. Next optimization candidates
+- Recipes endpoint:
+  - Investigate why GET /items/recipes is ~1.3s even after parallelization.
+  - Check DB query (indexes, join patterns, unnecessary columns).
+  - Confirm from backend logs whether 2→3 (DB) dominates.
+- Items (prepped) and items/base-items:
+  - Check select columns and filters; ensure only necessary fields are returned.
+  - Consider indexes on tenant_id + item_kind and any frequently filtered columns.
+- Breakdown RPC:
+  - Already limited to selected tenant only.
+  - Next step is SQL/index tuning based on current v2 function.
+
+4. Guardrails / assumptions
+- Tenants:
+  - Role for Cost page is derived from TenantContext.tenants (selectedTenantId, or first tenant).
+  - useEffect that fetches Cost data depends on [selectedTenantId, tenantLoading]; contextTenants is intentionally not in deps to avoid double-fetch.
+- Access Control:
+  - When switching to Access Control tab:
+    - If userRole === "admin": run refreshItemShares() and refreshMembers() in parallel.
+    - Otherwise: only refreshItemShares().
+  - Access Control UI can briefly show empty managers if userRole has not resolved yet; reload or tenant change fixes it.
+
+5. What to do next (short list)
+- Use backend timing logs to confirm where time is spent for:
+  - GET /items/recipes
+  - GET /items?item_kind=prepped
+  - GET /items/costs/breakdown
+- Based on logs:
+  - If DB-heavy: add/adjust indexes and simplify queries.
+  - If non-DB-heavy: check network, JSON size, and post-processing on Node/Next side.

@@ -51,22 +51,8 @@ export function authorizationMiddleware(
         role: role as "admin" | "manager" | "staff",
       };
 
-      // デバッグログ: 認可チェック前の情報
-      console.log(
-        `[AUTHZ MIDDLEWARE] Authorization check: user_id=${principal.id}, role=${principal.role}, tenant_id=${principal.tenant_id}, action=${action}, resource_type=${resource.resource_type}, resource_id=${resource.id}`
-      );
-
       // 認可チェックを実行（resource_sharesを考慮）
       const isAllowed = await authorizeAsync(principal, action, resource);
-
-      // デバッグログ: 認可結果
-      console.log(
-        `[AUTHZ MIDDLEWARE] Authorization result: ${
-          isAllowed ? "ALLOWED" : "DENIED"
-        } for user_id=${principal.id}, role=${
-          principal.role
-        }, action=${action}, resource_id=${resource.id}`
-      );
 
       if (!isAllowed) {
         return res
