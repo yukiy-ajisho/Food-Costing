@@ -292,12 +292,14 @@ export async function apiRequest<T>(
     throw new Error("Authentication required.");
   }
 
-  // ヘッダーを構築
+  // ヘッダーを構築（FormData の場合は Content-Type を付けない＝boundary をブラウザに任せる）
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     Authorization: `Bearer ${session.access_token}`,
     ...(options.headers as Record<string, string>),
   };
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
 
   // 選択されたテナントIDを取得（tenantIdパラメータを優先、なければLocalStorageから）
   let selectedTenantId: string | null = tenantId ?? null;

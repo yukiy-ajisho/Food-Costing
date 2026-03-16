@@ -1,0 +1,232 @@
+# Tenant Requirements 実装仕様（UI・データ・ロジック）
+
+本ドキュメントは、これまでの議論をまとめた実装用仕様である。既存の tenant_requirements_design_v2.txt のデータ構造を前提とし、UI と value_types / real_data の振る舞いを追加・変更する。
+
+---
+
+## 1. New Requirement モーダル
+
+### 1.1 レイアウト・項目順
+
+- **Tenant** を **Title の上**に配置する。
+- ラベルは "Last" ではなく **"Latest"** とする。
+  - Latest bill date
+  - Latest due date
+  - Latest pay date
+- 表示順序: **Latest bill date → Latest due date → Latest pay date**。
+
+### 1.2 Latest pay date
+
+- **「まだ払っていない」オプション**を用意する。
+- 払っている場合は日付を入力する。
+
+### 1.3 Validity duration
+
+- 現在は「年」のみ。**年・月・日**を扱えるようにする。
+- **単位はラジオボタンで選択**（年 / 月 / 日）。
+- **データの持ち方:** 単位ごとに value_type を分ける（後述 5.3）。**value には数値だけ**を保存する。
+- 計算時の加算:
+  - **年**を選択した場合: 日付にその数字の「年」を足す。
+  - **月**を選択した場合: 日付にその数字の「月」を足す。
+  - **日**を選択した場合: 日付にその数字の「日」を足す。
+- UI の参考: **User の new requirement** に同種の入力があるので、それを参考にする。
+
+---
+
+## 2. Current Status タブ・テーブル
+
+### 2.1 名前・ラベル
+
+- タブ名: **"Status" → "Current Status"**。
+- テーブルヘッダー: **"Requirement" → "Requirement name"**。
+
+### 2.2 列の分割（Status 列を 3 列に）
+
+現在は 1 列で「赤/緑の点 + expiration date」を表示している。これを **3 列**に分ける。
+
+| 列名 | 内容 |
+|------|------|
+| Status | 状態表示（例: 赤/緑の点）。expiration はこの列からは分離する。 |
+| Estimated due date | その期の「次の due の見積もり」。Record payment モーダルや New requirement（払い済み時）で設定した値。 |
+| Due date | その期の「確定している due date」。 |
+
+※ Estimated bill date も必要になる場合は、列や value_types で同様に扱う（本文では value_types に 4 種類を追加する形で記載）。
+
+### 2.3 既存の Edit / Renewal の廃止
+
+- テーブル上での **Edit モード**と **Renewal モード**（インライン編集・Renewal 行）は**廃止**する。
+
+### 2.4 Record Payment ボタン
+
+- 名称: **"Renewal" → "Record Payment"**。
+- 配置: **テーブルの外・テーブルの右上**（ヘッダー行の右端ではなく、テーブル外に 1 つだけ）。
+- クリック後:
+  - テーブル以外が暗くなるオーバーレイ。
+  - 各 requirement 行にホバーすると**青い枠**で囲む。
+  - 行をクリックすると **Record Payment モーダル**が開く。
+- モーダルを Save または Cancel で閉じると、Record Payment モードも終了する。
+
+---
+
+## 3. Requirement 詳細モーダル（Edit の新しいフロー）
+
+### 3.1 開き方
+
+- **Requirement name 列**をクリックすると、その requirement の**現在の情報**をモーダルで表示する。
+
+### 3.2 ボタン
+
+- **Close ボタン**を設ける（必須）。
+- **右上**: 通常時は **Edit** ボタン。
+- **Edit 押下** → 編集可能（Edit モード）。Edit ボタンは非表示になり、**Save** と **Cancel** を表示。
+- **Save** または **Cancel** 押下 → Edit モード終了。Save/Cancel は非表示になり、再び **Edit** ボタンのみ表示。
+
+---
+
+## 4. Record Payment モーダル
+
+### 4.1 タイトル・配置
+
+- モーダル名: **"Record Payment"**。
+- 内容の順序:
+  1. **一番上**: **Payment made date**（入力ボックス）。
+  2. **区切り**（横棒）。
+  3. その下: **Due date** と **Bill date**。
+
+### 4.2 Due date / Bill date の入力（アコーディオン）
+
+- **ラベルや行をクリック**すると、その下にラジオ＋入力/計算が**展開**する（アコーディオン風）。
+- **初期状態は折りたたみ**。
+- 各項目でラジオ 2 択:
+  - **Estimated specific Due date** → **mm/dd/yy** で入力。
+  - **Estimated due date based on validity duration** → 現在の validity duration を**薄いグレー**で表示し、**計算結果**（最新の due date + validity duration）を表示する。
+- Bill date も同様:
+  - Estimated specific bill date（mm/dd/yy）
+  - Estimated bill date based on validity duration（表示＋計算結果）。
+
+### 4.3 ボタン
+
+- **Save** と **Cancel** を設置。どちらかを押すとモーダルが閉じ、Record Payment モードも終了する。
+
+---
+
+## 5. データ: value_types の追加
+
+### 5.1 追加する 4 種類（Estimated 系）
+
+「specific か validity-based か」を区別するため、**4 種類**を tenant_requirement_value_types に追加する。
+
+| name |
+|------|
+| Estimated specific due date |
+| Estimated specific bill date |
+| Estimated due date based on validity duration |
+| Estimated bill date based on validity duration |
+
+- いずれも日付なので **data_type = 'date'** で扱う。
+
+### 5.2 Validity duration を単位ごとに分ける
+
+- 既存の **Validity duration**（1 種類）はやめ、**単位ごとに type を分ける**。
+- 追加する 3 種類（既存の "Validity duration" は "Validity duration (years)" に読み替えるか、migration で 3 種類に置き換える）:
+
+| name | 説明 |
+|------|------|
+| Validity duration (years) | 有効期間・年。value には数値だけ（例: "2"）。 |
+| Validity duration (months) | 有効期間・月。value には数値だけ（例: "6"）。 |
+| Validity duration (days) | 有効期間・日。value には数値だけ（例: "90"）。 |
+
+- いずれも **data_type = 'int'**（数値）。**value には数値だけ**を保存する。単位は type 名で判別する。
+- 各 group では、ユーザーが選んだ単位の type の行を **1 つだけ**持つ（年・月・日のうちどれか 1 つ）。
+
+### 5.3 tenant_requirement_value_types 一覧（変更後）
+
+- Due date, Bill date, Pay date（既存）
+- Validity duration (years), Validity duration (months), Validity duration (days)（上記の 3 種類）
+- Estimated specific due date, Estimated specific bill date, Estimated due date based on validity duration, Estimated bill date based on validity duration（5.1 の 4 種類）
+
+### 5.4 tenant_requirement_real_data への保存
+
+### 5.4 tenant_requirement_real_data への保存（Estimated 系・Validity 系）
+
+- **必要なものだけ**を real_data に追加する。
+- ある group でユーザーが「due は specific」「bill は validity-based」を選んだ場合:
+  - その group には **Estimated specific due date** の行と **Estimated bill date based on validity duration** の行だけを追加する。
+  - 「Estimated due date based on validity duration」「Estimated specific bill date」の行は追加しない。
+- 表示時: その group に「Estimated specific due date」があればその value を、なければ「Estimated due date based on validity duration」の value を Estimated due date 列に表示する（Bill も同様）。
+- **Validity duration:** その group には「Validity duration (years)」「Validity duration (months)」「Validity duration (days)」のうち**いずれか 1 種類だけ**行を追加する（ラジオで選んだ単位に対応する type）。value には数値のみ。計算時はその type に応じて日付に年/月/日を加算する。
+
+---
+
+## 6. データ: group とパターン
+
+### 6.1 基本ルール
+
+- **1 group = 1 サイクル**（例: 1 年分）。複数 group を前提とし、将来ドキュメントを group_key で紐づける。
+- **Latest ～** は「**最大 group_key の組**」から取得する。
+
+### 6.2 New requirement パターン 1: まだ払っていない
+
+- **Group 1** に保存するもの:
+  - Due date
+  - Bill date
+  - Pay date は作らない（未払い）
+- **Group 1 には作らないもの:**
+  - Estimated specific due date
+  - Estimated specific bill date
+  - Estimated due date based on validity duration
+  - Estimated bill date based on validity duration
+
+- **Current Status の表示:**
+  - Due date 列: New requirement で入力した due（= Group 1 の Due date）
+  - Estimated due date 列: 空白
+
+- **その後 Record payment を使ったとき:**
+  - **Payment made date** → **Group 1** に Pay date として保存。
+  - **Estimated 系 4 種類のうちユーザーが選んだもの**（specific due, specific bill, due based on validity, bill based on validity）→ **Group 2** に保存（Group 2 を新規作成して必要な type の行だけ追加）。
+
+### 6.3 New requirement パターン 2: すでに払っている
+
+- **Group 1** に保存するもの（5 つ）:
+  - Due date
+  - Bill date
+  - Pay date
+  - **Estimated due date based on validity duration**
+  - **Estimated bill date based on validity duration**
+- （New requirement の「すでに払っている」では validity-based のみ。specific は使わない。）
+
+- **Current Status の表示:**
+  - Estimated due date 列: Group 1 の「Estimated due date based on validity duration」の value。
+
+### 6.4 Record payment の共通ルール
+
+- 記録対象の「その期」を **Group n** とする。
+- **Payment made date** → 常に **Group n** に保存（Pay date として）。
+- **Estimated specific due date / Estimated specific bill date / Estimated due date based on validity duration / Estimated bill date based on validity duration**（ユーザーが選んだものだけ）→ 常に **Group n+1** に保存。必要なら Group n+1 を新規作成する。
+
+---
+
+## 7. Current Status 表示ロジックのまとめ
+
+- **最新の group**（最大 group_key）を見る。
+- **Due date 列:** その group の Due date の value。なければ（例: 未払いで latest due を表示する場合は New requirement で入れた latest due に相当する値）。
+- **Estimated due date 列:** その group に「Estimated specific due date」または「Estimated due date based on validity duration」の行があればその value。なければ空白。
+- **Status 列:** 従来どおりの状態表示（赤/緑の点など）。expiration は別扱い。
+- その group に **Pay date の行がない** → 「まだ払っていない」。Pay date の行がある → 「払い済み」。
+
+---
+
+## 8. 実装時の注意（データが無い場合）
+
+- **Pay date の有無の判定:** その group に Pay date（type_id = Pay date）の行が **tenant_requirement_real_data に存在するか**を確認するロジックが必要。存在しない → 未払い、存在する → 払い済み。パターン 1 では Group 1 に Pay date のレコードを作らないため、この「行があるかないか」で正しく判定できる。
+- 「この group にはこの type_id の real_data が存在しない」場合の分岐をコードで行う。
+  - 例: Pay date の行が無い → 未払いとみなす。Estimated の行が無い → Estimated due date 列は空白。
+- value_types は 4 種類ともマスタに存在し、real_data には**その group で選ばれた種類の行だけ**を追加する。
+
+---
+
+## 9. 参照
+
+- データベース構造: tenant_requirements_design_v2.txt
+- 既存スキーマ: supabase/schema_dump.sql（tenant_requirements, tenant_requirement_value_types, tenant_requirement_real_data）
+- Validity duration UI の参考: User の new requirement の同種 UI

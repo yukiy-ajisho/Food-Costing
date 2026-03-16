@@ -49,7 +49,9 @@ router.post(
         });
       }
 
-      // 作成者をadminロールでprofilesに追加
+      // 作成者を admin で profiles に追加（1テナント1 admin）。
+      // DB トリガー after_profiles_insert_assign_tenant_requirements により、
+      // この user が created_by の tenant_requirements だけがこのテナントに適用される。
       const { error: profileError } = await supabase.from("profiles").insert([
         {
           user_id: req.user!.id,

@@ -24,6 +24,14 @@ import inviteRouter from "./routes/invite";
 import webhooksRouter from "./routes/webhooks";
 import accessRequestsRouter from "./routes/access-requests";
 import meRouter from "./routes/me";
+import userRequirementsRouter from "./routes/reminder/user-requirements";
+import mappingUserRequirementsRouter from "./routes/reminder/mapping-user-requirements";
+import userRequirementAssignmentsRouter from "./routes/reminder/user-requirement-assignments";
+import adminStoreMembersRouter from "./routes/reminder/admin-store-members";
+import tenantRequirementsRouter from "./routes/reminder/tenant-requirements";
+import tenantRequirementValueTypesRouter from "./routes/reminder/tenant-requirement-value-types";
+import tenantRequirementRealDataRouter from "./routes/reminder/tenant-requirement-real-data";
+import { getR2Client, getR2BucketName } from "./config/r2";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
 try {
@@ -32,6 +40,17 @@ try {
   console.error("Failed to initialize Cedar Authorizer:", error);
   // 認可エンジンの初期化失敗は致命的なので、サーバーを起動しない
   process.exit(1);
+}
+
+// R2 設定の起動時検証（R2 を利用する環境のみ。未設定の場合はスキップ）
+if (process.env.R2_S3_ENDPOINT) {
+  try {
+    getR2Client();
+    getR2BucketName();
+  } catch (error) {
+    console.error("Failed to initialize R2 client:", error);
+    process.exit(1);
+  }
 }
 
 const app = express();
@@ -90,6 +109,13 @@ app.use(
 app.use("/tenants", tenantsRouter);
 app.use("/product-mappings", authMiddleware(), productMappingsRouter);
 app.use("/resource-shares", authMiddleware(), resourceSharesRouter);
+app.use("/user-requirements", authMiddleware(), userRequirementsRouter);
+app.use("/mapping-user-requirements", authMiddleware(), mappingUserRequirementsRouter);
+app.use("/user-requirement-assignments", authMiddleware(), userRequirementAssignmentsRouter);
+app.use("/reminder-members", authMiddleware(), adminStoreMembersRouter);
+app.use("/tenant-requirements", authMiddleware(), tenantRequirementsRouter);
+app.use("/tenant-requirement-value-types", authMiddleware(), tenantRequirementValueTypesRouter);
+app.use("/tenant-requirement-real-data", authMiddleware(), tenantRequirementRealDataRouter);
 
 // ============================================
 // 認証が必要なルート（汎用パス - 最後に配置）

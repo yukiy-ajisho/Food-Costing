@@ -1,0 +1,164 @@
+# Tenant Requirements 設計書
+
+## 1. 概要
+
+テナント（店舗・事業者）向けの要件（ライセンス、届出期限など）を定義し、各テナントに適用するかどうかと、due date / pay date / notice date を管理する。User requirements と役割は似ているが、対象が「人」ではなく「テナント」である。
+
+---
+
+## 2. データベース
+
+### 2.1 tenant_requirements（要件定義）
+
+テナント向け要件の定義。誰がいつ作ったかを持つ。Auto/Manual はない。
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid (PK) | 主キー |
+| title | text (NOT NULL) | 要件名（例: 営業許可、酒精税申告） |
+| validity_period | integer (NULL 可) | 有効期間（年数） |
+| expiry_rule | text (NULL 可) | 期限ルール。現状は rolling のみ |
+| created_by | uuid (NULL 可, FK → users) | 作成者 |
+| created_at | timestamptz (NOT NULL) | 作成日時 |
+| updated_at | timestamptz (NOT NULL) | 更新日時 |
+
+- Warning schedule（警告スケジュール）は将来実装。現時点では「ユーザーにデータを入れてもらうため」のカラムのみ持つ。
+- Warning schedule の選択肢は 3 つ（ラジオ）:
+  1. Notice Date … 入力ボックスは 1 つもない
+  2. Date on … MM/DD（年なし）の入力 1 つ
+  3. Days before due date … 日数（整数）の入力 1 つ
+- 上記を保存するためのカラム（例: warning_schedule_type, warning_schedule_value）を定義に含めてもよい。警告のロジックは後で実装する。
+
+---
+
+### 2.2 mapping_tenant_requirements（実データ・履歴）
+
+テナントごと・要件ごとの「実際の日付」を保持。1 (tenant, requirement) あたり複数行（履歴）。User の mapping と同様。
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid (PK) | 主キー |
+| tenant_id | uuid (NOT NULL, FK → tenants) | テナント |
+| tenant_requirement_id | uuid (NOT NULL, FK → tenant_requirements) | 要件 |
+| due_date | date (NULL 可) | 期限日 |
+| pay_date | date (NULL 可) | 支払日等 |
+| notice_date | date (NULL 可) | 通知日等 |
+| created_at | timestamptz (NOT NULL) | 作成日時 |
+| updated_at | timestamptz (NOT NULL) | 更新日時 |
+
+- Warning は要件定義側で行うため、このテーブルには warning 用の日付カラムは持たない（warning_date だけでは不十分という方針）。
+- 編集 = 既存のうち「最新 1 件」のレコードの値を更新（初期入力または修正）。
+- Renewal = 同じ (tenant, requirement) の新規レコードを 1 行追加する操作。実装は後で行う。
+
+---
+
+### 2.3 tenant_requirement_assignments（適用有無）
+
+どのテナントにどの要件を適用しているか。User の user_requirement_assignments と同様の役割。
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid (PK) | 主キー |
+| tenant_id | uuid (NOT NULL, FK → tenants) | テナント |
+| tenant_requirement_id | uuid (NULL 可, FK → tenant_requirements, ON DELETE SET NULL) | 要件。削除時は NULL にして行は残す |
+| is_currently_assigned | boolean (NOT NULL) | 現在適用しているか。false = 適用外 |
+| created_at | timestamptz (NOT NULL) | 作成日時 |
+| deleted_at | timestamptz (NULL 可) | 参照している要件が一覧から削除された日時 |
+
+- UNIQUE(tenant_id, tenant_requirement_id)。同じ (tenant, requirement) は 1 行のみ。
+- 要件削除時: 該当する assignment 行は残し、deleted_at を設定。tenant_requirement_id は ON DELETE SET NULL とする。
+
+---
+
+## 3. レコードが作られるタイミング
+
+### 3.1 新規テナントが追加されたとき
+
+- どこで: Supabase のトリガー ＋ ファンクション（tenants の AFTER INSERT）。user の「新規 profile → user_requirement_assignments」と同様、経路を問わず一元化するため DB で行う。
+- 何をするか: 既存の tenant_requirements の数だけ、tenant_requirement_assignments に 1 行ずつ INSERT（tenant_id = NEW.id, tenant_requirement_id = 各要件の id, is_currently_assigned = true, deleted_at = null）。
+- つまり「新テナントには、その時点で存在する全要件を適用する」。
+
+### 3.2 新規 tenant requirement が追加されたとき
+
+- どこで: アプリの要件作成 API（POST）内。
+- 何をするか: セッションを行っているユーザーが admin であるテナントの数だけ、tenant_requirement_assignments に 1 行ずつ INSERT（tenant_requirement_id = 新要件の id, tenant_id = 各テナントの id, is_currently_assigned = true, deleted_at = null）。
+- User の「作成者が admin である全テナントに適用」と同じ考え方。
+
+---
+
+## 4. 適用／適用外の操作
+
+- 適用している = tenant_requirement_assignments に (tenant_id, tenant_requirement_id) の行があり、is_currently_assigned = true かつ deleted_at IS NULL。
+- 適用していない = 行がない、または is_currently_assigned = false。
+- Remove = is_currently_assigned を false に更新。Add（適用に戻す）= is_currently_assigned を true に更新。レコードは既に存在する前提。
+- UI の扱いは user とほぼ同様（Required/Not required や Include/Exclude などの表記は後で統一可能）。
+
+---
+
+## 5. 要件削除時
+
+- tenant_requirements の該当行は DELETE する。
+- tenant_requirement_assignments のうち、tenant_requirement_id がその要件の id である全行の deleted_at に削除日時を設定する（UPDATE）。実装はアプリの削除 API 内で、先に assignment の deleted_at を UPDATE してから tenant_requirements を DELETE する。
+
+---
+
+## 6. UI
+
+### 6.1 新規要件モーダル（New requirement modal）
+
+- User のモーダルとほぼ同じ構成。ただし Auto/Manual はない。
+- 入力項目:
+  - title（必須）
+  - validity_period（年）
+  - warning schedule: ラジオ 3 択
+    1. Notice Date … 入力ボックスなし
+    2. Date on … MM/DD（年なし）の入力 1 つ
+    3. Days before due date … 日数（整数）の入力 1 つ
+- 現時点では警告の機能は作らず、上記は「データをユーザーに入れてもらうため」のみ。
+
+### 6.2 Tenant Requirement Status タブ
+
+- 上部: Select tenant（ドロップダウン）で 1 テナントを選択。そのテナントのみ表示する。
+- テーブル: User のような「人×要件」の 2 次元ではなく、選択したテナント向けに「要件 × status」の一覧とする。
+  - 列: Requirement（ライセンス名など） | Status
+  - Status: 赤点など（user と同様）＋ expiration date を表示。
+- Edit: User と同様、行を少し右に広がらせ、due date / pay date / notice date を入力・編集できるようにする。既存の最新 1 件の mapping を更新するか、なければ新規 1 行作成（初期値入力または修正）。
+- Renewal: 同じ (tenant, requirement) の新しい mapping レコードを 1 行作る。実装は後で行う。ここでは仕様の理解のみ。
+
+### 6.3 Expiration 計算
+
+- expiry_rule は現状 rolling のみ。
+- 計算式: due_date + validity_period（年）= expiration。
+- User と違い first due date はない。そのため、due date（および pay date, notice date）をユーザーが入れないと計算は行わない。due date / pay date / notice date を入れたタイミングで mapping_tenant_requirements にレコードができ、expiration が計算される。
+
+---
+
+## 7. コンポーネント共通化（フロントエンド）
+
+- **共通化時の原則**: 既存の User（従業員要件）側の見た目や挙動を変えてはならない。共通化の過程で、既存の Employee Requirements の UI を別の見た目にしたり、レイアウト・スタイル・動作を変えたりするような変更は行わない。共通化は慎重に行い、User 側を壊さないことを最優先とする。
+- User のテーブル（人×要件の 2 次元）と Tenant のテーブル（1 テナントの要件一覧）は構造が異なるため、テーブル全体を同一コンポーネントにはしない。
+- User の実装を壊さず、**部品だけ**共通化する:
+  - ステータス表示: 赤点・緑点・グレー＋ expiration date ＋ メッセージ。User/Tenant 共通で使える 1 コンポーネント。
+  - 日付入力＋Save: 日付フィールドと保存ボタンのブロック。User 用は issued_date / specific_date など、Tenant 用は due_date / pay_date / notice_date を props で渡し、同じ見た目の「日付編集フォーム」コンポーネントとして共有する。
+- テーブル本体は User 用と Tenant 用で別コンポーネント（または別ブロック）とし、上記の共通部品をそれぞれで利用する。
+
+---
+
+## 8. 参照時のルール
+
+- 「このテナントにこの要件を適用しているか」は、tenant_requirement_assignments の is_currently_assigned = true かつ deleted_at IS NULL の行が存在するかで判断する。
+- Status 表示や expiration 計算には、適用されている (tenant, requirement) について、mapping_tenant_requirements の**最新 1 件**（created_at 降順の先頭）の due_date / pay_date / notice_date を使う。
+
+---
+
+## 9. 決定済み事項まとめ
+
+- tenant_requirements: id, title, validity_period, expiry_rule, created_by, created_at, updated_at。Warning 用は「データ入力用」のカラムのみ。警告ロジックは後で実装。
+- mapping_tenant_requirements: 1 (tenant, requirement) あたり複数行（履歴）。due_date, pay_date, notice_date。warning はこのテーブルには持たない。
+- tenant_requirement_assignments: UNIQUE(tenant_id, tenant_requirement_id)。要件削除時は行を残し deleted_at を設定。tenant_requirement_id は ON DELETE SET NULL。
+- 新規テナント追加時: tenants の AFTER INSERT トリガーで、既存の tenant_requirements の数だけ assignment を INSERT。
+- 新規 tenant requirement 追加時: セッションユーザーが admin であるテナントの数だけ assignment を INSERT。
+- 新規要件モーダル: Auto/Manual なし。title, validity_period（年）, warning schedule（3 択、Notice Date は入力なし / Date on は MM/DD / Days before due date は日数）。現時点ではデータ入力のみ。
+- Status タブ: Select tenant → 要件×status のテーブル。Edit で最新 mapping を更新または新規作成。Renewal は後で実装。
+- Expiration: rolling のみ。due_date + validity_period（年）。日付を入れないと計算しない。
+- フロント: 部品（ステータス表示・日付編集フォーム）のみ共通化。テーブルは User 用と Tenant 用で別にする。

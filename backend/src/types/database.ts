@@ -176,3 +176,67 @@ export interface HistoryLog {
   visibility: "internal" | "shared";
   created_at?: string;
 }
+
+// Reminder: Employee Requirements (要件の定義)
+export interface UserRequirement {
+  id: string;
+  title: string;
+  validity_period: number | null;
+  validity_period_unit: string | null; // 'years' | 'months' | 'days'. NULL = years
+  first_due_date: number | null; // 雇われてから何日以内に取得が必要か（日数）。Due days from hire のとき使用
+  first_due_on_date: string | null; // date YYYY-MM-DD。First due date on のとき使用。first_due_date と排他
+  renewal_advance_days: number | null;
+  expiry_rule: string | null;
+  created_at?: string;
+  updated_at?: string;
+  created_by: string | null; // FK to users(id)。要件はテナントに属さず作成者に属する
+}
+
+// Reminder: 適用状態（誰にどの要件を適用しているか）
+// user_requirement_id は要件削除時に ON DELETE SET NULL で NULL になる
+export interface UserRequirementAssignment {
+  id: string;
+  user_id: string;
+  user_requirement_id: string | null;
+  is_currently_assigned: boolean;
+  created_at?: string;
+  deleted_at?: string | null;
+}
+
+// Reminder: 人×要件の紐付け（発行日・期限）
+export interface MappingUserRequirement {
+  id: string;
+  user_id: string;
+  user_requirement_id: string;
+  issued_date: string | null; // date YYYY-MM-DD
+  specific_date: string | null; // date YYYY-MM-DD（手入力の期限日。auto OFF のとき使用）
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Tenant Requirements v2（設計: tenant_requirements_design_v2.txt）
+export interface TenantRequirement {
+  id: string;
+  title: string;
+  tenant_id: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type TenantRequirementDataType = "date" | "int";
+
+export interface TenantRequirementValueType {
+  id: string;
+  name: string;
+  data_type: TenantRequirementDataType;
+}
+
+export interface TenantRequirementRealData {
+  id: string;
+  tenant_requirement_id: string;
+  group_key: number;
+  type_id: string;
+  value: string | null;
+  created_at?: string;
+  updated_at?: string;
+}

@@ -11,6 +11,9 @@ import {
   Users,
   Menu,
   Shield,
+  Award,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
@@ -46,6 +49,25 @@ const navigationItems = [
   },
 ];
 
+// License & certification のサブメニュー
+const licenseSubItems = [
+  {
+    id: "employee-requirements",
+    label: "Employee Requirements",
+    href: "/employee-requirements",
+  },
+  {
+    id: "tenant-requirements",
+    label: "Tenant Requirements",
+    href: "/tenant-requirements",
+  },
+  {
+    id: "company-requirements",
+    label: "Company Requirements",
+    href: "/company-requirements",
+  },
+];
+
 // レイアウトコンテンツコンポーネント
 export function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -53,6 +75,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [sidebarMode, setSidebarMode] = useState<"compact" | "full">("compact");
   const [isHovered, setIsHovered] = useState(false);
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
+  const [licenseExpanded, setLicenseExpanded] = useState(false);
+
+  // License & certification 配下のページにいる場合は親を開いた状態に
+  useEffect(() => {
+    if (
+      pathname.startsWith("/employee-requirements") ||
+      pathname.startsWith("/tenant-requirements") ||
+      pathname.startsWith("/company-requirements")
+    )
+      setLicenseExpanded(true);
+  }, [pathname]);
 
   // System Adminチェック
   useEffect(() => {
@@ -74,8 +107,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   // 現在のページに応じたタイトルを取得
   const getPageTitle = () => {
+    if (pathname.startsWith("/employee-requirements"))
+      return "Employee Requirements";
+    if (pathname.startsWith("/tenant-requirements"))
+      return "Tenant Requirements";
+    if (pathname.startsWith("/company-requirements"))
+      return "Company Requirements";
     const currentItem = navigationItems.find(
-      (item) => pathname === item.href || pathname.startsWith(item.href + "/")
+      (item) => pathname === item.href || pathname.startsWith(item.href + "/"),
     );
     return currentItem ? currentItem.label : "Food Costing";
   };
@@ -110,8 +149,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
       >
         {/* 左側：アプリアイコン + 名前、ハンバーガーメニュー、ページタイトル */}
         <div className="flex items-center space-x-4">
-          {/* アプリアイコン + 名前 */}
-          <div className="flex items-center gap-2">
+          {/* アプリアイコン + 名前（クリックで Recipes へ） */}
+          <Link
+            href="/cost"
+            className="flex items-center gap-2 rounded-md transition-opacity hover:opacity-80 focus:outline-none"
+            aria-label="Go to Recipes"
+          >
             <img
               src="/app_icon.png"
               alt="Food Costing"
@@ -126,7 +169,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             >
               Food Costing
             </h1>
-          </div>
+          </Link>
 
           {/* ハンバーガーメニュー */}
           <button
@@ -153,9 +196,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </h2>
         </div>
 
-        {/* 右側：テナント選択とユーザープロファイル */}
+        {/* 右側：テナント選択とユーザープロファイル（License & certification 配下ではテナント非表示） */}
         <div className="flex items-center space-x-4">
-          <TenantSelector />
+          {!pathname.startsWith("/employee-requirements") &&
+            !pathname.startsWith("/tenant-requirements") &&
+            !pathname.startsWith("/company-requirements") && <TenantSelector />}
           <UserProfile />
         </div>
       </header>
@@ -195,24 +240,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {/* ナビゲーション項目 */}
           <nav className="flex-1 px-3 pb-3 overflow-hidden pt-6">
             <div className="flex flex-col h-full gap-2">
-            {navigationItems.map((item) => {
-              const IconComponent = item.icon;
-              const isActive =
+              {navigationItems.map((item) => {
+                const IconComponent = item.icon;
+                const isActive =
                   pathname === item.href ||
                   pathname.startsWith(item.href + "/");
 
-              return (
-                <Link
-                  key={item.id}
-                  href={item.href}
+                return (
+                  <Link
+                    key={item.id}
+                    href={item.href}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
-                    isActive
+                      isActive
                         ? isDark
                           ? "text-blue-400 font-semibold"
                           : "text-blue-700 font-semibold"
                         : isDark
-                        ? "text-slate-300 hover:text-blue-400"
-                        : "text-gray-600 hover:text-blue-700"
+                          ? "text-slate-300 hover:text-blue-400"
+                          : "text-gray-600 hover:text-blue-700"
                     }`}
                     style={{
                       backgroundColor: isDark ? "#1e293b" : "white",
@@ -223,8 +268,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           ? "#60a5fa"
                           : "#1d4ed8"
                         : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280",
+                          ? "#cbd5e1"
+                          : "#6b7280",
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = isDark
@@ -243,8 +288,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           ? "#60a5fa"
                           : "#1d4ed8"
                         : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280";
+                          ? "#cbd5e1"
+                          : "#6b7280";
                     }}
                   >
                     <IconComponent className="h-5 w-5 shrink-0" />
@@ -257,6 +302,115 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 );
               })}
 
+              {/* License & certification（クリックで開閉、サブの Requirements で遷移） */}
+              <div className="flex flex-col gap-0">
+                <button
+                  type="button"
+                  onClick={() => setLicenseExpanded((e) => !e)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                    licenseExpanded
+                      ? isDark
+                        ? "text-blue-400 font-semibold"
+                        : "text-blue-700 font-semibold"
+                      : isDark
+                        ? "text-slate-300 hover:text-blue-400"
+                        : "text-gray-600 hover:text-blue-700"
+                  }`}
+                  style={{
+                    backgroundColor: isDark ? "#1e293b" : "white",
+                    color: licenseExpanded
+                      ? isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8"
+                      : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#334155"
+                      : "#dbeafe";
+                    e.currentTarget.style.color = isDark
+                      ? "#60a5fa"
+                      : "#1d4ed8";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#1e293b"
+                      : "white";
+                    e.currentTarget.style.color = licenseExpanded
+                      ? isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8"
+                      : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280";
+                  }}
+                >
+                  <Award className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <>
+                      <span className="text-sm whitespace-nowrap">
+                        License & certification
+                      </span>
+                      {licenseExpanded ? (
+                        <ChevronDown className="h-4 w-4 ml-auto shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 ml-auto shrink-0" />
+                      )}
+                    </>
+                  )}
+                </button>
+                {isSidebarExpanded &&
+                  licenseExpanded &&
+                  licenseSubItems.map((sub) => {
+                    const isActive =
+                      pathname === sub.href ||
+                      pathname.startsWith(sub.href + "/");
+                    return (
+                      <Link
+                        key={sub.id}
+                        href={sub.href}
+                        className={`w-full flex items-center gap-2 pl-9 pr-3 py-2 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                          isActive ? "font-semibold" : ""
+                        }`}
+                        style={{
+                          backgroundColor: isDark ? "#1e293b" : "white",
+                          color: isActive
+                            ? isDark
+                              ? "#60a5fa"
+                              : "#1d4ed8"
+                            : isDark
+                              ? "#94a3b8"
+                              : "#6b7280",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = isDark
+                            ? "#334155"
+                            : "#dbeafe";
+                          e.currentTarget.style.color = isDark
+                            ? "#60a5fa"
+                            : "#1d4ed8";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = isDark
+                            ? "#1e293b"
+                            : "white";
+                          e.currentTarget.style.color = isActive
+                            ? isDark
+                              ? "#60a5fa"
+                              : "#1d4ed8"
+                            : isDark
+                              ? "#94a3b8"
+                              : "#6b7280";
+                        }}
+                      >
+                        {sub.label}
+                      </Link>
+                    );
+                  })}
+              </div>
+
               {/* System Admin Panel Link */}
               {isSystemAdmin && (
                 <Link
@@ -267,8 +421,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         ? "text-blue-400 font-semibold"
                         : "text-blue-700 font-semibold"
                       : isDark
-                      ? "text-slate-300 hover:text-blue-400"
-                      : "text-gray-600 hover:text-blue-700"
+                        ? "text-slate-300 hover:text-blue-400"
+                        : "text-gray-600 hover:text-blue-700"
                   }`}
                   style={{
                     backgroundColor: isDark ? "#1e293b" : "white",
@@ -280,14 +434,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           ? "#60a5fa"
                           : "#1d4ed8"
                         : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280",
+                          ? "#cbd5e1"
+                          : "#6b7280",
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.backgroundColor = isDark
                       ? "#334155"
                       : "#dbeafe";
-                    e.currentTarget.style.color = isDark ? "#60a5fa" : "#1d4ed8";
+                    e.currentTarget.style.color = isDark
+                      ? "#60a5fa"
+                      : "#1d4ed8";
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = isDark
@@ -299,60 +455,62 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           ? "#60a5fa"
                           : "#1d4ed8"
                         : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280";
+                          ? "#cbd5e1"
+                          : "#6b7280";
                   }}
                 >
                   <Shield className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
-                    <span className="text-sm whitespace-nowrap">Admin Panel</span>
+                    <span className="text-sm whitespace-nowrap">
+                      Admin Panel
+                    </span>
                   )}
                 </Link>
               )}
-          </div>
-        </nav>
+            </div>
+          </nav>
 
           {/* テーマ切り替えスイッチ（サイドバーの下の方） */}
           <div className="px-3 pb-3">
-          <button
-            onClick={toggleTheme}
+            <button
+              onClick={toggleTheme}
               className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-colors ${
-              isDark
-                ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
-                : "bg-gray-100 hover:bg-gray-200 text-gray-700"
-            }`}
-            aria-label="Toggle theme"
-          >
-            {isDark ? (
-              <>
+                isDark
+                  ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                  : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+              }`}
+              aria-label="Toggle theme"
+            >
+              {isDark ? (
+                <>
                   <Sun className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
-                <span className="text-sm font-medium">Light Mode</span>
+                    <span className="text-sm font-medium">Light Mode</span>
                   )}
-              </>
-            ) : (
-              <>
+                </>
+              ) : (
+                <>
                   <Moon className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
-                <span className="text-sm font-medium">Dark Mode</span>
+                    <span className="text-sm font-medium">Dark Mode</span>
                   )}
-              </>
-            )}
-          </button>
+                </>
+              )}
+            </button>
+          </div>
         </div>
-      </div>
 
         {/* コンテンツエリア（右側残り全スペース） */}
         <div className="flex-1 flex flex-col transition-all duration-300 ease-in-out overflow-hidden">
           {/* メインコンテンツ */}
-        <main
-          className={`flex-1 overflow-y-auto transition-colors ${
-            isDark ? "bg-slate-900" : "bg-gray-50"
-          }`}
-          style={{ scrollbarGutter: "stable" }}
-        >
-          {children}
-        </main>
+          <main
+            className={`flex-1 overflow-y-auto transition-colors ${
+              isDark ? "bg-slate-900" : "bg-gray-50"
+            }`}
+            style={{ scrollbarGutter: "stable" }}
+          >
+            {children}
+          </main>
         </div>
       </div>
     </div>

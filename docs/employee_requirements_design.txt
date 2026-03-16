@@ -1,0 +1,216 @@
+================================================================================
+EMPLOYEE REQUIREMENTS - 設計・仕様まとめ（詳細）
+================================================================================
+※ 実装時にすぐ思い出せるよう、これまでの議論を詳しく記載する。
+
+--------------------------------------------------------------------------------
+1. テーブルと役割
+--------------------------------------------------------------------------------
+
+【user_requirements】
+- 役割: 「要件の定義」を格納する。各従業員ごとの細かい情報ではなく、
+  「Food handler」「I-9」のような要件の「種類」とそのルール（有効期間・期限ルール等）を保持。
+- admin が登録する。実際に登録される要件は admin 次第（例の6種類はあくまで例）。
+- システムは少なくとも次の6パターンに対応できるようにする:
+  Alcohol handler, Food handler, I-9, W-4, Sexual harassment training, Driver license.
+
+【mapping_user_requirements】
+- 役割: 「要件の定義」と「ユーザー（従業員）」を紐づける。
+- 誰が・どの要件を・いつ取得したか（issued_date）・期限がいつか（specific_date）など、
+  個々の従業員ごとの情報はここに格納。
+- 更新時: 既存レコードを UPDATE せず、必ず新しいレコードを INSERT する（履歴が残る）。
+- 「現在の状態」は、同一 (user_id, user_requirement_id) のうち最新1件（例: issued_date または created_at が最大）を見る。
+
+【profiles】
+- 1 user が複数 tenant に属しうる。各 (user_id, tenant_id) に1 profile。
+- 「表示する人」＝ その admin が持つテナント（複数可）のメンバー ＝ 該当テナントの profiles。
+- 表示名（Yuki, Suguru 等）は profiles にはない → users または auth.users と JOIN して取得する必要あり。
+
+【users】
+- id は auth.users と一致。birth_day, hire_date 等。
+
+【tenants】
+- admin が複数テナントを管理する場合、要件定義をテナントごとに分けると重複がつらいため、
+  user_requirements には tenant_id を付けない設計（created_by で共通利用）。
+
+--------------------------------------------------------------------------------
+2. user_requirements のカラム理解
+--------------------------------------------------------------------------------
+
+- id: 主キー。1つの「要件の定義」を一意に識別。
+- title: 要件の名前（例: "Food handler", "I-9"）。admin が入力。
+- validity_period: 有効期間（日数）。例: 365 = 1年。auto ON のとき、発行日から次期限を計算するのに使用。
+- first_due_date: 雇われてから何日以内に取得が必要か（整数）。特定の日付ではない。例: I-9 は 3（入社から3日以内）。
+- renewal_advance_days: 【重要】「期限の何日前から更新（renewal）ができるか」の定義。
+  ※ リマインダーを何日前に出すか、ではない。
+- expiry_rule: 期限の算出ルール（anniversary, calendar_year, fiscal_year 等）。auto ON のときの計算方法。
+- created_by: この定義を作成した admin（users.id）。「自分が作った定義」でフィルタ可能。複数テナントを管理する admin が共通で使う要件の所有者。
+- created_at, updated_at: 作成・更新日時。
+
+※ user_requirements はどのテーブルも参照していない（created_by は users 参照）。定義のみを格納。
+
+--------------------------------------------------------------------------------
+3. mapping_user_requirements のカラム理解
+--------------------------------------------------------------------------------
+
+- id: 主キー。「誰が・どの要件を」の1件の紐付け（履歴の1行）を識別。
+- user_id: その要件を「持っている」ユーザー（従業員）。users.id を参照。
+  （profile_id ではなく user_id でよい、という方針。）
+- user_requirement_id: どの要件の定義か。user_requirements.id を参照。
+- issued_date: 発行日・取得日・完了日。auto ON のときはこの日付を基準に次期限を計算。
+- specific_date: 期限日（手入力）。auto OFF のときだけ「次期限」として使用。auto ON のときは使わず計算で決める。
+- created_at, updated_at: 作成・更新日時。
+
+※ スキーマ上カラム名は specific_date（ユーザーが specific_Date から修正済み）。
+
+--------------------------------------------------------------------------------
+4. auto の意味（要件定義側で持つ想定）
+--------------------------------------------------------------------------------
+
+- auto OFF:
+  - 次期限は specific_date をそのまま使う。
+  - 例: I-9 は人ごとに決まった期限があり、計算しないので specific_date に日付を入れる。
+
+- auto ON:
+  - specific_date は使わない。user_requirements の expiry_rule / validity_period と
+    mapping の issued_date などから「次期限」をコードで計算する。
+  - 計算ロジックの具体的な内容は未定。コードで表現する。
+
+- Driver license など:
+  - 更新のタイミングで次の expiration が変わるなど計算が複雑。特別なロジックが必要になりうる。
+
+--------------------------------------------------------------------------------
+5. 更新時の mapping の動き（例）
+--------------------------------------------------------------------------------
+
+例: ユーザー Yuki (user_id = u-yuki)、要件 Food handler (user_requirement_id = food-handler-id)
+
+1回目取得:
+  id=map-1, user_id=u-yuki, user_requirement_id=food-handler-id,
+  issued_date=2023-06-01, specific_date=(null または計算結果に応じて)
+
+更新したとき（2回目）:
+  既存の map-1 はそのまま残す。
+  新規で 1 行挿入:
+  id=map-2, user_id=u-yuki, user_requirement_id=food-handler-id,
+  issued_date=2024-06-15, specific_date=(同上)
+
+「現在の有効な状態」は、同じ (user_id, user_requirement_id) のうち
+issued_date（または created_at）が最も新しい 1 件を参照する。
+
+--------------------------------------------------------------------------------
+6. Employee Requirements ページとの対応
+--------------------------------------------------------------------------------
+
+【Requirements List タブ】
+- 一覧・追加・編集・削除の対象 = user_requirements。
+- 表示: title, expiry_rule, validity_period, first_due_date, renewal_advance_days 等。
+- 「自分が作ったもの」で絞る = created_by = 現在のユーザー（users.id）。
+- モックの「auto」は、要件定義の auto フラグに相当（auto ON/OFF で specific_date の扱いが変わる）。
+
+【Requirements Status タブ】
+- 「人」= その admin が持つテナント（複数可）のメンバー = 該当テナントの profiles。
+  表示名は users / auth と JOIN して取得。
+- 「要件」= user_requirements（List と同じソース。created_by 等でフィルタ可）。
+- 各セル（人×要件）= mapping_user_requirements の「その人×その要件の最新1件」。
+  - 表示: 次期限（auto なら計算、auto でなければ specific_date）とステータス（緑/赤/灰）。
+  - 編集: issued_date と specific_date を入力。保存時は新規マッピングの INSERT または
+    既存1件の UPDATE は仕様次第（「更新＝新規レコード」なら INSERT）。
+
+【データの流れ】
+- 要件一覧: user_requirements を取得（必要なら created_by でフィルタ）。
+- Status の「人」: 現在のテナント（または admin の全テナント）の profiles + 表示名。
+- Status のセル: mapping_user_requirements を user_id (= profile.user_id) と user_requirement_id で参照。
+- 次期限: user_requirements の定義（auto, expiry_rule, validity_period 等）と
+  mapping_user_requirements（issued_date, specific_date）の情報からコードで計算。
+
+--------------------------------------------------------------------------------
+7. その他メモ
+--------------------------------------------------------------------------------
+
+- ルート: /employee-requirements。サイドバー・ページタイトルは「Employee Requirements」。
+- Tenant Requirements / Company Requirements は別ページとしてプレースホルダー済み（/tenant-requirements, /company-requirements）。
+- このドキュメントは実装時に参照し、上記の定義・auto・renewal_advance_days・更新＝新規レコードを忘れないようにする。
+
+--------------------------------------------------------------------------------
+8. API・ファイル構成の方針（Reminder / user_requirements）
+--------------------------------------------------------------------------------
+
+【採用する方針】
+
+- URL: 既存の Food Costing に合わせて /user-requirements とする。/api プレフィックスは付けない。
+
+- バックエンド:
+  - backend/src/routes/reminder/user-requirements.ts を新規作成する。
+  - ここに user_requirements の CRUD（一覧・1件取得・作成・更新・削除）を実装する。
+  - index.ts では app.use("/user-requirements", authMiddleware(), userRequirementsRouter) のようにマウントする。
+
+- フロント:
+  - frontend/lib/api/reminder/user-requirements.ts を新規作成する。
+  - ここに userRequirementsAPI（getAll, getById, create, update, delete 等）を定義する。
+  - Employee Requirements ページからはこのファイルを import して使う（api.ts には追加しない）。
+
+【理由】
+- Reminder（License & certifications）は Food Costing の子機能ではなく、同じレイヤーの別アプリとして扱う。
+- ルートの付け方は既存と統一し、Reminder 用は backend も front も「reminder」配下にまとめておく。
+- 将来 Food Costing 側も同様に routes/food-costing/ や lib/api/food-costing/ にまとめることを想定。
+
+--------------------------------------------------------------------------------
+9. 6つの代表要件とカリフォルニアでの更新ルール（計算ロジック用）
+--------------------------------------------------------------------------------
+※ 期限の自動計算（auto ON）を実装する際の参考。カリフォルニア州を前提とする。
+
+【初回と期限の関係】
+- 初回（first_due_date）は「雇われてから何日以内に取得が必要か」の定義。期限（expiration / 次期限）の計算には直接は使わない。
+- 期限の計算: auto ON のときは issued_date + validity_period（と expiry_rule）、auto OFF のときは specific_date で行う。
+- 初回の「いつまでに取得が必要か」を出すときは、users テーブルの hire_date と first_due_date（日数）を使う。
+
+【1. Alcohol handler（RBS: Responsible Beverage Service）】
+- 初回: 雇用後、サーバーとして勤務開始前に取得が必要（first_due_date は運用で設定。例: 0〜数日）。
+- 有効期間: 3年（validity_period = 1095）。
+- 期限の算出: 発行日から3年後 → expiry_rule = anniversary（発行日基準）。
+- 更新可能開始: 期限の90日前から再認証可能（renewal_advance_days = 90）。
+- auto: ON（発行日から次期限を計算）。
+
+【2. Food handler】
+- 初回: 雇われてから30日以内に取得が必要（California Health and Safety Code Section 113948）。first_due_date = 30。
+- 有効期間: 3年（validity_period = 1095）。発行日から3年で失効。
+- 期限の算出: 発行日から3年後 → expiry_rule = anniversary。
+- 更新: 失効後に再講習・試験で更新。期限前から「更新可能」な日は州法で明示されていないため、renewal_advance_days は運用で設定（例: 30〜90）。
+- auto: ON。
+
+【3. I-9】
+- 初回: 雇用から3営業日以内に完了（first_due_date = 3）。
+- 有効期間: なし（書類の有効期限に依存）。「○年ごとの更新」ではない。
+- 再確認: 就労許可書類の有効期限が来た場合にのみ再確認。再雇用の場合は、元の I-9 完了から3年以内なら Supplement B で対応、3年超なら新規 I-9。
+- auto: OFF。次期限は人ごとの書類期限（specific_date で手入力）。計算ロジックでは扱わない。
+
+【4. W-4】
+- 初回: 最初の給与支払い期間（first pay period）までに提出。IRS では「first wage payment に有効にする」とされ、未提出の場合は single として源泉徴収。日数で表す場合は給与周期による（週払い・半月払い・月払い等）。first_due_date は「日数」ではなく「first pay period」というルールのため、運用で日数を設定するか、別の基準（例: due_rule など）を検討する余地あり。
+- 有効期間: なし。ライフイベント（結婚・子供・転職等）や年1回の見直しで更新するかどうかは従業員次第。
+- 次期限: 法律で決まった「○月○日まで」はない。会社方針で「毎年1月に確認」などにする場合は specific_date または別ルール。
+- auto: OFF。期限は specific_date で管理するか、期限なし（リマインダーだけ）とする。
+
+【5. Sexual harassment training（カリフォルニア）】
+- 初回: 雇用から6ヶ月以内（first_due_date = 180）。管理者は2時間、非管理者は1時間。
+- 有効期間: 2年（validity_period = 730）。
+- 期限の算出: 発行日から2年後 → expiry_rule = anniversary。発行日は研修完了日と同じ扱い（Alcohol handler と同様、発行日基準でよい）。
+- 更新可能: 2年経過前に再受講で「次回期限」が延びる。renewal_advance_days は運用で設定（例: 30〜90）。
+- auto: ON。
+
+【6. Driver license】
+- 初回: 運転業務に就く前に有効な免許が必要（first_due_date は 0 または運用で設定）。
+- 有効期間: 5年。誕生日に失効することが多く、更新タイミングも人により複雑なため、期限は手入力とする。
+- 期限の算出: 免許の有効期限を specific_date で手入力。auto OFF。
+- 更新可能: 期限の約90日前から更新可能（renewal_advance_days = 90）。失効後12ヶ月まで猶予あり。
+- auto: OFF。次期限は specific_date。
+
+--------------------------------------------------------------------------------
+10. 計算ロジックで使う expiry_rule の意味（案）
+--------------------------------------------------------------------------------
+- anniversary: 次期限 = issued_date + validity_period 日。発行日から有効期間経過日が期限。
+- calendar_year: 次期限 = 発行日が属する暦年の終わり（12/31）。validity_period は補助的に使用するか未使用。
+- fiscal_year: 次期限 = 発行日が属する会計年度の終わり。会計年度の定義（例: 7/1〜翌6/30）は別設定が必要。
+上記のうち、6要件では anniversary がほとんど。I-9 / W-4 は auto OFF で specific_date。
+
+================================================================================
