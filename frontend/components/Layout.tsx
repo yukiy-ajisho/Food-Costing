@@ -196,11 +196,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </h2>
         </div>
 
-        {/* 右側：テナント選択とユーザープロファイル（License & certification 配下ではテナント非表示） */}
+        {/* 右側：テナント選択とユーザープロファイル（Team / License & certification 配下ではテナントセレクターは描画しない） */}
         <div className="flex items-center space-x-4">
           {!pathname.startsWith("/employee-requirements") &&
             !pathname.startsWith("/tenant-requirements") &&
-            !pathname.startsWith("/company-requirements") && <TenantSelector />}
+            !pathname.startsWith("/company-requirements") &&
+            !pathname.startsWith("/team") && <TenantSelector />}
           <UserProfile />
         </div>
       </header>

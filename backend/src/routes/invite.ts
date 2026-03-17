@@ -530,4 +530,199 @@ router.post(
   }
 );
 
+/**
+ * GET /invite/verify-company/:token
+ * 会社招待トークンを検証（公開）。返却: company_id, company_name, email, expires_at など。
+ */
+router.get("/verify-company/:token", async (req, res) => {
+  try {
+    const { token } = req.params;
+    if (!token) {
+      return res.status(400).json({ error: "Token is required" });
+    }
+
+    const { data: invitation, error: inviteError } = await supabase
+      .from("company_invitations")
+      .select("id, email, company_id, status, expires_at")
+      .eq("token", token)
+      .single();
+
+    if (inviteError || !invitation) {
+      return res.status(404).json({ error: "Invalid invitation token" });
+    }
+
+    if (invitation.status !== "pending") {
+      return res.status(410).json({
+        error: "Invitation not available",
+        details: `Invitation is ${invitation.status}`,
+      });
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(invitation.expires_at);
+    if (now > expiresAt) {
+      await supabase
+        .from("company_invitations")
+        .update({ status: "expired" })
+        .eq("id", invitation.id);
+      return res.status(410).json({
+        error: "Invitation expired",
+        details: "This invitation has expired",
+      });
+    }
+
+    const { data: company } = await supabase
+      .from("companies")
+      .select("company_name")
+      .eq("id", invitation.company_id)
+      .single();
+
+    res.status(200).json({
+      id: invitation.id,
+      email: invitation.email,
+      company_id: invitation.company_id,
+      company_name: (company as { company_name?: string } | null)?.company_name ?? null,
+      status: invitation.status,
+      expires_at: invitation.expires_at,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[GET /invite/verify-company] Unexpected error:", error);
+    res.status(500).json({ error: "Server error", details: message });
+  }
+});
+
+/**
+ * POST /invite/accept-company
+ * 会社招待を受け入れ、company_members に company_director で追加する。
+ * Body: { token: string }。認可: 認証必須。メール一致時のみ追加。
+ */
+router.post(
+  "/accept-company",
+  authMiddleware({ allowNoProfiles: true }),
+  async (req, res) => {
+    try {
+      const { token } = req.body;
+      const userId = req.user!.id;
+
+      if (!token) {
+        return res.status(400).json({ error: "Token is required" });
+      }
+
+      const { data: invitation, error: inviteError } = await supabase
+        .from("company_invitations")
+        .select("id, email, company_id, status, expires_at")
+        .eq("token", token)
+        .single();
+
+      if (inviteError || !invitation) {
+        return res.status(404).json({ error: "Invalid invitation token" });
+      }
+
+      if (invitation.status !== "pending") {
+        return res.status(400).json({
+          error: "Invalid invitation status",
+          details: `Invitation is already ${invitation.status}`,
+        });
+      }
+
+      const now = new Date();
+      const expiresAt = new Date(invitation.expires_at);
+      if (now > expiresAt) {
+        await supabase
+          .from("company_invitations")
+          .update({ status: "expired" })
+          .eq("id", invitation.id);
+        return res.status(410).json({
+          error: "Invitation expired",
+          details: "This invitation has expired",
+        });
+      }
+
+      const { data: authUser, error: authError } =
+        await supabase.auth.admin.getUserById(userId);
+
+      if (authError || !authUser?.user) {
+        return res.status(404).json({
+          error: "User not found",
+          details: "Failed to retrieve user information",
+        });
+      }
+
+      const userEmail = authUser.user.email;
+      if (!userEmail || userEmail.toLowerCase() !== invitation.email.toLowerCase()) {
+        return res.status(403).json({
+          error: "Forbidden",
+          details:
+            "The email address of your account does not match the invitation",
+        });
+      }
+
+      const { data: existingMember } = await supabase
+        .from("company_members")
+        .select("id")
+        .eq("company_id", invitation.company_id)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (existingMember) {
+        await supabase
+          .from("company_invitations")
+          .update({ status: "accepted" })
+          .eq("id", invitation.id);
+        return res.status(200).json({
+          message: "You are already a member of this company",
+          company_id: invitation.company_id,
+          role: "company_director",
+        });
+      }
+
+      const { error: memberError } = await supabase.from("company_members").insert({
+        company_id: invitation.company_id,
+        user_id: userId,
+        role: "company_director",
+      });
+
+      if (memberError) {
+        return res.status(500).json({
+          error: "Failed to add you to the company",
+          details: memberError.message,
+        });
+      }
+
+      await supabase
+        .from("company_invitations")
+        .update({ status: "accepted" })
+        .eq("id", invitation.id);
+
+      const { error: allowlistErr } = await supabase.from("allowlist").insert({
+        email: invitation.email,
+        status: "approved",
+        approved_at: new Date().toISOString(),
+        approved_by: "company_invitation_accept",
+        source: "invitation",
+        note: `Accepted company director invitation for company ${invitation.company_id}`,
+      });
+      if (allowlistErr && (allowlistErr as { code?: string }).code !== "23505") {
+        console.warn(
+          "[POST /invite/accept-company] Allowlist insert:",
+          allowlistErr,
+        );
+      }
+
+      res.status(200).json({
+        message: "Invitation accepted successfully",
+        company_id: invitation.company_id,
+        role: "company_director",
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[POST /invite/accept-company] Unexpected error:", error);
+      res
+        .status(500)
+        .json({ error: "Internal server error", details: message });
+    }
+  }
+);
+
 export default router;

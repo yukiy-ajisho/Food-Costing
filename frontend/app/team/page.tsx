@@ -3,8 +3,17 @@
 import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/api";
 import { useTheme } from "@/contexts/ThemeContext";
-import { useTenant } from "@/contexts/TenantContext";
-import { Edit, Save, X, Trash2, User, UserPlus, Mail, Plus } from "lucide-react";
+import {
+  Edit,
+  Save,
+  X,
+  Trash2,
+  User,
+  UserPlus,
+  Mail,
+  Plus,
+  Building2,
+} from "lucide-react";
 
 interface TenantMember {
   user_id: string;
@@ -35,10 +44,44 @@ interface Invitation {
   expires_at: string;
 }
 
+interface Company {
+  id: string;
+  company_name: string;
+  role?: string;
+}
+
+interface CompanyMemberRow {
+  user_id: string;
+  role: string;
+  email?: string | null;
+  display_name?: string | null;
+}
+
+interface CompanyInvitationRow {
+  id: string;
+  email: string;
+  company_id: string;
+  status: "pending" | "accepted" | "expired" | "canceled";
+  email_status?: "delivered" | "failed" | null;
+  created_at: string;
+  expires_at: string;
+}
+
 export default function TeamPage() {
   const { theme } = useTheme();
-  const { selectedTenantId, setSelectedTenantId, loading: tenantLoading } = useTenant();
-  // Phase 1a: すべてのテナントの情報を表示
+  // Company 階層（Team ではヘッダーのテナントセレクターを使わず、ページ内でテナントを選択する）
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
+  const [companyTenants, setCompanyTenants] = useState<
+    { id: string; name: string; type: string; created_at?: string }[]
+  >([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(true);
+  const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
+  const [newCompanyName, setNewCompanyName] = useState("");
+  const [creatingCompany, setCreatingCompany] = useState(false);
+  // Team ページ内でのテナント選択（ヘッダーとは連動しない）
+  const [teamSelectedTenantId, setTeamSelectedTenantId] = useState<string | null>(null);
+  // 選択中テナントの情報を表示
   const [tenantsWithMembers, setTenantsWithMembers] = useState<
     TenantWithMembers[]
   >([]);
@@ -48,46 +91,163 @@ export default function TeamPage() {
     Map<string, string>
   >(new Map());
   const [savingTenantIds, setSavingTenantIds] = useState<Set<string>>(
-    new Set()
+    new Set(),
   );
   const [showInviteForm, setShowInviteForm] = useState<Map<string, boolean>>(
-    new Map()
+    new Map(),
   );
   const [inviteEmail, setInviteEmail] = useState<Map<string, string>>(
-    new Map()
+    new Map(),
   );
-  const [inviteRole, setInviteRole] = useState<Map<string, "manager" | "staff">>(
-    new Map()
-  );
+  const [inviteRole, setInviteRole] = useState<
+    Map<string, "manager" | "staff">
+  >(new Map());
   const [sendingInvite, setSendingInvite] = useState<Set<string>>(new Set());
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loadingInvitations, setLoadingInvitations] = useState(false);
   const [showCreateTenantModal, setShowCreateTenantModal] = useState(false);
   const [newTenantName, setNewTenantName] = useState("");
   const [newTenantType, setNewTenantType] = useState<"restaurant" | "vendor">(
-    "restaurant"
+    "restaurant",
   );
   const [creatingTenant, setCreatingTenant] = useState(false);
+  // Company directors: members + invitations (when a company is selected)
+  const [companyMembers, setCompanyMembers] = useState<CompanyMemberRow[]>([]);
+  const [companyInvitations, setCompanyInvitations] = useState<
+    CompanyInvitationRow[]
+  >([]);
+  const [loadingCompanyMembers, setLoadingCompanyMembers] = useState(false);
+  const [loadingCompanyInvitations, setLoadingCompanyInvitations] =
+    useState(false);
+  const [showInviteDirectorForm, setShowInviteDirectorForm] = useState(false);
+  const [inviteDirectorEmail, setInviteDirectorEmail] = useState("");
+  const [sendingInviteDirector, setSendingInviteDirector] = useState(false);
 
   const isDark = theme === "dark";
+  const isAdminOfAnyCompany = companies.some(
+    (c) => c.role === "company_admin",
+  );
 
-  // テナント情報とメンバー一覧を取得
+  // 会社一覧を取得
+  const fetchCompanies = async () => {
+    try {
+      const data = await apiRequest<{ companies: Company[] }>("/companies");
+      setCompanies(data.companies ?? []);
+    } catch (e) {
+      console.error("Failed to fetch companies:", e);
+      setCompanies([]);
+    } finally {
+      setLoadingCompanies(false);
+    }
+  };
+
   useEffect(() => {
-    // TenantContextのloadingがfalseで、selectedTenantIdがnullの場合
-    // テナントがないことが確定したので、loadingをfalseにする
-    if (!tenantLoading && !selectedTenantId) {
+    fetchCompanies();
+  }, []);
+
+  // 選択した会社に属するテナント一覧を取得（Select tenant の候補として使用）
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setCompanyTenants([]);
+      setTeamSelectedTenantId(null);
+      return;
+    }
+    const fetchCompanyTenants = async () => {
+      try {
+        const data = await apiRequest<{
+          tenants: { id: string; name: string; type: string; created_at?: string }[];
+        }>(`/companies/${selectedCompanyId}/tenants`);
+        setCompanyTenants(data.tenants ?? []);
+      } catch (e) {
+        console.error("Failed to fetch company tenants:", e);
+        setCompanyTenants([]);
+      }
+    };
+    fetchCompanyTenants();
+  }, [selectedCompanyId]);
+
+  // 会社を切り替えたらテナント選択をリセット
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setTeamSelectedTenantId(null);
+      return;
+    }
+    setTeamSelectedTenantId(null);
+  }, [selectedCompanyId]);
+
+  // 選択会社のテナント一覧が入ったら、未選択なら先頭を選択（Select tenant は選択会社配下のみ表示するため）
+  useEffect(() => {
+    if (
+      selectedCompanyId &&
+      companyTenants.length > 0 &&
+      (teamSelectedTenantId === null ||
+        !companyTenants.some((t) => t.id === teamSelectedTenantId))
+    ) {
+      setTeamSelectedTenantId(companyTenants[0].id);
+    }
+    if (selectedCompanyId && companyTenants.length === 0) {
+      setTeamSelectedTenantId(null);
+    }
+  }, [selectedCompanyId, companyTenants, teamSelectedTenantId]);
+
+  // 選択した会社のメンバー一覧を取得
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setCompanyMembers([]);
+      return;
+    }
+    const fetchCompanyMembers = async () => {
+      try {
+        setLoadingCompanyMembers(true);
+        const data = await apiRequest<{ members: CompanyMemberRow[] }>(
+          `/companies/${selectedCompanyId}/members`,
+        );
+        setCompanyMembers(data.members ?? []);
+      } catch (e) {
+        console.error("Failed to fetch company members:", e);
+        setCompanyMembers([]);
+      } finally {
+        setLoadingCompanyMembers(false);
+      }
+    };
+    fetchCompanyMembers();
+  }, [selectedCompanyId]);
+
+  // 選択した会社の招待一覧を取得
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setCompanyInvitations([]);
+      return;
+    }
+    const fetchCompanyInvitations = async () => {
+      try {
+        setLoadingCompanyInvitations(true);
+        const data = await apiRequest<{
+          invitations: CompanyInvitationRow[];
+        }>(`/companies/${selectedCompanyId}/invitations`);
+        setCompanyInvitations(data.invitations ?? []);
+      } catch (e) {
+        console.error("Failed to fetch company invitations:", e);
+        setCompanyInvitations([]);
+      } finally {
+        setLoadingCompanyInvitations(false);
+      }
+    };
+    fetchCompanyInvitations();
+  }, [selectedCompanyId]);
+
+  // テナント情報とメンバー一覧を取得（Team ページ内の選択に基づく）
+  useEffect(() => {
+    if (!teamSelectedTenantId) {
+      setTenantsWithMembers([]);
       setLoading(false);
       return;
     }
-
-    // selectedTenantIdが設定されるまで待つ（テナント選択の変更を検知するため）
-    if (!selectedTenantId) return;
 
     const fetchTeamData = async () => {
       try {
         setLoading(true);
 
-        // 選択されたテナントの情報とメンバー一覧を取得
         const [tenantDetail, membersData] = await Promise.all([
           apiRequest<{
             id: string;
@@ -95,23 +255,22 @@ export default function TeamPage() {
             type: string;
             created_at: string;
             role: string;
-          }>(`/tenants/${selectedTenantId}`),
-                apiRequest<{ members: TenantMember[] }>(
-            `/tenants/${selectedTenantId}/members`
-                ),
-              ]);
+          }>(`/tenants/${teamSelectedTenantId}`),
+          apiRequest<{ members: TenantMember[] }>(
+            `/tenants/${teamSelectedTenantId}/members`,
+          ),
+        ]);
 
         const tenantWithMembers = {
-                ...tenantDetail,
-                members: membersData.members || [],
-              };
+          ...tenantDetail,
+          members: membersData.members || [],
+        };
 
         setTenantsWithMembers([tenantWithMembers]);
 
-          // 編集用のテナント名を初期化
-          const namesMap = new Map<string, string>();
+        const namesMap = new Map<string, string>();
         namesMap.set(tenantWithMembers.id, tenantWithMembers.name);
-          setEditedTenantNames(namesMap);
+        setEditedTenantNames(namesMap);
       } catch (error) {
         console.error("Failed to fetch team data:", error);
       } finally {
@@ -120,19 +279,22 @@ export default function TeamPage() {
     };
 
     fetchTeamData();
-  }, [selectedTenantId, tenantLoading]);
+  }, [teamSelectedTenantId]);
 
-  // 招待一覧を取得する関数
+  // 招待一覧を取得（選択されたテナント。API に tenantId を渡して該当テナントの招待のみ取得）
   const fetchInvitations = async () => {
-    if (!selectedTenantId) return;
+    if (!teamSelectedTenantId) return;
 
     try {
       setLoadingInvitations(true);
-      const data = await apiRequest<{ invitations: Invitation[] }>("/invite");
+      const data = await apiRequest<{ invitations: Invitation[] }>(
+        "/invite",
+        {},
+        teamSelectedTenantId,
+      );
       setInvitations(data.invitations || []);
     } catch (error) {
       console.error("Failed to fetch invitations:", error);
-      // 403エラー（Adminでない場合）は無視
       const apiError = error as { status?: number };
       if (apiError?.status !== 403) {
         setInvitations([]);
@@ -142,15 +304,48 @@ export default function TeamPage() {
     }
   };
 
-  // 招待一覧を取得（Adminのみ、選択されたテナント）
   useEffect(() => {
     fetchInvitations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTenantId]);
+  }, [teamSelectedTenantId]);
 
-  // テナントを作成
+  // 会社を作成
+  const handleCreateCompany = async () => {
+    const name = newCompanyName.trim();
+    if (!name) {
+      alert("Company name is required");
+      return;
+    }
+    try {
+      setCreatingCompany(true);
+      const company = await apiRequest<Company>("/companies", {
+        method: "POST",
+        body: JSON.stringify({ company_name: name }),
+      });
+      setCompanies((prev) => [...prev, company]);
+      setSelectedCompanyId(company.id);
+      setShowCreateCompanyModal(false);
+      setNewCompanyName("");
+    } catch (error: unknown) {
+      console.error("Failed to create company:", error);
+      const apiError = error as { details?: string; error?: string };
+      alert(apiError.details || apiError.error || "Failed to create company");
+    } finally {
+      setCreatingCompany(false);
+    }
+  };
+
+  // 会社配下にテナントを作成（会社選択時のみ）
   const handleCreateTenant = async () => {
-    if (!newTenantName.trim() || newTenantName.length < 5 || newTenantName.length > 50) {
+    if (!selectedCompanyId) {
+      alert("Please select a company first");
+      return;
+    }
+    if (
+      !newTenantName.trim() ||
+      newTenantName.length < 5 ||
+      newTenantName.length > 50
+    ) {
       alert("Tenant name must be between 5 and 50 characters");
       return;
     }
@@ -163,7 +358,7 @@ export default function TeamPage() {
         type: string;
         created_at: string;
         role: string;
-      }>("/tenants", {
+      }>(`/companies/${selectedCompanyId}/tenants`, {
         method: "POST",
         body: JSON.stringify({
           name: newTenantName.trim(),
@@ -171,22 +366,72 @@ export default function TeamPage() {
         }),
       });
 
-      // 作成したテナントを自動選択
-      setSelectedTenantId(newTenant.id);
-
-      // モーダルを閉じてフォームをリセット
+      setCompanyTenants((prev) => [
+        ...prev,
+        {
+          id: newTenant.id,
+          name: newTenant.name,
+          type: newTenant.type,
+          created_at: newTenant.created_at,
+        },
+      ]);
+      setTeamSelectedTenantId(newTenant.id);
       setShowCreateTenantModal(false);
       setNewTenantName("");
       setNewTenantType("restaurant");
-
-      // テナント一覧はTenantContextが自動的に再取得するため、手動で更新する必要はない
-      // ただし、selectedTenantIdが変更されるため、useEffectが発火してテナント情報が再取得される
     } catch (error: unknown) {
       console.error("Failed to create tenant:", error);
       const apiError = error as { details?: string; error?: string };
       alert(apiError.details || apiError.error || "Failed to create tenant");
     } finally {
       setCreatingTenant(false);
+    }
+  };
+
+  // Director を招待（会社選択時）
+  const handleInviteDirector = async () => {
+    if (!selectedCompanyId) return;
+    const email = inviteDirectorEmail.trim().toLowerCase();
+    if (!email) {
+      alert("Email is required");
+      return;
+    }
+    try {
+      setSendingInviteDirector(true);
+      await apiRequest(`/companies/${selectedCompanyId}/invitations`, {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setInviteDirectorEmail("");
+      setShowInviteDirectorForm(false);
+      const data = await apiRequest<{
+        invitations: CompanyInvitationRow[];
+      }>(`/companies/${selectedCompanyId}/invitations`);
+      setCompanyInvitations(data.invitations ?? []);
+    } catch (error: unknown) {
+      const apiError = error as { details?: string; error?: string };
+      alert(apiError.details || apiError.error || "Failed to send invitation");
+    } finally {
+      setSendingInviteDirector(false);
+    }
+  };
+
+  // 会社招待をキャンセル
+  const handleCancelCompanyInvitation = async (invitationId: string) => {
+    if (!selectedCompanyId) return;
+    if (!confirm("Cancel this invitation?")) return;
+    try {
+      await apiRequest(
+        `/companies/${selectedCompanyId}/invitations/${invitationId}`,
+        { method: "DELETE" },
+      );
+      const data = await apiRequest<{
+        invitations: CompanyInvitationRow[];
+      }>(`/companies/${selectedCompanyId}/invitations`);
+      setCompanyInvitations(data.invitations ?? []);
+    } catch (error: unknown) {
+      const apiError = error as { details?: string; error?: string };
+      alert(apiError.details || apiError.error || "Failed to cancel invitation");
     }
   };
 
@@ -228,8 +473,8 @@ export default function TeamPage() {
         prev.map((tenant) =>
           tenant.id === tenantId
             ? { ...tenant, name: updatedTenant.name }
-            : tenant
-        )
+            : tenant,
+        ),
       );
       setEditingTenantId(null);
     } catch (error) {
@@ -248,7 +493,7 @@ export default function TeamPage() {
   const handleChangeMemberRole = async (
     tenantId: string,
     userId: string,
-    newRole: "admin" | "manager" | "staff"
+    newRole: "admin" | "manager" | "staff",
   ) => {
     try {
       await apiRequest(`/tenants/${tenantId}/members/${userId}/role`, {
@@ -263,11 +508,11 @@ export default function TeamPage() {
             ? {
                 ...tenant,
                 members: tenant.members.map((m) =>
-                  m.user_id === userId ? { ...m, role: newRole } : m
+                  m.user_id === userId ? { ...m, role: newRole } : m,
                 ),
               }
-            : tenant
-        )
+            : tenant,
+        ),
       );
     } catch (error) {
       console.error("Failed to change member role:", error);
@@ -296,8 +541,8 @@ export default function TeamPage() {
                 ...tenant,
                 members: tenant.members.filter((m) => m.user_id !== userId),
               }
-            : tenant
-        )
+            : tenant,
+        ),
       );
     } catch (error) {
       console.error("Failed to remove member:", error);
@@ -317,14 +562,18 @@ export default function TeamPage() {
 
     try {
       setSendingInvite((prev) => new Set(prev).add(tenantId));
-      await apiRequest("/invite", {
-        method: "POST",
-        body: JSON.stringify({
-          email: email.trim(),
-          role,
-          tenant_id: tenantId,
-        }),
-      });
+      await apiRequest(
+        "/invite",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            email: email.trim(),
+            role,
+            tenant_id: tenantId,
+          }),
+        },
+        tenantId,
+      );
 
       // フォームをリセット
       const newEmailMap = new Map(inviteEmail);
@@ -356,7 +605,7 @@ export default function TeamPage() {
     }
   };
 
-  if (loading) {
+  if (loadingCompanies) {
     return (
       <div className="p-8">
         <div className="flex items-center justify-center h-64">
@@ -369,29 +618,442 @@ export default function TeamPage() {
   return (
     <div className="p-8">
       <div className="max-w-4xl mx-auto space-y-8">
-        {/* Create New Tenant Button */}
-        <div className="flex justify-end">
-          <button
-            onClick={() => setShowCreateTenantModal(true)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
-              isDark
-                ? "bg-blue-600 hover:bg-blue-700 text-white"
-                : "bg-blue-500 hover:bg-blue-600 text-white"
-            }`}
-          >
-            <Plus className="h-4 w-4" />
-            Create New Tenant
-          </button>
+        {/* Company 階層: 会社一覧・選択・会社配下テナント一覧・テナント追加 */}
+        <div
+          className={`p-6 rounded-lg ${
+            isDark ? "bg-slate-800" : "bg-white"
+          }`}
+        >
+          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+            <Building2 className="h-5 w-5" />
+            Companies
+          </h2>
+          {loadingCompanies ? (
+            <div
+              className={
+                isDark ? "text-slate-400" : "text-gray-500"
+              }
+            >
+              Loading...
+            </div>
+          ) : companies.length === 0 ? (
+            <div className="space-y-4">
+              <p
+                className={
+                  isDark ? "text-slate-300" : "text-gray-600"
+                }
+              >
+                Create a company to manage tenants (stores or locations).
+              </p>
+              <button
+                onClick={() => setShowCreateCompanyModal(true)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                  isDark
+                    ? "bg-blue-600 hover:bg-blue-700 text-white"
+                    : "bg-blue-500 hover:bg-blue-600 text-white"
+                }`}
+              >
+                <Plus className="h-4 w-4" />
+                Create Company
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <label
+                  className={`text-sm font-medium ${
+                    isDark ? "text-slate-300" : "text-gray-700"
+                  }`}
+                >
+                  Select company:
+                </label>
+                <select
+                  value={selectedCompanyId ?? ""}
+                  onChange={(e) =>
+                    setSelectedCompanyId(
+                      e.target.value ? e.target.value : null,
+                    )
+                  }
+                  className={`px-3 py-2 rounded border ${
+                    isDark
+                      ? "bg-slate-600 border-slate-500 text-slate-200"
+                      : "bg-white border-gray-300 text-gray-900"
+                  }`}
+                >
+                  <option value="">—</option>
+                  {companies.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.company_name}
+                    </option>
+                  ))}
+                </select>
+                {!isAdminOfAnyCompany && (
+                  <button
+                    onClick={() => setShowCreateCompanyModal(true)}
+                    className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm ${
+                      isDark
+                        ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
+                        : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                    }`}
+                  >
+                    <Plus className="h-4 w-4" />
+                    New company
+                  </button>
+                )}
+              </div>
+              {selectedCompanyId && (
+                <div className="mt-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`text-sm font-medium ${
+                        isDark ? "text-slate-300" : "text-gray-700"
+                      }`}
+                    >
+                      Tenants under this company
+                    </span>
+                    <button
+                      onClick={() => setShowCreateTenantModal(true)}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                        isDark
+                          ? "bg-blue-600 hover:bg-blue-700 text-white"
+                          : "bg-blue-500 hover:bg-blue-600 text-white"
+                      }`}
+                    >
+                      <Plus className="h-4 w-4" />
+                      Add Tenant
+                    </button>
+                  </div>
+                  {companyTenants.length === 0 ? (
+                    <p
+                      className={`text-sm ${
+                        isDark ? "text-slate-400" : "text-gray-500"
+                      }`}
+                    >
+                      No tenants yet. Click &quot;Add Tenant&quot; to create one.
+                    </p>
+                  ) : (
+                    <ul
+                      className={`list-disc list-inside space-y-1 text-sm ${
+                        isDark ? "text-slate-300" : "text-gray-700"
+                      }`}
+                    >
+                      {companyTenants.map((t) => (
+                        <li key={t.id}>
+                          {t.name}{" "}
+                          <span className="capitalize opacity-80">
+                            ({t.type})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {/* Company directors: members + invitations */}
+                  <div className="mt-6 pt-4 border-t border-slate-600/50 space-y-4">
+                    <h3
+                      className={`text-sm font-semibold ${
+                        isDark ? "text-slate-300" : "text-gray-700"
+                      }`}
+                    >
+                      Company directors
+                    </h3>
+                    {loadingCompanyMembers ? (
+                      <p
+                        className={`text-sm ${
+                          isDark ? "text-slate-400" : "text-gray-500"
+                        }`}
+                      >
+                        Loading members...
+                      </p>
+                    ) : (
+                      <ul
+                        className={`text-sm space-y-1 ${
+                          isDark ? "text-slate-300" : "text-gray-700"
+                        }`}
+                      >
+                        {companyMembers.length === 0 ? (
+                          <li>No members</li>
+                        ) : (
+                          companyMembers.map((m) => (
+                            <li key={m.user_id}>
+                              {m.display_name || m.email || m.user_id}{" "}
+                              <span
+                                className={`text-xs ${
+                                  isDark ? "text-slate-500" : "text-gray-500"
+                                }`}
+                              >
+                                ({m.role === "company_admin" ? "Admin" : "Director"})
+                              </span>
+                            </li>
+                          ))
+                        )}
+                      </ul>
+                    )}
+                    {loadingCompanyInvitations ? (
+                      <p
+                        className={`text-sm ${
+                          isDark ? "text-slate-400" : "text-gray-500"
+                        }`}
+                      >
+                        Loading invitations...
+                      </p>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`text-sm ${
+                              isDark ? "text-slate-400" : "text-gray-600"
+                            }`}
+                          >
+                            Pending invitations
+                          </span>
+                          {!showInviteDirectorForm ? (
+                            <button
+                              onClick={() => setShowInviteDirectorForm(true)}
+                              className={`flex items-center gap-1 px-3 py-1.5 rounded text-sm font-medium ${
+                                isDark
+                                  ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                  : "bg-blue-500 hover:bg-blue-600 text-white"
+                              }`}
+                            >
+                              <UserPlus className="h-4 w-4" />
+                              Invite director
+                            </button>
+                          ) : null}
+                        </div>
+                        {showInviteDirectorForm ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="email"
+                              value={inviteDirectorEmail}
+                              onChange={(e) =>
+                                setInviteDirectorEmail(e.target.value)}
+                              placeholder="Email address"
+                              className={`px-3 py-2 rounded border text-sm ${
+                                isDark
+                                  ? "bg-slate-600 border-slate-500 text-slate-200"
+                                  : "bg-white border-gray-300 text-gray-900"
+                              }`}
+                              disabled={sendingInviteDirector}
+                            />
+                            <button
+                              onClick={handleInviteDirector}
+                              disabled={
+                                sendingInviteDirector ||
+                                !inviteDirectorEmail.trim()
+                              }
+                              className={`px-3 py-2 rounded text-sm font-medium ${
+                                isDark
+                                  ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-600"
+                                  : "bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-400"
+                              }`}
+                            >
+                              {sendingInviteDirector ? "Sending..." : "Send"}
+                            </button>
+                            <button
+                              onClick={() => {
+                                setShowInviteDirectorForm(false);
+                                setInviteDirectorEmail("");
+                              }}
+                              disabled={sendingInviteDirector}
+                              className={`px-3 py-2 rounded text-sm ${
+                                isDark
+                                  ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
+                                  : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                              }`}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : null}
+                        {companyInvitations.filter(
+                          (i) => i.status === "pending",
+                        ).length === 0 ? (
+                          <p
+                            className={`text-sm ${
+                              isDark ? "text-slate-500" : "text-gray-500"
+                            }`}
+                          >
+                            No pending invitations.
+                          </p>
+                        ) : (
+                          <ul
+                            className={`text-sm space-y-1 ${
+                              isDark ? "text-slate-300" : "text-gray-700"
+                            }`}
+                          >
+                            {companyInvitations
+                              .filter((i) => i.status === "pending")
+                              .map((inv) => (
+                                <li
+                                  key={inv.id}
+                                  className="flex items-center gap-2"
+                                >
+                                  <Mail className="h-4 w-4 shrink-0" />
+                                  {inv.email} — expires{" "}
+                                  {new Date(inv.expires_at).toLocaleDateString()}
+                                  <button
+                                    onClick={() =>
+                                      handleCancelCompanyInvitation(inv.id)}
+                                    className={`p-1 rounded ${
+                                      isDark
+                                        ? "hover:bg-slate-600 text-red-300"
+                                        : "hover:bg-gray-200 text-red-600"
+                                    }`}
+                                    title="Cancel invitation"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                </li>
+                              ))}
+                          </ul>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {tenantsWithMembers.length === 0 ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-lg">No tenants found</div>
+        {!selectedCompanyId ? (
+          <div
+            className={`p-6 rounded-lg text-center ${
+              isDark ? "bg-slate-800 text-slate-300" : "bg-white text-gray-600"
+            }`}
+          >
+            Select a company above to manage tenant members.
           </div>
-        ) : null}
+        ) : companyTenants.length === 0 ? (
+          <div
+            className={`p-6 rounded-lg text-center ${
+              isDark ? "bg-slate-800 text-slate-300" : "bg-white text-gray-600"
+            }`}
+          >
+            No tenants in this company. Add a tenant above to manage members.
+          </div>
+        ) : (
+          <>
+            {/* Team ページ内のテナントセレクター（選択した会社に属するテナントのみ表示） */}
+            <div
+              className={`p-6 rounded-lg ${
+                isDark ? "bg-slate-800" : "bg-white"
+              }`}
+            >
+              <h2 className="text-xl font-semibold mb-4">Manage tenant members</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <label
+                  className={`text-sm font-medium ${
+                    isDark ? "text-slate-300" : "text-gray-700"
+                  }`}
+                >
+                  Select tenant:
+                </label>
+                <select
+                  value={teamSelectedTenantId ?? ""}
+                  onChange={(e) =>
+                    setTeamSelectedTenantId(
+                      e.target.value ? e.target.value : null,
+                    )
+                  }
+                  className={`px-3 py-2 rounded border ${
+                    isDark
+                      ? "bg-slate-600 border-slate-500 text-slate-200"
+                      : "bg-white border-gray-300 text-gray-900"
+                  }`}
+                >
+                  {companyTenants.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
-        {/* Create Tenant Modal */}
-        {showCreateTenantModal && (
+            {loading && teamSelectedTenantId ? (
+              <div className="flex items-center justify-center h-32">
+                <div className="text-lg">Loading tenant...</div>
+              </div>
+            ) : null}
+
+            {!loading && teamSelectedTenantId && tenantsWithMembers.length === 0 ? (
+              <div className="flex items-center justify-center h-32">
+                <div className="text-lg">No tenant data</div>
+              </div>
+            ) : null}
+          </>
+        )}
+
+        {/* Create Company Modal */}
+        {showCreateCompanyModal && (
+          <div
+            className={`fixed inset-0 flex items-center justify-center z-50 ${
+              isDark ? "bg-black/70" : "bg-black/50"
+            }`}
+          >
+            <div
+              className={`p-6 rounded-lg max-w-md w-full mx-4 ${
+                isDark ? "bg-slate-800" : "bg-white"
+              }`}
+            >
+              <h2 className="text-xl font-semibold mb-4">Create Company</h2>
+              <div className="space-y-4">
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      isDark ? "text-slate-300" : "text-gray-700"
+                    }`}
+                  >
+                    Company Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newCompanyName}
+                    onChange={(e) => setNewCompanyName(e.target.value)}
+                    placeholder="Enter company name"
+                    className={`w-full px-3 py-2 rounded border ${
+                      isDark
+                        ? "bg-slate-600 border-slate-500 text-slate-200"
+                        : "bg-white border-gray-300 text-gray-900"
+                    }`}
+                    disabled={creatingCompany}
+                  />
+                </div>
+                <div className="flex items-center gap-2 justify-end">
+                  <button
+                    onClick={() => {
+                      setShowCreateCompanyModal(false);
+                      setNewCompanyName("");
+                    }}
+                    disabled={creatingCompany}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                      isDark
+                        ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
+                        : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                    }`}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleCreateCompany}
+                    disabled={creatingCompany || !newCompanyName.trim()}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                      isDark
+                        ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-600"
+                        : "bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-400"
+                    }`}
+                  >
+                    {creatingCompany ? "Creating..." : "Create Company"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Create Tenant Modal（会社選択時のみ表示） */}
+        {showCreateTenantModal && selectedCompanyId && (
           <div
             className={`fixed inset-0 flex items-center justify-center z-50 ${
               isDark ? "bg-black/70" : "bg-black/50"
@@ -445,7 +1107,9 @@ export default function TeamPage() {
                   <select
                     value={newTenantType}
                     onChange={(e) =>
-                      setNewTenantType(e.target.value as "restaurant" | "vendor")
+                      setNewTenantType(
+                        e.target.value as "restaurant" | "vendor",
+                      )
                     }
                     className={`w-full px-3 py-2 rounded border ${
                       isDark
@@ -637,8 +1301,8 @@ export default function TeamPage() {
               >
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl font-semibold">
-                  Team Members ({tenant.members.length})
-                </h2>
+                    Team Members ({tenant.members.length})
+                  </h2>
                   {isAdmin && (
                     <button
                       onClick={() => {
@@ -666,7 +1330,9 @@ export default function TeamPage() {
                       }`}
                     >
                       <UserPlus className="h-4 w-4" />
-                      {showInviteForm.get(tenant.id) ? "Cancel" : "Invite Member"}
+                      {showInviteForm.get(tenant.id)
+                        ? "Cancel"
+                        : "Invite Member"}
                     </button>
                   )}
                 </div>
@@ -676,7 +1342,9 @@ export default function TeamPage() {
                       isDark ? "bg-slate-700" : "bg-gray-50"
                     }`}
                   >
-                    <h3 className="text-lg font-medium mb-4">Send Invitation</h3>
+                    <h3 className="text-lg font-medium mb-4">
+                      Send Invitation
+                    </h3>
                     <div className="space-y-4">
                       <div>
                         <label
@@ -717,7 +1385,7 @@ export default function TeamPage() {
                             const newMap = new Map(inviteRole);
                             newMap.set(
                               tenant.id,
-                              e.target.value as "manager" | "staff"
+                              e.target.value as "manager" | "staff",
                             );
                             setInviteRole(newMap);
                           }}
@@ -825,7 +1493,7 @@ export default function TeamPage() {
                             >
                               Member since:{" "}
                               {new Date(
-                                member.member_since
+                                member.member_since,
                               ).toLocaleDateString()}
                             </div>
                           </div>
@@ -842,7 +1510,7 @@ export default function TeamPage() {
                                     e.target.value as
                                       | "admin"
                                       | "manager"
-                                      | "staff"
+                                      | "staff",
                                   )
                                 }
                                 className={`px-3 py-2 rounded border ${
@@ -872,8 +1540,8 @@ export default function TeamPage() {
                                 member.role === "admin"
                                   ? "bg-red-100 text-red-800"
                                   : member.role === "manager"
-                                  ? "bg-blue-100 text-blue-800"
-                                  : "bg-gray-100 text-gray-800"
+                                    ? "bg-blue-100 text-blue-800"
+                                    : "bg-gray-100 text-gray-800"
                               }`}
                             >
                               {member.role}
@@ -934,9 +1602,7 @@ export default function TeamPage() {
                               <div>
                                 <div
                                   className={`font-medium ${
-                                    isDark
-                                      ? "text-slate-100"
-                                      : "text-gray-900"
+                                    isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
                                 >
                                   {invitation.email}
@@ -958,7 +1624,7 @@ export default function TeamPage() {
                                 >
                                   Sent:{" "}
                                   {new Date(
-                                    invitation.created_at
+                                    invitation.created_at,
                                   ).toLocaleDateString()}
                                 </div>
                               </div>

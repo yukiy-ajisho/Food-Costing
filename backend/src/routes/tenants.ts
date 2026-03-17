@@ -5,83 +5,22 @@ import { authMiddleware } from "../middleware/auth";
 const router = Router();
 
 /**
- * POST /tenants
- * 新しいテナントを作成（認証済みユーザーであれば誰でも可能）
+ * POST /tenants — 廃止
+ * テナント作成は Company 経由のみ。POST /companies/:id/tenants を使用すること。
  */
 router.post(
   "/",
   authMiddleware({ allowNoProfiles: true }),
-  async (req, res) => {
-    try {
-      const { name, type } = req.body;
-
-      // バリデーション
-      if (!name || typeof name !== "string") {
-        return res.status(400).json({ error: "name is required" });
-      }
-
-      if (name.length < 5 || name.length > 50) {
-        return res.status(400).json({
-          error: "name must be between 5 and 50 characters",
-        });
-      }
-
-      if (!type || typeof type !== "string") {
-        return res.status(400).json({ error: "type is required" });
-      }
-
-      if (!["restaurant", "vendor"].includes(type)) {
-        return res.status(400).json({
-          error: "type must be one of: restaurant, vendor",
-        });
-      }
-
-      // テナントを作成
-      const { data: tenant, error: tenantError } = await supabase
-        .from("tenants")
-        .insert([{ name, type }])
-        .select()
-        .single();
-
-      if (tenantError || !tenant) {
-        return res.status(500).json({
-          error: tenantError?.message || "Failed to create tenant",
-        });
-      }
-
-      // 作成者を admin で profiles に追加（1テナント1 admin）。
-      // DB トリガー after_profiles_insert_assign_tenant_requirements により、
-      // この user が created_by の tenant_requirements だけがこのテナントに適用される。
-      const { error: profileError } = await supabase.from("profiles").insert([
-        {
-          user_id: req.user!.id,
-          tenant_id: tenant.id,
-          role: "admin",
-        },
-      ]);
-
-      if (profileError) {
-        // プロファイル作成に失敗した場合、テナントを削除してロールバック
-        await supabase.from("tenants").delete().eq("id", tenant.id);
-        return res.status(500).json({
-          error: profileError.message || "Failed to create profile",
-        });
-      }
-
-      res.status(201).json({
-        ...tenant,
-        role: "admin",
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  }
+  (_req, res) => {
+    res.status(410).json({
+      error: "Tenant creation via POST /tenants is deprecated. Use POST /companies/:id/tenants to create a tenant under a company.",
+    });
+  },
 );
 
 /**
  * GET /tenants
- * ユーザーが属するテナント一覧を取得
+ * ユーザーが属するテナント一覧を取得。所属 Company がある場合は company_id, company_name を付与する。
  */
 router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
   try {
@@ -98,7 +37,7 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
       return res.json({ tenants: [] });
     }
 
-    // 各 profile の tenants を展開し、role を付与（従来と同じレスポンス形）
+    // 各 profile の tenants を展開し、role を付与
     const tenantsWithRole = profilesWithTenants
       .filter((p) => p.tenants != null)
       .map((p) => ({
@@ -106,7 +45,48 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
         role: p.role,
       }));
 
-    res.json({ tenants: tenantsWithRole });
+    const tenantIds = tenantsWithRole.map((t) => (t as Record<string, unknown>).id as string);
+    if (tenantIds.length === 0) {
+      return res.json({ tenants: [] });
+    }
+
+    // company_tenants から tenant_id -> company_id を取得
+    const { data: links } = await supabase
+      .from("company_tenants")
+      .select("tenant_id, company_id")
+      .in("tenant_id", tenantIds);
+
+    const companyIds = [...new Set((links ?? []).map((l) => l.company_id))];
+    const companyIdToName: Record<string, string> = {};
+    if (companyIds.length > 0) {
+      const { data: companies } = await supabase
+        .from("companies")
+        .select("id, company_name")
+        .in("id", companyIds);
+      (companies ?? []).forEach((c) => {
+        companyIdToName[c.id] = c.company_name;
+      });
+    }
+
+    const tenantIdToCompany: Record<string, { company_id: string; company_name: string }> = {};
+    (links ?? []).forEach((l) => {
+      tenantIdToCompany[l.tenant_id] = {
+        company_id: l.company_id,
+        company_name: companyIdToName[l.company_id] ?? "",
+      };
+    });
+
+    const tenantsWithCompany = tenantsWithRole.map((t) => {
+      const tid = (t as Record<string, unknown>).id as string;
+      const company = tenantIdToCompany[tid];
+      return {
+        ...t,
+        company_id: company?.company_id ?? null,
+        company_name: company?.company_name ?? null,
+      };
+    });
+
+    res.json({ tenants: tenantsWithCompany });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
@@ -219,7 +199,7 @@ router.get("/:id/members", authMiddleware(), async (req, res) => {
           name,
           email,
         };
-      })
+      }),
     );
 
     res.json({ members });

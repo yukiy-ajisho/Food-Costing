@@ -128,6 +128,51 @@ export interface Tenant {
   created_at?: string;
 }
 
+// Company layer (companies, company_members, company_tenants)
+export interface Company {
+  id: string;
+  company_name: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type CompanyMemberRole = "company_admin" | "company_director";
+
+export interface CompanyMember {
+  id: string;
+  company_id: string;
+  user_id: string;
+  role: CompanyMemberRole;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CompanyTenant {
+  id: string;
+  company_id: string;
+  tenant_id: string;
+  created_at?: string;
+}
+
+export type CompanyInvitationStatus =
+  | "pending"
+  | "accepted"
+  | "expired"
+  | "canceled";
+
+export interface CompanyInvitation {
+  id: string;
+  email: string;
+  company_id: string;
+  token: string;
+  status: CompanyInvitationStatus;
+  email_status?: "delivered" | "failed" | null;
+  created_by: string;
+  created_at?: string;
+  expires_at: string;
+  email_id?: string | null;
+}
+
 export interface Profile {
   id: string;
   user_id: string; // FK to public.users(id)

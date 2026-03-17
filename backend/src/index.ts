@@ -18,6 +18,7 @@ import nonMassUnitsRouter from "./routes/non-mass-units";
 import itemUnitProfilesRouter from "./routes/item-unit-profiles";
 import proceedValidationSettingsRouter from "./routes/proceed-validation-settings";
 import tenantsRouter from "./routes/tenants";
+import companiesRouter from "./routes/companies";
 import productMappingsRouter from "./routes/product-mappings";
 import resourceSharesRouter from "./routes/resource-shares";
 import inviteRouter from "./routes/invite";
@@ -107,6 +108,7 @@ app.use(
   proceedValidationSettingsRouter
 );
 app.use("/tenants", tenantsRouter);
+app.use("/companies", companiesRouter);
 app.use("/product-mappings", authMiddleware(), productMappingsRouter);
 app.use("/resource-shares", authMiddleware(), resourceSharesRouter);
 app.use("/user-requirements", authMiddleware(), userRequirementsRouter);
