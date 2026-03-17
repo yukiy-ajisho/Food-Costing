@@ -32,6 +32,9 @@ import adminStoreMembersRouter from "./routes/reminder/admin-store-members";
 import tenantRequirementsRouter from "./routes/reminder/tenant-requirements";
 import tenantRequirementValueTypesRouter from "./routes/reminder/tenant-requirement-value-types";
 import tenantRequirementRealDataRouter from "./routes/reminder/tenant-requirement-real-data";
+import companyRequirementsRouter from "./routes/reminder/company-requirements";
+import companyRequirementValueTypesRouter from "./routes/reminder/company-requirement-value-types";
+import companyRequirementRealDataRouter from "./routes/reminder/company-requirement-real-data";
 import { getR2Client, getR2BucketName } from "./config/r2";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
@@ -118,6 +121,9 @@ app.use("/reminder-members", authMiddleware(), adminStoreMembersRouter);
 app.use("/tenant-requirements", authMiddleware(), tenantRequirementsRouter);
 app.use("/tenant-requirement-value-types", authMiddleware(), tenantRequirementValueTypesRouter);
 app.use("/tenant-requirement-real-data", authMiddleware(), tenantRequirementRealDataRouter);
+app.use("/company-requirements", authMiddleware(), companyRequirementsRouter);
+app.use("/company-requirement-value-types", authMiddleware(), companyRequirementValueTypesRouter);
+app.use("/company-requirement-real-data", authMiddleware(), companyRequirementRealDataRouter);
 
 // ============================================
 // 認証が必要なルート（汎用パス - 最後に配置）

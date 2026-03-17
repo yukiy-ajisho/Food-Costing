@@ -285,3 +285,42 @@ export interface TenantRequirementRealData {
   created_at?: string;
   updated_at?: string;
 }
+
+/** Legacy: mapping_tenant_requirements テーブル用（v2 でテーブル削除済み・ルート未マウント） */
+export interface MappingTenantRequirement {
+  id: string;
+  tenant_id: string;
+  tenant_requirement_id: string;
+  due_date: string | null;
+  pay_date: string | null;
+  notice_date: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+// Company Requirements（tenant と同じ構成、認可は company_members）
+export interface CompanyRequirement {
+  id: string;
+  title: string;
+  company_id: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type CompanyRequirementDataType = "date" | "int" | "text";
+
+export interface CompanyRequirementValueType {
+  id: string;
+  name: string;
+  data_type: CompanyRequirementDataType;
+}
+
+export interface CompanyRequirementRealData {
+  id: string;
+  company_requirement_id: string;
+  group_key: number;
+  type_id: string;
+  value: string | null;
+  created_at?: string;
+  updated_at?: string;
+}

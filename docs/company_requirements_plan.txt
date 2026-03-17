@@ -1,0 +1,125 @@
+================================================================================
+Company Requirements — 方針メモ（Tenant Requirements と同じ構成）
+================================================================================
+作成: 2026-03
+※ コードはまだ変更しない。理解の整理と今後の実装方針のメモ。
+
+--------------------------------------------------------------------------------
+1. 現状の schema_dump（tenant requirements まわり）
+--------------------------------------------------------------------------------
+
+【テーブル】
+  - tenant_requirements
+      カラム: id, title, tenant_id, created_at, updated_at
+      接続: tenant_id → tenants(id) ON DELETE CASCADE
+
+  - tenant_requirement_value_types
+      カラム: id, name, data_type (enum: date, int, text)
+      役割: マスタ（Due date, Bill date, Pay date, Validity duration, Document など）
+
+  - tenant_requirement_real_data
+      カラム: id, tenant_requirement_id, group_key, type_id, value, created_at, updated_at
+      接続: tenant_requirement_id → tenant_requirements(id) CASCADE
+            type_id → tenant_requirement_value_types(id) RESTRICT
+
+  - document_metadata
+      カラム: id, real_data_id, file_name, content_type, size_bytes, created_at
+      接続: real_data_id → tenant_requirement_real_data(id) ON DELETE CASCADE
+
+【型】
+  - tenant_requirement_data_type: 'date' | 'int' | 'text'
+
+【トリガー・assignments・mapping について】
+  - 現行のコードでは使っていない。
+  - マイグレーション 20260305000000_tenant_requirements_v2.sql で
+    DROP TRIGGER after_profiles_insert_assign_tenant_requirements、
+    DROP TABLE tenant_requirement_assignments、DROP TABLE mapping_tenant_requirements 済み。
+  - アプリでマウントしているのは tenant-requirements / tenant-requirement-value-types /
+    tenant-requirement-real-data の 3 ルートのみ。mapping や assignments のルートは index にない。
+  - tenant_requirements は tenant_id のみで紐づき、created_by カラムはない（v2 の定義どおり）。
+
+--------------------------------------------------------------------------------
+2. Tenant requirements のコードの役割
+--------------------------------------------------------------------------------
+
+【バックエンド】
+  - tenant-requirements.ts
+      GET /tenant-requirements/admin-tenants … 自分が admin のテナント一覧
+      GET /tenant-requirements … tenant_id 任意。自分が admin のテナントに属する要件
+      GET /tenant-requirements/:id
+      POST (title, tenant_id), PUT, DELETE
+      認可: profiles で user の role=admin かつ tenant_id でアクセス可能テナントを限定
+
+  - tenant-requirement-value-types.ts
+      GET /tenant-requirement-value-types … マスタ一覧
+
+  - tenant-requirement-real-data.ts
+      ensureRequirementAccess: 指定 requirement が「自分が admin のテナント」に属するか確認
+      GET /document-url, GET /documents, GET /（一覧）, POST /record-payment, POST /document, DELETE /document など
+      いずれも tenant_requirements → tenant_id 経由で profiles と突き合わせ
+
+  - mapping-tenant-requirements.ts / tenant-requirement-assignments.ts
+      旧構造用のルート。index にマウントされておらず、フロントからも呼ばれていない。
+      v2 でテーブル・トリガー削除済みのため、現行の動き（要件一覧・実データ・Document）とは無関係。
+
+【フロント】
+  - app/tenant-requirements/page.tsx
+      タブ: List / Status / Documents
+      List: 要件 CRUD、Select tenant（GET admin-tenants）、tenant_requirement の GET/POST/PUT/DELETE
+      Status: テナント選択 → 要件ごとの real_data（due date, pay date, bill date, validity 等）の表示・Record Payment
+      Documents: 要件×group ごとの Document 一覧・アップロード
+  - lib/api/reminder/
+      tenant-requirements.ts, tenant-requirement-value-types.ts, tenant-requirement-real-data.ts で上記 API を呼び出し。
+
+--------------------------------------------------------------------------------
+3. Company requirements で「同じ構成」にするときの対応
+--------------------------------------------------------------------------------
+
+【方針】
+  - テーブルは共有しない。company 用に新規テーブルを作る。
+
+【テーブル（tenant を company に置き換えた形）】
+
+  | 現状（tenant）                    | company 用（新規）                      | 違い                          |
+  |-----------------------------------|----------------------------------------|-------------------------------|
+  | tenant_requirements               | company_requirements                   | tenant_id → company_id        |
+  | tenant_requirement_value_types    | company_requirement_value_types         | 同じ構成のマスタを会社用に別   |
+  | tenant_requirement_real_data      | company_requirement_real_data           | tenant_requirement_id → company_requirement_id, type_id → company_requirement_value_types |
+  | document_metadata (real_data_id → tenant_requirement_real_data) | company 用 document メタデータ | real_data が company_requirement_real_data を指すようにする |
+
+  - document_metadata は現在 real_data_id が tenant_requirement_real_data(id) のみ参照。
+    company 用を「同じ仕組み」でやるには、
+    - company_document_metadata を新設し company_requirement_real_data_id で company_requirement_real_data を参照する、
+    または
+    - document_metadata を「tenant 用 / company 用」で区別できるように拡張する
+    のいずれかが必要。
+
+【認可の違い】
+  - Tenant: profiles の (user_id, tenant_id, role='admin') で「そのテナントの admin か」を判定。
+  - Company: company_members の (user_id, company_id, role in (company_admin, company_director)) で
+    「その会社にアクセスできるか」を判定（既存の ensureCompanyAccess と同じ考え方）。
+
+【API・UI の対応】
+  - パス: /tenant-requirements → /company-requirements、
+    /tenant-requirement-value-types → /company-requirement-value-types、
+    /tenant-requirement-real-data → /company-requirement-real-data のように、
+    「接続先が company 用テーブルになる」だけ。
+  - フロント: 同じ 3 タブ（List / Status / Documents）で、
+    「Select tenant」→「Select company」、
+    取得・保存先を company_requirements / company_requirement_real_data に差し替え。
+
+--------------------------------------------------------------------------------
+4. まとめ
+--------------------------------------------------------------------------------
+
+  - テーブル: tenant_requirements / tenant_requirement_value_types / tenant_requirement_real_data と、
+    document 用メタデータの「接続先」を company 用にした
+    company_requirements / company_requirement_value_types / company_requirement_real_data
+    （＋ company 用 document メタデータ）を新設する形。
+  - コード・仕組み: ルート名・テーブル名・認可（profiles の tenant admin → company_members の company アクセス）を
+    company 用に置き換えた「同じ構造」。
+  - 違う点: 接続するテーブルが tenant → company、認可が profiles → company_members、
+    Select が tenant → company になること。テーブルは共有しないので value_types と real_data も
+    company 用を別テーブルで用意する。
+
+================================================================================
