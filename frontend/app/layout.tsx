@@ -4,6 +4,7 @@ import "./globals.css";
 import { Layout } from "@/components/Layout";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { UserProvider } from "@/contexts/UserContext";
+import { CompanyProvider } from "@/contexts/CompanyContext";
 import { TenantProvider } from "@/contexts/TenantContext";
 
 export const metadata: Metadata = {
@@ -28,9 +29,11 @@ export default async function RootLayout({
             children
           ) : (
             <UserProvider>
-              <TenantProvider>
-                <Layout>{children}</Layout>
-              </TenantProvider>
+              <CompanyProvider>
+                <TenantProvider>
+                  <Layout>{children}</Layout>
+                </TenantProvider>
+              </CompanyProvider>
             </UserProvider>
           )}
         </ThemeProvider>

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { supabase } from "../../config/supabase";
+import { authorizeUnified, UnifiedCompanyAction } from "../../authz/unified/authorize";
 import {
   getDocumentPresignedUrl,
   uploadCompanyDocumentToR2,
@@ -20,17 +21,30 @@ async function ensureCompanyRequirementAccess(
   requirementIds: string[]
 ): Promise<boolean> {
   if (requirementIds.length === 0) return true;
-  const { data: members } = await supabase
-    .from("company_members")
-    .select("company_id")
-    .eq("user_id", userId)
-    .in("role", ["company_admin", "company_director"]);
-  const accessCompanyIds = [...new Set((members ?? []).map((m) => m.company_id))];
-  const { data: rows } = await supabase
+
+  const { data: rows, error } = await supabase
     .from("company_requirements")
-    .select("id, company_id")
+    .select("company_id")
     .in("id", requirementIds);
-  return (rows ?? []).every((r) => accessCompanyIds.includes(r.company_id));
+
+  if (error) return false;
+
+  // 既存挙動に合わせ、存在しない requirement_id が混ざっていても
+  // それらの company_id がないため permission 判定から除外される（空なら true）
+  const companyIds = [...new Set((rows ?? []).map((r) => r.company_id))];
+  if (companyIds.length === 0) return true;
+
+  // company_admin / company_director のみが許可されるため、action は manage_members で統一する
+  for (const companyId of companyIds) {
+    const allowed = await authorizeUnified(
+      userId,
+      UnifiedCompanyAction.manage_members,
+      { type: "Company", id: companyId }
+    );
+    if (!allowed) return false;
+  }
+
+  return true;
 }
 
 /**

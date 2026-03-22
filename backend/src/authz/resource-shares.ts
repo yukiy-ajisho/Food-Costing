@@ -2,6 +2,83 @@ import { supabase } from "../config/supabase";
 import { ResourceShare } from "../types/database";
 
 /**
+ * DB から取った resource_shares 行を、プリンシパルに適用されるものだけに絞る。
+ * getResourceShares / バッチ取得後の in-memory 処理で同一ロジックを使う。
+ */
+export function filterResourceSharesForPrincipal(
+  shares: ResourceShare[],
+  principalTenantId: string,
+  principalRole: string,
+  principalId: string
+): ResourceShare[] {
+  return shares.filter((share) => {
+    if (!share.target_id) {
+      return false;
+    }
+
+    if (share.target_type === "tenant") {
+      return share.target_id === principalTenantId;
+    }
+
+    if (share.target_type === "role") {
+      return share.target_id === principalRole;
+    }
+
+    if (share.target_type === "user") {
+      return share.target_id === principalId;
+    }
+
+    return false;
+  });
+}
+
+/**
+ * 複数 resource_id の resource_shares を 1 クエリで取得（プリンシパルフィルタは行わない）。
+ * 呼び出し側で filterResourceSharesForPrincipal を適用すること。
+ *
+ * @returns resource_id -> 該当行の配列（行が無い id は空配列。入力の各ユニーク id に必ずキーがある）
+ */
+export async function getResourceSharesRawBatch(
+  resourceType: string,
+  resourceIds: string[]
+): Promise<Map<string, ResourceShare[]>> {
+  const map = new Map<string, ResourceShare[]>();
+  const unique = [...new Set(resourceIds)];
+  for (const id of unique) {
+    map.set(id, []);
+  }
+  if (unique.length === 0) {
+    return map;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("resource_shares")
+      .select("*")
+      .eq("resource_type", resourceType)
+      .in("resource_id", unique);
+
+    if (error) {
+      console.error("Failed to fetch resource shares batch:", error);
+      return map;
+    }
+
+    for (const row of data ?? []) {
+      const id = row.resource_id;
+      const bucket = map.get(id);
+      if (bucket) {
+        bucket.push(row);
+      }
+    }
+
+    return map;
+  } catch (error) {
+    console.error("Error fetching resource shares batch:", error);
+    return map;
+  }
+}
+
+/**
  * resource_sharesテーブルから共有・除外情報を取得
  * @param resourceType - リソースタイプ（'item', 'base_item', 'vendor_product'など）
  * @param resourceId - リソースID
@@ -18,7 +95,6 @@ export async function getResourceShares(
   principalId: string
 ): Promise<ResourceShare[]> {
   try {
-    // resource_sharesテーブルから該当する共有・除外情報を取得
     const { data, error } = await supabase
       .from("resource_shares")
       .select("*")
@@ -34,32 +110,12 @@ export async function getResourceShares(
       return [];
     }
 
-    // プリンシパルに適用される共有・除外情報をフィルタリング
-    const applicableShares = data.filter((share) => {
-      // target_idがnullの場合はスキップ
-      if (!share.target_id) {
-        return false;
-      }
-
-      // target_typeが'tenant'の場合
-      if (share.target_type === "tenant") {
-        return share.target_id === principalTenantId;
-      }
-
-      // target_typeが'role'の場合
-      if (share.target_type === "role") {
-        return share.target_id === principalRole;
-      }
-
-      // target_typeが'user'の場合
-      if (share.target_type === "user") {
-        return share.target_id === principalId;
-      }
-
-      return false;
-    });
-
-    return applicableShares;
+    return filterResourceSharesForPrincipal(
+      data,
+      principalTenantId,
+      principalRole,
+      principalId
+    );
   } catch (error) {
     console.error("Error fetching resource shares:", error);
     return [];

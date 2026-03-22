@@ -4,12 +4,12 @@ import { Item, RecipeLine, BaseItem, VendorProduct } from "../types/database";
 import { convertToGrams } from "../services/units";
 import { MASS_UNIT_CONVERSIONS } from "../constants/units";
 import { checkCycle } from "../services/cycle-detection";
-import { authorizationMiddleware } from "../middleware/authorization";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
-  getItemResource,
-  getCreateResource,
-  getCollectionResource,
-} from "../middleware/resource-helpers";
+  getUnifiedItemResource,
+  getUnifiedTenantResource,
+} from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
@@ -21,7 +21,10 @@ const router = Router();
  */
 router.get(
   "/",
-  authorizationMiddleware("read", (req) => getCollectionResource(req, "item")),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource
+  ),
   async (req, res) => {
     try {
       let query = supabase.from("items").select("*");
@@ -148,7 +151,10 @@ router.get(
  */
 router.get(
   "/:id",
-  authorizationMiddleware("read", getItemResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.read_resource,
+    getUnifiedItemResource
+  ),
   async (req, res) => {
     try {
       let query = supabase.from("items").select("*").eq("id", req.params.id);
@@ -189,7 +195,10 @@ router.get(
  */
 router.post(
   "/",
-  authorizationMiddleware("create", (req) => getCreateResource(req, "item")),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource
+  ),
   async (req, res) => {
     try {
       const item: Partial<Item> = req.body;
@@ -268,7 +277,10 @@ router.post(
  */
 router.put(
   "/:id",
-  authorizationMiddleware("update", getItemResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedItemResource
+  ),
   async (req, res) => {
     try {
       const item: Partial<Item> = req.body;
@@ -496,27 +508,34 @@ router.put(
  * PATCH /items/:id/deprecate
  * Prepped Itemをdeprecatedにする
  */
-router.patch("/:id/deprecate", async (req, res) => {
-  try {
-    const { deprecatePreppedItem } = await import("../services/deprecation");
-    const result = await deprecatePreppedItem(
-      req.params.id,
-      req.user!.tenant_ids
-    );
+router.patch(
+  "/:id/deprecate",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedItemResource
+  ),
+  async (req, res) => {
+    try {
+      const { deprecatePreppedItem } = await import("../services/deprecation");
+      const result = await deprecatePreppedItem(
+        req.params.id,
+        req.user!.tenant_ids
+      );
 
-    if (!result.success) {
-      return res.status(400).json({ error: result.error });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.json({
+        message: "Item deprecated successfully",
+        affectedItems: result.affectedItems,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json({
-      message: "Item deprecated successfully",
-      affectedItems: result.affectedItems,
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * DELETE /items/:id
@@ -524,7 +543,10 @@ router.patch("/:id/deprecate", async (req, res) => {
  */
 router.delete(
   "/:id",
-  authorizationMiddleware("delete", getItemResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_item,
+    getUnifiedItemResource
+  ),
   async (req, res) => {
     try {
       let deleteQuery = supabase.from("items").delete().eq("id", req.params.id);

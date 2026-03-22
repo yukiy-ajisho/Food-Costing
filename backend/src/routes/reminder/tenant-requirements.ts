@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
 import { TenantRequirement } from "../../types/database";
+import { getAuthorizedTenantIds } from "./authorization-helpers";
 
 const router = Router();
 
@@ -11,17 +12,7 @@ const router = Router();
 router.get("/admin-tenants", async (req, res) => {
   try {
     const userId = req.user!.id;
-    const { data: profiles, error: profError } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .eq("role", "admin");
-
-    if (profError) {
-      return res.status(500).json({ error: profError.message });
-    }
-
-    const tenantIds = [...new Set((profiles ?? []).map((p) => p.tenant_id))];
+    const tenantIds = await getAuthorizedTenantIds(userId);
     if (tenantIds.length === 0) {
       return res.json({ tenants: [] });
     }
@@ -53,25 +44,19 @@ router.get("/", async (req, res) => {
     const userId = req.user!.id;
     const tenantId = req.query.tenant_id as string | undefined;
 
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .eq("role", "admin");
-
-    const adminTenantIds = [...new Set((profiles ?? []).map((p) => p.tenant_id))];
-    if (adminTenantIds.length === 0) {
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
+    if (authorizedTenantIds.length === 0) {
       return res.json([]);
     }
 
     let query = supabase
       .from("tenant_requirements")
       .select("*")
-      .in("tenant_id", adminTenantIds)
+      .in("tenant_id", authorizedTenantIds)
       .order("title", { ascending: true });
 
     if (tenantId && tenantId.trim()) {
-      if (!adminTenantIds.includes(tenantId.trim())) {
+      if (!authorizedTenantIds.includes(tenantId.trim())) {
         return res.status(403).json({ error: "Access denied to this tenant" });
       }
       query = query.eq("tenant_id", tenantId.trim());
@@ -97,18 +82,13 @@ router.get("/", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const userId = req.user!.id;
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .eq("role", "admin");
-    const adminTenantIds = [...new Set((profiles ?? []).map((p) => p.tenant_id))];
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
 
     const { data, error } = await supabase
       .from("tenant_requirements")
       .select("*")
       .eq("id", req.params.id)
-      .in("tenant_id", adminTenantIds)
+      .in("tenant_id", authorizedTenantIds)
       .single();
 
     if (error || !data) {
@@ -138,13 +118,8 @@ router.post("/", async (req, res) => {
     }
 
     const userId = req.user!.id;
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .eq("role", "admin");
-    const adminTenantIds = [...new Set((profiles ?? []).map((p) => p.tenant_id))];
-    if (!adminTenantIds.includes(body.tenant_id.trim())) {
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
+    if (!authorizedTenantIds.includes(body.tenant_id.trim())) {
       return res.status(403).json({ error: "Access denied to this tenant" });
     }
 
@@ -180,18 +155,13 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
     const body: Partial<TenantRequirement> = req.body;
 
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .eq("role", "admin");
-    const adminTenantIds = [...new Set((profiles ?? []).map((p) => p.tenant_id))];
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
 
     const { data: existing } = await supabase
       .from("tenant_requirements")
       .select("id")
       .eq("id", id)
-      .in("tenant_id", adminTenantIds)
+      .in("tenant_id", authorizedTenantIds)
       .single();
 
     if (!existing) {
@@ -234,18 +204,13 @@ router.delete("/:id", async (req, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    const { data: profiles } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .eq("role", "admin");
-    const adminTenantIds = [...new Set((profiles ?? []).map((p) => p.tenant_id))];
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
 
     const { data: existing } = await supabase
       .from("tenant_requirements")
       .select("id")
       .eq("id", id)
-      .in("tenant_id", adminTenantIds)
+      .in("tenant_id", authorizedTenantIds)
       .single();
 
     if (!existing) {

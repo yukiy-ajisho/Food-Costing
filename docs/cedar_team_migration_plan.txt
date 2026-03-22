@@ -1,0 +1,196 @@
+================================================================================
+Cedar (Global policies) — Team API 認可の棚卸し & 移行計画（ドラフト）
+================================================================================
+作成: 2026-03
+目的:
+  - Team 周り（Company/Company members/Company invitations/Company tenants）の認可を、
+    現在の「各ルートに散在する手続き的チェック」から Cedar に集約する。
+  - まずは backend API の認可のみ（UI の出し分けは後回し）。
+
+前提（ユーザー回答）:
+  - データ境界は company → tenants 以外の階層は増えない（team/department 等は増えない）。
+  - Cedar は “global（開発者が固定で定義するポリシー）” で進める。
+
+--------------------------------------------------------------------------------
+0. 現状の Cedar 実装（food costing: items/recipes 等）
+--------------------------------------------------------------------------------
+
+【現状の Cedar スキーマ（backend/src/authz/schema.json）】
+  - EntityTypes:
+      User: { id, tenant_id, role }   ※ role は admin/manager/staff 前提
+      Resource: { id, resource_type, owner_tenant_id, ... }
+  - Actions: read/create/update/delete （Resource に対する汎用アクション）
+
+【現状の Cedar の使い方】
+  - authorizationMiddleware(action, getResource) で Principal(User) と Resource を作って authorizeAsync
+  - Tenant スコープ（selected_tenant_id / tenant_ids）前提で、company という概念は Cedar に存在しない
+
+結論:
+  - Team の認可（company_members: company_admin/company_director）は、
+    現行 Cedar スキーマだけでは表現できない。
+  - Team 用に「Company 系 Resource/Entity」を Cedar に追加する必要がある。
+
+--------------------------------------------------------------------------------
+1. Team 周りの “手続き的” 認可がある箇所（棚卸し）
+--------------------------------------------------------------------------------
+
+### 1.1 backend/src/routes/companies.ts
+
+【現在の認可ルール（コード）】
+  - ensureCompanyAccess(userId, companyId):
+      company_members を参照し、
+      (user_id=userId, company_id=companyId, role in [company_admin, company_director]) が存在すれば許可。
+
+【ルートごとの要件】
+  - POST /companies
+      - 認証済みなら誰でも可（allowNoProfiles: true）
+      - 作成後に company_members に作成者を company_admin で追加
+
+  - GET /companies
+      - 自分が company_members にいる会社一覧を返す（allowNoProfiles: true）
+      - 認可というより “スコープ付き取得”
+
+  - GET /companies/:id/members
+      - ensureCompanyAccess が true のときのみ可
+
+  - GET /companies/:id/invitations
+      - ensureCompanyAccess が true のときのみ可
+
+  - POST /companies/:id/invitations   （director 招待）
+      - ensureCompanyAccess が true のときのみ可
+      - 既存 pending の重複チェック、allowlist insert 等あり（認可と関係ない）
+
+  - DELETE /companies/:id/invitations/:invitationId
+      - ensureCompanyAccess が true のときのみ可
+      - invitation が company_id に属し、かつ status=pending のときのみキャンセル可
+
+  - GET /companies/:id/tenants
+      - ensureCompanyAccess が true のときのみ可
+
+  - POST /companies/:id/tenants
+      - ensureCompanyAccess が true のときのみ可
+      - tenants 作成 + profiles に (user_id, tenant_id, role=admin) 追加 + company_tenants link 追加
+
+### 1.2 backend/src/routes/tenants.ts（Team に影響する箇所）
+
+  - POST /tenants: 410（company 経由のみ）
+  - GET /tenants: profiles（tenant membership）ベースで一覧取得し、company_tenants を JOIN して company 情報も返す
+      - “会社単位で tenant を見せる”方針の UI とは異なるが、現状残っている API
+      - 認可: authMiddleware（user が profiles に居ない場合は allowNoProfiles でないと 403）
+
+  - GET /tenants/:id, /tenants/:id/members, PUT /tenants/:id ...:
+      - profiles に所属しているかどうかの手続きチェック（company ではなく tenant membership ベース）
+
+結論:
+  - Team を Cedar 化する第一ターゲットは companies.ts の company スコープ API。
+  - tenants.ts の “tenant membership” 認可は、別フェーズで Cedar 化する（Team とは境界が違う）。
+
+--------------------------------------------------------------------------------
+2. Cedar 化の対象範囲（Team に集中）
+--------------------------------------------------------------------------------
+
+【最初に Cedar 化する対象（Team 直撃）】
+  - companies.ts のうち、company_id を持つ操作の認可:
+      - GET /companies/:id/members
+      - GET /companies/:id/invitations
+      - POST /companies/:id/invitations
+      - DELETE /companies/:id/invitations/:invitationId
+      - GET /companies/:id/tenants
+      - POST /companies/:id/tenants
+
+【最初は Cedar 化しない（理由: 既存 Cedar が tenant-centric のため）】
+  - tenants.ts の tenant membership 認可（profiles ベース）
+  - “一覧のフィルタ”系（GET /companies, GET /tenants）は、
+    まずは現状どおり DB クエリのスコープで返し、後で “can list?” を導入
+
+--------------------------------------------------------------------------------
+3. Cedar に寄せるための Resource/Action 設計（案）
+--------------------------------------------------------------------------------
+
+Team 用に、Cedar の概念を “company スコープ” に拡張する。
+（ここでは「global policies」前提で、role の定義も固定）
+
+### 3.1 Principal（ユーザー）の属性
+
+案A（推奨）:
+  - Principal = User { id }
+  - company_members を entity として渡し、User が Company に memberOf で紐づく（role は membership に持つ）
+
+案B（簡易だが拡張に弱い）:
+  - Principal = User { id, company_roles: Map<company_id, role> } のように context/attributes に詰める
+
+Team は company → tenants のみなので、案Aのほうが素直。
+
+### 3.2 Resource（守る対象）
+  - Company
+  - CompanyInvitation   （company_id を属性に持つ）
+  - Tenant（Company 配下 tenant の一覧・作成だけで使うなら、Company を Resource として扱えば足りる）
+
+### 3.3 Action（Team に必要な操作）
+  - company:read                （会社情報を読む）
+  - company:manage_members       （members 一覧・将来 role 変更など）
+  - company:manage_invitations   （招待の作成/一覧/キャンセル）
+  - company:list_tenants         （会社配下 tenant の一覧）
+  - company:create_tenant        （会社配下 tenant の作成）
+
+※ 既存 Cedar の read/create/update/delete に無理に寄せるより、
+   Team 用は “意味のある action 名” を作った方が可読性・メンテ性が上がる。
+
+--------------------------------------------------------------------------------
+4. 現状コードの「ルール」を Cedar ポリシーに落とす（global policy案）
+--------------------------------------------------------------------------------
+
+### 4.1 基本: Company へのアクセス
+ルール（現状の ensureCompanyAccess）:
+  - company_members に (user_id, company_id) があり、
+    role ∈ {company_admin, company_director} なら Company にアクセス可。
+
+Cedar（概念）:
+  - permit(User, action, Company) when memberOf(User, Company) with role in {admin,director}
+
+### 4.2 招待（CompanyInvitation）
+現状:
+  - 会社の admin/director なら invitation を作成/一覧/キャンセルできる
+  - キャンセルは「status=pending のみ」というビジネスルールがある（これは認可というより操作条件）
+
+Cedar（認可部分）:
+  - permit(User, company:manage_invitations, Company) when role in {admin,director}
+  - （status の条件は Cedar に入れても良いが、まずは API 側のバリデーションに残してよい）
+
+### 4.3 Tenant 作成（会社配下）
+現状:
+  - 会社の admin/director なら POST /companies/:id/tenants ができる
+  - 作成後に profiles へ (user_id, tenant_id, role=admin) を自動付与
+
+Cedar（認可部分）:
+  - permit(User, company:create_tenant, Company) when role in {admin,director}
+
+--------------------------------------------------------------------------------
+5. 実装方針（段階移行: Team から）
+--------------------------------------------------------------------------------
+
+Phase T1: “読み取り”系から Cedar に置換
+  - GET /companies/:id/members
+  - GET /companies/:id/invitations
+  - GET /companies/:id/tenants
+
+Phase T2: “書き込み”系を Cedar に置換
+  - POST /companies/:id/invitations
+  - DELETE /companies/:id/invitations/:invitationId
+  - POST /companies/:id/tenants
+
+Phase T3: 重複する手続き関数の削除
+  - ensureCompanyAccess を廃止し、Cedar 判定（authorize）に統一
+
+--------------------------------------------------------------------------------
+6. 今後の展開（Team 完了後）
+--------------------------------------------------------------------------------
+
+次の候補:
+  - Company Requirements（company-members ベースの ensureCompanyRequirementAccess）
+  - Tenant Requirements（profiles ベースの ensureRequirementAccess）
+
+ただし Team の Cedar モデルが固まってから、company/tenant の両方を Cedar で扱う統一スキーマに拡張する。
+
+================================================================================
+

@@ -1,0 +1,287 @@
+{
+  "": {
+    "entityTypes": {
+      "User": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            }
+          }
+        }
+      },
+      "Principal": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            },
+            "company_role": {
+              "type": "String",
+              "required": false
+            },
+            "tenant_role": {
+              "type": "String",
+              "required": false
+            },
+            "tenant_id": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "Company": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            }
+          }
+        }
+      },
+      "Tenant": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            },
+            "company_id": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      },
+      "CostResource": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            },
+            "type": {
+              "type": "String",
+              "required": true
+            },
+            "tenant_id": {
+              "type": "String",
+              "required": true
+            },
+            "owner_tenant_id": {
+              "type": "String",
+              "required": false
+            },
+            "item_kind": {
+              "type": "String",
+              "required": false
+            },
+            "user_id": {
+              "type": "String",
+              "required": false
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "company::manage_members": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "company::manage_invitations": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "company::list_tenants": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "company::create_tenant": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "company::manage_tenant_team": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::TenantRead": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant", "CostResource"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::TenantWrite": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant", "CostResource"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::list_resources": {
+        "memberOf": [{ "id": "tenant::TenantRead", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::read_resource": {
+        "memberOf": [{ "id": "tenant::TenantRead", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant", "CostResource"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::create_item": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::update_item": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["CostResource"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::delete_item": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["CostResource"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::create_recipe": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::update_recipe": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["CostResource"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::delete_recipe": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["CostResource"],
+          "principalTypes": ["Principal"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "is_owner": { "type": "Boolean", "required": false },
+              "is_shared": { "type": "Boolean", "required": false }
+            }
+          }
+        }
+      },
+      "tenant::manage_settings": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      }
+      ,
+      "tenant::manage_tenant": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::manage_members": {
+        "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,287 @@
+================================================================================
+
+メモ（Phase U2 の解釈/取りこぼし見直し）:
+  - 「統一対象 API 一覧」に含めたうち、Phase U2 の実装では GET（例: `company-requirements` の一覧/詳細）や、
+    `POST /invite/accept-company` のように “認可” と “ビジネス条件” が混ざりやすいルートが、
+    実際の実装上は unified authorizer へ完全に寄せ切れていない可能性があります。
+  - Phase U3 に進む前に、当該ルートの「Cedar 統一の責務分界（どこまでを authorize に寄せるべきか）」を改めて見直します。
+Cedar 統一設計（Company → Tenant）: 1つの Cedar に統合するための決定版プラン
+================================================================================
+作成: 2026-03
+目的:
+  - 既存の tenant ベース認可（food costing: items/recipes/settings）と、
+    新規の company ベース認可（Team: companies/members/invitations/tenants）を、
+    1つの Cedar schema + 1つの Cedar policy set + 1つの authorize 入口に統一する。
+  - 統一後も「tenant ロールしか持たないユーザー（staff 等）がアクセス不能になる」事態を起こさない。
+
+前提（確定）:
+  - レイヤーは company → tenant の2階層のみ。team/department 等は増やさない。
+  - 認可の情報源:
+      - company ロール: company_members.role（company_admin / company_director）
+      - tenant ロール: profiles.role（admin / director / manager / staff）
+  - 用語（混同防止。必ずこの表記を使う）:
+      - company レベル: company_members.role = company_admin, company_director
+      - tenant レベル: profiles.role = admin, director, manager, staff
+      - 「director」は両方にあるが、company_director（会社）と director（テナント）は別。文脈で区別する。
+  - 目標とする運用（パターンB）:
+      - company スコープの操作は company_members で判定
+      - tenant スコープの操作は profiles（tenant membership）で判定
+      - ただし Cedar は “1つ” に統一する
+
+--------------------------------------------------------------------------------
+0. 公式ベストプラクティス照合（現状の問題点を明確化）
+--------------------------------------------------------------------------------
+
+参照:
+  - context の使い方（principal/resource/action の情報を context に入れない）
+    https://docs.cedarpolicy.com/bestpractices/bp-using-the-context.html
+  - resource creation は container に紐づけて表現する
+    https://docs.cedarpolicy.com/bestpractices/bp-resources-containers.html
+  - actions は API 操作ではなく業務操作に寄せる（Map actions to business domain）
+    https://docs.cedarpolicy.com/bestpractices/bp-overview.html
+
+現状の Cedar（事実）:
+  A) tenant 側（backend/src/authz/*）
+    - Principal(User) に tenant_id/role を属性として持たせている（これは自然）
+    - create/update/delete も Resource を対象にしているが、実体が存在しない作成時に
+      “collection-* / temp-*” のような擬似 Resource を使って回避している
+      → 公式の「container に create 権限を付ける」推奨からズレている
+
+  B) company 側（backend/src/authz/team/*）
+    - company ロールを context.role に入れている
+      → 公式の「principal の情報を context に入れない」推奨からズレている
+    - Action は業務操作寄り（company::manage_invitations 等）で分かりやすい
+
+結論（統一方針の必須要件）:
+  - company ロール/tenant ロールは context ではなく “principal に紐づく情報” として扱う
+    （role を1つに混ぜない。company_role と tenant_role に分離する）
+  - create 権限は container（Company/Tenant）に対する action として定義する
+  - actions は業務操作（capability）として定義し、必要なら action group で集約する
+
+--------------------------------------------------------------------------------
+1. 統一後の Cedar モデル（確定仕様）
+--------------------------------------------------------------------------------
+
+1.1 EntityTypes（統一 schema に入れる型）
+  - User
+      - id: string
+
+  - Principal（認可主体。User と分離して role を安全に持つ）
+      - id: string                (User.id)
+      - company_role?: string     (company_admin/company_director。無いユーザーは属性自体を持たない)
+      - tenant_role?: string      (admin/director/manager/staff。無いユーザーは属性自体を持たない)
+      - tenant_id?: string        (tenant スコープ判定に必要。tenant_role がある場合のみ必須)
+
+  - Company   （resource container）
+      - id: string
+
+  - Tenant    （resource container, Company 配下）
+      - id: string
+      - company_id: string   ※ もしくは parents に Company を入れて階層で表現（どちらでもよいが、統一後は1つに固定する）
+
+  - CostResource（items/recipes/vendor_products 等の “実体リソース”）
+      - id: string
+      - type: string            (例: item, recipe, vendor_product, ...)
+      - tenant_id: string       (所属 tenant)
+      - owner_tenant_id: string (既存互換が必要なら残す)
+      - item_kind?: string      (raw/prepped など)
+      - user_id?: string        (作成者)
+
+  【重要】Principal を User から分離する理由（決定）:
+    - 公式ベストプラクティス上、principal と resource container を分離するほうが堅牢。
+    - role は “company” と “tenant” で意味が別。1つの role に混ぜると解釈が破綻する。
+    - company_role/tenant_role を optional にできるので、
+      「company ロールを持たない tenant ユーザー」も自然に表現できる。
+
+1.2 Containers（Company/Tenant を “作成権限のアンカー” にする）
+  - 例:
+      - company:create_tenant は Company を resource にする
+      - item:create は Tenant を resource にする
+    こうすることで “存在しないリソースの create” 問題を解消する。
+
+--------------------------------------------------------------------------------
+2. Actions（統一命名: 意味ベース Action に統一する）
+--------------------------------------------------------------------------------
+
+2.1 Company スコープ actions（確定）
+  - company:manage_members
+  - company:manage_invitations
+  - company:list_tenants
+  - company:create_tenant
+  - （必要なら company:read を追加）
+
+2.2 Tenant / costing スコープ actions（確定）
+  - tenant:list_resources         （一覧の “list”）
+  - tenant:read_resource          （単体 “read”）
+  - tenant:create_item
+  - tenant:update_item
+  - tenant:delete_item
+  - tenant:create_recipe
+  - tenant:update_recipe
+  - tenant:delete_recipe
+  - tenant:manage_settings        （settings を1アクションに集約）
+  - （vendor/products 等も同様に “create/update/delete” を type 単位で追加）
+
+  【決定理由】:
+    - CRUD を完全廃止ではなく、「意味ベースの action に確実に写像」する。
+    - “settings” のように CRUD では曖昧な領域は capability を1つにする。
+
+2.3 Action groups（運用のために必須）
+  - UI では “Read/Write” のような粗い権限表示が必要な場合があるため、
+    action group を schema 側で定義し、policy は group を使う。
+  - 例:
+      - Action::"TenantRead"   = [tenant:list_resources, tenant:read_resource]
+      - Action::"TenantWrite"  = [tenant:create_*, tenant:update_*, tenant:delete_* ...]
+
+--------------------------------------------------------------------------------
+3. Policies（パターンBを崩さないための“禁止事項”込み決定）
+--------------------------------------------------------------------------------
+
+3.1 禁止事項（これをやると staff が死ぬ）
+  - company ロールで tenant スコープの許可を出すこと
+    例: 「company_director なら items を触れる」を書かない
+  - tenant スコープは必ず profiles（tenant membership）由来の tenant ロールで判定する
+
+3.2 Company スコープ policy（決定）
+  - principal.company_role が存在し、かつ {company_admin, company_director} のときのみ permit
+  - resource は Company を対象にする
+
+3.3 Tenant スコープ policy（決定）
+  - principal.tenant_role が存在し、かつ {admin, director, manager, staff} のときのみ permit
+  - director（テナント）は admin と同等の権限（フルアクセス）として扱う
+  - resource は Tenant（create系）または CostResource（read/update/delete系）
+  - 共有（resource_shares）や prepped の例外は、現行ロジックを
+    “context（request固有）” と “resource attrs” に分解して維持する
+
+--------------------------------------------------------------------------------
+4. 1つの authorize 入口（実装要件として確定）
+--------------------------------------------------------------------------------
+
+統一後の authorize は “入力正規化” を責務に持つ:
+  - 入力: user_id, action, resource（Company/Tenant/CostResource いずれか）, request params
+  - 正規化:
+      - company スコープなら company_members から company_role を取得し Principal.company_role に入れる
+      - tenant スコープなら profiles（または req.user.roles）から tenant_role と tenant_id を取得し Principal.tenant_role / tenant_id に入れる
+  - Cedar に渡す:
+      - entities: Principal, User, Company/Tenant, CostResource（必要な分）
+      - context: request 固有だけ（例: is_shared, is_owner, time 等）
+
+これにより:
+  - “company ロールなし” のユーザーは tenant スコープでは問題なく許可される（profiles があればOK）
+  - company スコープでは company_members が無いなら deny（Team の仕様どおり）
+
+--------------------------------------------------------------------------------
+5. 移行手順（決定版。曖昧さを残さない）
+--------------------------------------------------------------------------------
+
+5.0 対象 API 一覧（見落とし防止）
+  - 目的: 「どのルートが unified Cedar の対象か」を列挙し、漏れをなくす。
+  - ルール:
+      - company スコープ = company_members（company_role）で認可するルート
+      - tenant スコープ  = profiles（tenant_role + tenant_id）で認可するルート
+      - “一覧のフィルタ（スコープ付き取得）” は、まずは既存どおり DB クエリで絞り込み、
+        追加の Cedar 判定が必要なら後で導入する（list権限が必要になったら）
+
+  [Company スコープ（unified Cedar 対象）]
+    - backend/src/routes/companies.ts
+        - GET    /companies/:id/members
+        - GET    /companies/:id/invitations
+        - POST   /companies/:id/invitations
+        - DELETE /companies/:id/invitations/:invitationId
+        - GET    /companies/:id/tenants
+        - POST   /companies/:id/tenants
+      ※ GET /companies, POST /companies は “認可というよりスコープ付き取得/作成” のため
+         まずは既存どおり（必要なら後で list/create のモデル化）
+
+    - backend/src/routes/invite.ts
+        - POST /invite/accept-company
+          会社招待の受諾。会社への membership 付与（company_members insert）。
+          ※ 受諾自体の条件（メール一致など）はビジネスルール。company スコープ認可は統一方針に寄せる。
+
+    - backend/src/routes/reminder/company-requirements.ts
+        - GET  /company-requirements/admin-companies
+        - GET  /company-requirements   （Query: company_id optional）
+        - POST /company-requirements
+        - PUT  /company-requirements/:id
+        - DELETE /company-requirements/:id
+      ※ 現状は company_members を直接参照して allow/deny + フィルタを実装しているため統一対象。
+
+    - backend/src/routes/reminder/company-requirement-real-data.ts
+        - GET  /company-requirement-real-data/document-url
+        - GET  /company-requirement-real-data/documents
+        - POST /company-requirement-real-data/upload-document
+        - （その他、同ファイル内の company_requirement_id を扱う各ルート）
+      ※ ensureCompanyRequirementAccess（company_members ベース）を unified Cedar に置換する対象。
+
+  [Tenant スコープ（unified Cedar 対象）]
+    - backend/src/routes/tenants.ts
+        - GET    /tenants
+        - GET    /tenants/:id
+        - GET    /tenants/:id/members
+        - PUT    /tenants/:id
+        - PUT    /tenants/:id/members/:userId/role
+        - DELETE /tenants/:id/members/:userId
+      ※ POST /tenants は deprecated（410）。作成は company 側の /companies/:id/tenants。
+
+    - backend/src/routes/items.ts, recipe-lines.ts, recipe-lines-items.ts, base-items.ts,
+      vendors.ts, vendor-products.ts, cost.ts, proceed-validation-settings.ts,
+      item-unit-profiles.ts, product-mappings.ts, labor-roles.ts, non-mass-units.ts,
+      resource-shares.ts
+      ※ これらは tenant レベルの food costing 操作。既存の tenant 認可（profiles/tenant_id）を unified Cedar に統合する対象。
+
+Phase U0: 設計固定（この文書）
+  - 統一 schema/action/policy の仕様を確定（本書がソース）
+
+Phase U1: 統一 schema/policies を新規に作り、既存2系統の Cedar を “並行稼働” させる
+  - 目的: 既存の挙動を壊さず比較できる状態を作る
+  - 成果物:
+      - unified schema.json
+      - unified policies.cedar
+      - unified authorize（company/tenant の入口分岐のみ）
+  - 完了条件（チェック）:
+      - [ ] unified schema/policies が読み込める（起動時初期化が成功）
+      - [ ] 既存 tenant 側 Cedar（authz）と既存 company 側 Cedar（authz/team）は残したまま
+      - [ ] 既存 API の挙動が変わっていない（まだ切替していないため）
+
+Phase U2: company（Team）を unified に切り替える
+  - company 側は context.role を廃止し、Principal.company_role に移す（本書の必須要件）
+  - companies.ts などの入口は unified authorize に寄せる
+  - 完了条件（チェック）:
+      - [ ] companies.ts の company スコープ認可は unified authorize 経由のみ
+      - [ ] company 用の Cedar 入力に context.role を含めない
+      - [ ] company_admin/company_director の Allow/Deny が現状と一致（回帰なし）
+
+Phase U3: tenant（costing）を unified に切り替える
+  - “create は container(Tenant) に対する権限” へ移行
+  - temp/collection の擬似 Resource に依存する設計を廃止（本書の必須要件）
+  - Action を意味ベースに置換し、action group を導入
+  - 完了条件（チェック）:
+      - [ ] items/recipes/settings の認可は unified authorize 経由のみ
+      - [ ] create 系は Tenant を resource（container）として判定できている
+      - [ ] manager の prepped 条件・共有条件など現状挙動が一致（回帰なし）
+
+Phase U4: 旧 Cedar 実装（authz/team と authz の旧CRUD）を削除
+  - 完了条件（チェック）:
+      - [ ] unified Cedar のみが使用されている（旧入口が参照されない）
+      - [ ] 旧 schema/policies の読み込み・コピー処理が不要になっている
+      - [ ] 不要ファイル/不要コードを削除してもビルド・起動・主要動作が維持される
+
+--------------------------------------------------------------------------------
+6. 仕様の最終確定（本書で確定）
+--------------------------------------------------------------------------------
+
+現状の挙動を最優先に維持するため、以下を仕様として確定する。
+
+確定1（settings の粒度）:
+  - tenant の settings は 1 capability（tenant:manage_settings）に集約する（= Yes）。
+  - 目的: 現状 “settings を触れる/触れない” の大枠の挙動を崩さずに統一を成立させる。
+  - 将来: settings を細分化したい要求が出た場合は、その時点で action を追加し、
+          action group で UI 表示を保ったまま移行する。
+
+確定2（costing の型分割）:
+  - costing の resource は CostResource 1型で、type 属性で区別する（= No）。
+  - 目的: 現状の tenant 側 Cedar が Resource 1型 + resource_type で動いているため、
+          統一時に “型の分割” による大変更を避け、挙動差分を最小化する。
+  - 将来: policy の可読性や監査要件で必要になった場合のみ、型別 entity（Item/Recipe 等）に分割する。
+
+================================================================================

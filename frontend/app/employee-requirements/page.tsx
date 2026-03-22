@@ -147,6 +147,7 @@ export default function RequirementsPage() {
   const [requirements, setRequirements] = useState<UserRequirement[]>([]);
   const [requirementsLoading, setRequirementsLoading] = useState(true);
   const [requirementsError, setRequirementsError] = useState<string | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [requirementSaving, setRequirementSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -178,6 +179,13 @@ export default function RequirementsPage() {
     requirementId: string;
   } | null>(null);
 
+  const isPermissionErrorMessage = (message: string) => {
+    return (
+      message.includes("Forbidden: Insufficient permissions") ||
+      message.includes("Access denied")
+    );
+  };
+
   const fetchRequirements = async () => {
     setRequirementsLoading(true);
     setRequirementsError(null);
@@ -185,7 +193,13 @@ export default function RequirementsPage() {
       const list = await userRequirementsAPI.getAll();
       setRequirements(list);
     } catch (err) {
-      setRequirementsError(err instanceof Error ? err.message : "Failed to load requirements");
+      const message =
+        err instanceof Error ? err.message : "Failed to load requirements";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        setRequirementsError(message);
+      }
     } finally {
       setRequirementsLoading(false);
     }
@@ -263,9 +277,13 @@ export default function RequirementsPage() {
         setStatusAssignments({});
       }
     } catch (err) {
-      setStatusMappingsError(
-        err instanceof Error ? err.message : "Failed to load status data",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to load status data";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        setStatusMappingsError(message);
+      }
     } finally {
       setStatusMappingsLoading(false);
     }
@@ -316,7 +334,12 @@ export default function RequirementsPage() {
       });
       await fetchStatusData();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save");
+      const message = err instanceof Error ? err.message : "Failed to save";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setSavingCell(null);
     }
@@ -342,7 +365,13 @@ export default function RequirementsPage() {
         },
       }));
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to update assignment");
+      const message =
+        err instanceof Error ? err.message : "Failed to update assignment";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setAssignmentToggling(null);
     }
@@ -452,7 +481,12 @@ export default function RequirementsPage() {
       closeModal();
       await fetchRequirements();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save");
+      const message = err instanceof Error ? err.message : "Failed to save";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setRequirementSaving(false);
     }
@@ -464,7 +498,12 @@ export default function RequirementsPage() {
       await userRequirementsAPI.delete(id);
       await fetchRequirements();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete");
+      const message = err instanceof Error ? err.message : "Failed to delete";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     }
   };
 
@@ -472,6 +511,24 @@ export default function RequirementsPage() {
     ? (requirements.find((r) => r.id === editingId)?.title ??
       "Edit Requirement")
     : "New Requirement";
+
+  if (permissionDenied) {
+    return (
+      <div className="px-8 pb-8">
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            You don&apos;t have permission.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-8 pb-8">

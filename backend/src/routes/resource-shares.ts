@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { ResourceShare } from "../types/database";
-import { authorizationMiddleware } from "../middleware/authorization";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
-  getCollectionResource,
-  getCreateResource,
-} from "../middleware/resource-helpers";
+  getUnifiedResourceShareResource,
+  getUnifiedTenantResource,
+} from "../middleware/unified-resource-helpers";
 
 const router = Router();
 
@@ -16,8 +17,9 @@ const router = Router();
  */
 router.get(
   "/",
-  authorizationMiddleware("read", (req) =>
-    getCollectionResource(req, "resource_share")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
     try {
@@ -65,29 +67,10 @@ router.get(
  */
 router.get(
   "/:id",
-  authorizationMiddleware("read", async (req) => {
-    const { id } = req.params;
-    if (!id) {
-      return null;
-    }
-
-    const { data, error } = await supabase
-      .from("resource_shares")
-      .select("*")
-      .eq("id", id)
-      .in("owner_tenant_id", req.user!.tenant_ids)
-      .single();
-
-    if (error || !data) {
-      return null;
-    }
-
-    return {
-      id: data.id,
-      resource_type: "resource_share",
-      owner_tenant_id: data.owner_tenant_id,
-    };
-  }),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.read_resource,
+    getUnifiedResourceShareResource
+  ),
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -124,8 +107,9 @@ router.get(
  */
 router.post(
   "/",
-  authorizationMiddleware("create", (req) =>
-    getCreateResource(req, "resource_share")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
     try {
@@ -369,29 +353,10 @@ router.post(
  */
 router.put(
   "/:id",
-  authorizationMiddleware("update", async (req) => {
-    const { id } = req.params;
-    if (!id) {
-      return null;
-    }
-
-    const { data, error } = await supabase
-      .from("resource_shares")
-      .select("id, owner_tenant_id")
-      .eq("id", id)
-      .in("owner_tenant_id", req.user!.tenant_ids)
-      .single();
-
-    if (error || !data) {
-      return null;
-    }
-
-    return {
-      id: data.id,
-      resource_type: "resource_share",
-      owner_tenant_id: data.owner_tenant_id,
-    };
-  }),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedResourceShareResource
+  ),
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -636,29 +601,10 @@ router.put(
  */
 router.delete(
   "/:id",
-  authorizationMiddleware("delete", async (req) => {
-    const { id } = req.params;
-    if (!id) {
-      return null;
-    }
-
-    const { data, error } = await supabase
-      .from("resource_shares")
-      .select("id, owner_tenant_id")
-      .eq("id", id)
-      .in("owner_tenant_id", req.user!.tenant_ids)
-      .single();
-
-    if (error || !data) {
-      return null;
-    }
-
-    return {
-      id: data.id,
-      resource_type: "resource_share",
-      owner_tenant_id: data.owner_tenant_id,
-    };
-  }),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_item,
+    getUnifiedResourceShareResource
+  ),
   async (req, res) => {
     try {
       const { id } = req.params;

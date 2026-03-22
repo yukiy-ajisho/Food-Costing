@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import {
   calculateCost,
   // calculateCosts, // PostgreSQL関数を使用するため、不要
@@ -6,8 +6,53 @@ import {
   clearCostCache,
 } from "../services/cost";
 import { supabase } from "../config/supabase";
+import {
+  authorizeUnified,
+  UnifiedTenantAction,
+  type UnifiedResource,
+} from "../authz/unified/authorize";
 
 const router = Router();
+
+async function authorizeReadItemTenantId(
+  req: Request,
+  itemId: string
+): Promise<{ tenantId: string } | null> {
+  const { data: item, error } = await supabase
+    .from("items")
+    .select("id, tenant_id, item_kind, user_id, responsible_user_id")
+    .eq("id", itemId)
+    .in("tenant_id", req.user!.tenant_ids)
+    .maybeSingle();
+
+  if (error || !item) return null;
+
+  const tenantId = item.tenant_id;
+  const tenantRole = req.user!.roles.get(tenantId);
+  if (!tenantRole) return null;
+
+  const resource: UnifiedResource = {
+    type: "CostResource",
+    id: item.id,
+    resourceType: "item",
+    tenant_id: tenantId,
+    owner_tenant_id: tenantId,
+    item_kind: item.item_kind,
+    user_id: item.user_id,
+    responsible_user_id: item.responsible_user_id,
+  };
+
+  const allowed = await authorizeUnified(
+    req.user!.id,
+    UnifiedTenantAction.read_resource,
+    resource,
+    undefined,
+    { tenantId, tenantRole }
+  );
+
+  if (!allowed) return null;
+  return { tenantId };
+}
 
 /**
  * GET /items/:id/cost
@@ -22,8 +67,12 @@ router.get("/items/:id/cost", async (req, res) => {
       clearCostCache();
     }
 
-    // 複数テナント対応: すべてのテナントのデータを取得
-    const costPerGram = await calculateCost(id, req.user!.tenant_ids);
+    const auth = await authorizeReadItemTenantId(req, id);
+    if (!auth) {
+      return res.status(403).json({ error: "Forbidden: Insufficient permissions" });
+    }
+
+    const costPerGram = await calculateCost(id, [auth.tenantId]);
 
     res.json({
       item_id: id,
@@ -55,23 +104,68 @@ router.post("/items/costs", async (req, res) => {
       return res.json({ costs: {} });
     }
 
-    // PostgreSQL関数を呼び出し（複数テナント対応: 各テナントで計算してマージ）
-    // 注意: 現在のPostgreSQL関数は単一テナント対応のため、各テナントで個別に呼び出し
-    const allCosts: Record<string, number> = {};
-    for (const tenantId of req.user!.tenant_ids) {
-    const { data, error } = await supabase.rpc("calculate_item_costs", {
-        p_tenant_id: tenantId,
-      p_item_ids: item_ids.length > 0 ? item_ids : null,
-    });
+    const { data: items, error: itemsError } = await supabase
+      .from("items")
+      .select("id, tenant_id, item_kind, user_id, responsible_user_id")
+      .in("id", item_ids)
+      .in("tenant_id", req.user!.tenant_ids);
 
-    if (error) {
+    if (itemsError) {
+      return res.status(500).json({ error: itemsError.message });
+    }
+
+    const itemsById = new Map<string, any>();
+    (items ?? []).forEach((it: any) => itemsById.set(it.id, it));
+
+    const allowedItemIdsByTenant = new Map<string, string[]>();
+    for (const itemId of item_ids) {
+      const item = itemsById.get(itemId);
+      if (!item) continue;
+
+      const tenantId = item.tenant_id;
+      const tenantRole = req.user!.roles.get(tenantId);
+      if (!tenantRole) continue;
+
+      const resource: UnifiedResource = {
+        type: "CostResource",
+        id: item.id,
+        resourceType: "item",
+        tenant_id: tenantId,
+        owner_tenant_id: tenantId,
+        item_kind: item.item_kind,
+        user_id: item.user_id,
+        responsible_user_id: item.responsible_user_id,
+      };
+
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedTenantAction.read_resource,
+        resource,
+        undefined,
+        { tenantId, tenantRole }
+      );
+
+      if (!allowed) continue;
+
+      const list = allowedItemIdsByTenant.get(tenantId) ?? [];
+      list.push(itemId);
+      allowedItemIdsByTenant.set(tenantId, list);
+    }
+
+    const allCosts: Record<string, number> = {};
+    for (const [tenantId, allowedItemIds] of allowedItemIdsByTenant.entries()) {
+      const { data, error } = await supabase.rpc("calculate_item_costs", {
+        p_tenant_id: tenantId,
+        p_item_ids: allowedItemIds.length > 0 ? allowedItemIds : null,
+      });
+
+      if (error) {
         console.error(`Error calculating costs for tenant ${tenantId}:`, error);
         continue;
-    }
+      }
 
       if (data && Array.isArray(data)) {
         for (const row of data) {
-          // 複数テナントで同じitem_idがある場合、最初に見つかったものを使用
           if (!(row.item_id in allCosts)) {
             allCosts[row.item_id] = parseFloat(row.cost_per_gram) || 0;
           }
@@ -167,6 +261,23 @@ router.get("/items/costs/breakdown", async (req, res) => {
 
     if (!tenantIdToUse) {
       return res.json({ costs: {} });
+    }
+
+    const tenantRole = req.user!.roles.get(tenantIdToUse);
+    if (!tenantRole) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const allowed = await authorizeUnified(
+      req.user!.id,
+      UnifiedTenantAction.list_resources,
+      { type: "Tenant", id: tenantIdToUse },
+      undefined,
+      { tenantId: tenantIdToUse, tenantRole }
+    );
+
+    if (!allowed) {
+      return res.status(403).json({ error: "Forbidden: Insufficient permissions" });
     }
 
     const { data, error } = await supabase.rpc(

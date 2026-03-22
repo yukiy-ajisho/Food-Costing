@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
 import { MappingTenantRequirement } from "../../types/database";
+import {
+  getAuthorizedTenantIds,
+  hasAnyCompanyAccess,
+} from "./authorization-helpers";
 
 const router = Router();
 
@@ -20,11 +24,19 @@ function parseDate(v: unknown): string | null {
 router.get("/", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const tenantId = req.query.tenant_id as string | undefined;
     const requirementIds = req.query.tenant_requirement_ids as string | undefined;
 
     if (!tenantId || !tenantId.trim()) {
       return res.status(400).json({ error: "tenant_id is required" });
+    }
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
+    if (!authorizedTenantIds.includes(tenantId.trim())) {
+      return res.status(403).json({ error: "Access denied to this tenant" });
     }
 
     const { data: myRequirementIds } = await supabase
@@ -102,6 +114,14 @@ router.post("/", async (req, res) => {
     }
 
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
+    if (!authorizedTenantIds.includes(body.tenant_id)) {
+      return res.status(403).json({ error: "Access denied to this tenant" });
+    }
 
     const { data: requirement, error: reqError } = await supabase
       .from("tenant_requirements")

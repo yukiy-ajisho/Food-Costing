@@ -6,6 +6,8 @@ import express from "express";
 import cors from "cors";
 import { authMiddleware } from "./middleware/auth";
 import { initializeAuthorizer } from "./authz/authorize";
+import { initializeTeamAuthorizer } from "./authz/team/authorize";
+import { initializeUnifiedAuthorizer } from "./authz/unified/authorize";
 import itemsRouter from "./routes/items";
 import recipeLinesRouter from "./routes/recipe-lines";
 import recipeLinesItemsRouter from "./routes/recipe-lines-items";
@@ -40,6 +42,8 @@ import { getR2Client, getR2BucketName } from "./config/r2";
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
 try {
   initializeAuthorizer();
+  initializeTeamAuthorizer();
+  initializeUnifiedAuthorizer();
 } catch (error) {
   console.error("Failed to initialize Cedar Authorizer:", error);
   // 認可エンジンの初期化失敗は致命的なので、サーバーを起動しない
@@ -114,10 +118,14 @@ app.use("/tenants", tenantsRouter);
 app.use("/companies", companiesRouter);
 app.use("/product-mappings", authMiddleware(), productMappingsRouter);
 app.use("/resource-shares", authMiddleware(), resourceSharesRouter);
-app.use("/user-requirements", authMiddleware(), userRequirementsRouter);
-app.use("/mapping-user-requirements", authMiddleware(), mappingUserRequirementsRouter);
-app.use("/user-requirement-assignments", authMiddleware(), userRequirementAssignmentsRouter);
-app.use("/reminder-members", authMiddleware(), adminStoreMembersRouter);
+app.use("/user-requirements", authMiddleware({ allowNoProfiles: true }), userRequirementsRouter);
+app.use("/mapping-user-requirements", authMiddleware({ allowNoProfiles: true }), mappingUserRequirementsRouter);
+app.use(
+  "/user-requirement-assignments",
+  authMiddleware({ allowNoProfiles: true }),
+  userRequirementAssignmentsRouter
+);
+app.use("/reminder-members", authMiddleware({ allowNoProfiles: true }), adminStoreMembersRouter);
 app.use("/tenant-requirements", authMiddleware(), tenantRequirementsRouter);
 app.use("/tenant-requirement-value-types", authMiddleware(), tenantRequirementValueTypesRouter);
 app.use("/tenant-requirement-real-data", authMiddleware(), tenantRequirementRealDataRouter);

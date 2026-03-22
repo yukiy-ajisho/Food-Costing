@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
 import { CompanyRequirement } from "../../types/database";
+import { authorizeUnified, UnifiedCompanyAction } from "../../authz/unified/authorize";
 
 const router = Router();
 
 /**
  * GET /company-requirements/admin-companies
- * 現在のユーザーが company_admin または company_director である会社一覧（Select company 用）
+ * 現在のユーザーが company_admin または company_director である会社一覧（Select company 用）。
+ * 認可: unified Cedar（manage_members で会社ごとに許可判定）。
  */
 router.get("/admin-companies", async (req, res) => {
   try {
@@ -14,22 +16,30 @@ router.get("/admin-companies", async (req, res) => {
     const { data: members, error: memError } = await supabase
       .from("company_members")
       .select("company_id")
-      .eq("user_id", userId)
-      .in("role", ["company_admin", "company_director"]);
+      .eq("user_id", userId);
 
     if (memError) {
       return res.status(500).json({ error: memError.message });
     }
 
-    const companyIds = [...new Set((members ?? []).map((m) => m.company_id))];
-    if (companyIds.length === 0) {
+    const candidateIds = [...new Set((members ?? []).map((m) => m.company_id))];
+    const accessCompanyIds: string[] = [];
+    for (const companyId of candidateIds) {
+      const allowed = await authorizeUnified(
+        userId,
+        UnifiedCompanyAction.manage_members,
+        { type: "Company", id: companyId }
+      );
+      if (allowed) accessCompanyIds.push(companyId);
+    }
+    if (accessCompanyIds.length === 0) {
       return res.json({ companies: [] });
     }
 
     const { data: companies, error: compError } = await supabase
       .from("companies")
       .select("id, company_name")
-      .in("id", companyIds)
+      .in("id", accessCompanyIds)
       .order("company_name", { ascending: true });
 
     if (compError) {
@@ -46,6 +56,7 @@ router.get("/admin-companies", async (req, res) => {
 /**
  * GET /company-requirements
  * Query: company_id (optional). 自分がアクセス可能な会社に属する要件一覧。
+ * 認可: unified Cedar（manage_members で会社ごとに許可判定）。
  */
 router.get("/", async (req, res) => {
   try {
@@ -55,10 +66,18 @@ router.get("/", async (req, res) => {
     const { data: members } = await supabase
       .from("company_members")
       .select("company_id")
-      .eq("user_id", userId)
-      .in("role", ["company_admin", "company_director"]);
+      .eq("user_id", userId);
 
-    const accessCompanyIds = [...new Set((members ?? []).map((m) => m.company_id))];
+    const candidateIds = [...new Set((members ?? []).map((m) => m.company_id))];
+    const accessCompanyIds: string[] = [];
+    for (const cid of candidateIds) {
+      const allowed = await authorizeUnified(
+        userId,
+        UnifiedCompanyAction.manage_members,
+        { type: "Company", id: cid }
+      );
+      if (allowed) accessCompanyIds.push(cid);
+    }
     if (accessCompanyIds.length === 0) {
       return res.json([]);
     }
@@ -91,25 +110,27 @@ router.get("/", async (req, res) => {
 
 /**
  * GET /company-requirements/:id
+ * 認可: unified Cedar（当該要件の company_id に対して manage_members で判定）。
  */
 router.get("/:id", async (req, res) => {
   try {
     const userId = req.user!.id;
-    const { data: members } = await supabase
-      .from("company_members")
-      .select("company_id")
-      .eq("user_id", userId)
-      .in("role", ["company_admin", "company_director"]);
-    const accessCompanyIds = [...new Set((members ?? []).map((m) => m.company_id))];
-
     const { data, error } = await supabase
       .from("company_requirements")
       .select("*")
       .eq("id", req.params.id)
-      .in("company_id", accessCompanyIds)
       .single();
 
     if (error || !data) {
+      return res.status(404).json({ error: "Requirement not found" });
+    }
+
+    const allowed = await authorizeUnified(
+      userId,
+      UnifiedCompanyAction.manage_members,
+      { type: "Company", id: data.company_id }
+    );
+    if (!allowed) {
       return res.status(404).json({ error: "Requirement not found" });
     }
 
@@ -136,13 +157,13 @@ router.post("/", async (req, res) => {
     }
 
     const userId = req.user!.id;
-    const { data: members } = await supabase
-      .from("company_members")
-      .select("company_id")
-      .eq("user_id", userId)
-      .in("role", ["company_admin", "company_director"]);
-    const accessCompanyIds = [...new Set((members ?? []).map((m) => m.company_id))];
-    if (!accessCompanyIds.includes(body.company_id.trim())) {
+    const companyId = body.company_id.trim();
+    const allowed = await authorizeUnified(
+      userId,
+      UnifiedCompanyAction.manage_members,
+      { type: "Company", id: companyId }
+    );
+    if (!allowed) {
       return res.status(403).json({ error: "Access denied to this company" });
     }
 
@@ -177,21 +198,22 @@ router.put("/:id", async (req, res) => {
     const { id } = req.params;
     const body: Partial<CompanyRequirement> = req.body;
 
-    const { data: members } = await supabase
-      .from("company_members")
-      .select("company_id")
-      .eq("user_id", userId)
-      .in("role", ["company_admin", "company_director"]);
-    const accessCompanyIds = [...new Set((members ?? []).map((m) => m.company_id))];
-
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from("company_requirements")
-      .select("id")
+      .select("company_id")
       .eq("id", id)
-      .in("company_id", accessCompanyIds)
       .single();
 
-    if (!existing) {
+    if (existingError || !existing) {
+      return res.status(404).json({ error: "Requirement not found" });
+    }
+    const allowed = await authorizeUnified(
+      userId,
+      UnifiedCompanyAction.manage_members,
+      { type: "Company", id: existing.company_id }
+    );
+    if (!allowed) {
+      // 既存挙動に合わせて、アクセス不可の場合は 404 に倒す
       return res.status(404).json({ error: "Requirement not found" });
     }
 
@@ -230,21 +252,22 @@ router.delete("/:id", async (req, res) => {
     const userId = req.user!.id;
     const { id } = req.params;
 
-    const { data: members } = await supabase
-      .from("company_members")
-      .select("company_id")
-      .eq("user_id", userId)
-      .in("role", ["company_admin", "company_director"]);
-    const accessCompanyIds = [...new Set((members ?? []).map((m) => m.company_id))];
-
-    const { data: existing } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from("company_requirements")
-      .select("id")
+      .select("company_id")
       .eq("id", id)
-      .in("company_id", accessCompanyIds)
       .single();
 
-    if (!existing) {
+    if (existingError || !existing) {
+      return res.status(404).json({ error: "Requirement not found" });
+    }
+    const allowed = await authorizeUnified(
+      userId,
+      UnifiedCompanyAction.manage_members,
+      { type: "Company", id: existing.company_id }
+    );
+    if (!allowed) {
+      // 既存挙動に合わせて、アクセス不可の場合は 404 に倒す
       return res.status(404).json({ error: "Requirement not found" });
     }
 

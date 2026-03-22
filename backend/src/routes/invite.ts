@@ -2,12 +2,8 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { supabase } from "../config/supabase";
 import { authMiddleware } from "../middleware/auth";
-import { authorizationMiddleware } from "../middleware/authorization";
-import {
-  getCreateResource,
-  getCollectionResource,
-} from "../middleware/resource-helpers";
-import { withTenantFilter } from "../middleware/tenant-filter";
+import { authorizeTeamTenantAccess } from "../authz/unified/authorize";
+import { teamTenantAuthorizationMiddleware } from "../middleware/team-tenant-authorization";
 import { sendInvitationEmail } from "../services/email";
 
 const router = Router();
@@ -16,14 +12,14 @@ const router = Router();
  * POST /invite
  * 招待を作成してメールを送信
  * Body: { email: string, role: "manager" | "staff", tenant_id: string }
- * 認可: Adminのみ（Cedar）
+ * 認可: tenant::manage_members（Cedar）または親会社の company_admin / company_director（company::manage_tenant_team）
  */
 router.post(
   "/",
-  authMiddleware(),
-  authorizationMiddleware("create", (req) =>
-    getCreateResource(req, "invitation")
-  ),
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
   async (req, res) => {
     try {
       const { email, role, tenant_id } = req.body;
@@ -45,29 +41,16 @@ router.post(
         });
       }
 
-      // 現在のテナントIDを取得（選択されたテナントID、または最初のテナント）
-      const currentTenantId =
-        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
-      console.log("[POST /invite] Debug - currentTenantId:", currentTenantId);
-      console.log("[POST /invite] Debug - tenant_id from body:", tenant_id);
-      console.log(
-        "[POST /invite] Debug - req.user.selected_tenant_id:",
-        req.user!.selected_tenant_id
+      const authz = await authorizeTeamTenantAccess(
+        userId,
+        tenant_id,
+        "manage_members",
+        req.user!.roles
       );
-      console.log(
-        "[POST /invite] Debug - req.user.tenant_ids:",
-        req.user!.tenant_ids
-      );
-      if (currentTenantId !== tenant_id) {
-        console.log("[POST /invite] Error - Tenant ID mismatch:", {
-          currentTenantId,
-          tenant_id,
-          selected_tenant_id: req.user!.selected_tenant_id,
-          tenant_ids: req.user!.tenant_ids,
-        });
+      if (!authz.allowed) {
         return res.status(403).json({
           error: "Forbidden",
-          details: "You can only send invitations for your selected tenant",
+          details: "Insufficient permissions to invite to this tenant",
         });
       }
 
@@ -82,32 +65,6 @@ router.post(
         return res.status(404).json({
           error: "Not found",
           details: "Tenant not found",
-        });
-      }
-
-      // 招待者の情報を取得（profilesテーブルから）
-      const { data: inviterProfile, error: inviterError } = await supabase
-        .from("profiles")
-        .select("user_id")
-        .eq("user_id", userId)
-        .eq("tenant_id", tenant_id)
-        .single();
-
-      console.log("[POST /invite] Debug - inviterProfile:", inviterProfile);
-      console.log("[POST /invite] Debug - inviterError:", inviterError);
-      if (inviterError || !inviterProfile) {
-        console.log(
-          "[POST /invite] Error - User is not a member of this tenant:",
-          {
-            userId,
-            tenant_id,
-            inviterError,
-            inviterProfile,
-          }
-        );
-        return res.status(403).json({
-          error: "Forbidden",
-          details: "You are not a member of this tenant",
         });
       }
 
@@ -323,26 +280,34 @@ router.get("/verify/:token", async (req, res) => {
 
 /**
  * GET /invite
- * 招待一覧を取得（Adminのみ）
- * 認可: Adminのみ（Cedar）
- * テナントフィルタリング: 選択されたテナントのみ
+ * 招待一覧を取得（manage_members 相当の権限が必要）
+ * 認可: authorizeTeamTenantAccess(manage_members)。X-Tenant-ID でテナントを指定（profiles 無しの会社ロール可）
  */
 router.get(
   "/",
-  authMiddleware(),
-  authorizationMiddleware("read", (req) =>
-    getCollectionResource(req, "invitation")
-  ),
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
+  teamTenantAuthorizationMiddleware("manage_members", {
+    tenantIdSource: "body_first",
+  }),
   async (req, res) => {
     try {
-      // テナントフィルタリング
-      let query = supabase
+      const tenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+      if (!tenantId) {
+        return res.status(400).json({
+          error: "Tenant context required",
+          details: "Send X-Tenant-ID header for the tenant to list invitations",
+        });
+      }
+
+      const { data: invitations, error } = await supabase
         .from("invitations")
         .select("*")
+        .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false });
-      query = withTenantFilter(query, req);
-
-      const { data: invitations, error } = await query;
 
       if (error) {
         console.error("[GET /invite] Error fetching invitations:", error);

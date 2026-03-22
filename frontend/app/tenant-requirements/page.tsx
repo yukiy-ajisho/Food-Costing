@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useTenant } from "@/contexts/TenantContext";
 import {
   Plus,
   Edit,
@@ -13,7 +14,6 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
-import { apiRequest } from "@/lib/api";
 import {
   tenantRequirementsAPI,
   type TenantRequirement,
@@ -103,15 +103,21 @@ function getExpiration(
   return addDays(dueDate, n);
 }
 
-interface AdminTenant {
-  id: string;
-  name: string;
-  type: string;
-}
-
 export default function TenantRequirementsPage() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const {
+    tenants,
+    selectedTenantId,
+    setSelectedTenantId,
+    loading: tenantsLoading,
+  } = useTenant();
+  // admin 権限を持つテナントのみ Status・Documents タブで使用
+  const adminTenants = useMemo(
+    () => tenants.filter((t) => t.role === "admin"),
+    [tenants]
+  );
+  const adminTenantsLoading = tenantsLoading;
 
   const [activeTab, setActiveTab] = useState<TabType>("list");
   const [requirements, setRequirements] = useState<TenantRequirement[]>([]);
@@ -119,6 +125,7 @@ export default function TenantRequirementsPage() {
   const [requirementsError, setRequirementsError] = useState<string | null>(
     null,
   );
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [requirementSaving, setRequirementSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -137,10 +144,7 @@ export default function TenantRequirementsPage() {
   const [formValidityMonths, setFormValidityMonths] = useState("");
   const [formValidityDays, setFormValidityDays] = useState("");
 
-  // Status tab（admin のテナントのみ）
-  const [adminTenants, setAdminTenants] = useState<AdminTenant[]>([]);
-  const [adminTenantsLoading, setAdminTenantsLoading] = useState(false);
-  const [selectedTenantId, setSelectedTenantId] = useState<string | null>(null);
+  // Status tab（admin のテナントのみ） ← adminTenants / adminTenantsLoading / selectedTenantId は上部で TenantContext から取得
   const [statusRequirements, setStatusRequirements] = useState<
     TenantRequirement[]
   >([]);
@@ -218,6 +222,13 @@ export default function TenantRequirementsPage() {
   const [detailEditEstimatedDueDate, setDetailEditEstimatedDueDate] =
     useState("");
 
+  const isPermissionErrorMessage = (message: string) => {
+    return (
+      message.includes("Forbidden: Insufficient permissions") ||
+      message.includes("Access denied")
+    );
+  };
+
   const fetchRequirements = async () => {
     setRequirementsLoading(true);
     setRequirementsError(null);
@@ -225,9 +236,13 @@ export default function TenantRequirementsPage() {
       const list = await tenantRequirementsAPI.getAll();
       setRequirements(list);
     } catch (err) {
-      setRequirementsError(
-        err instanceof Error ? err.message : "Failed to load requirements",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to load requirements";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        setRequirementsError(message);
+      }
     } finally {
       setRequirementsLoading(false);
     }
@@ -237,29 +252,6 @@ export default function TenantRequirementsPage() {
     fetchRequirements();
   }, []);
 
-  const fetchAdminTenants = useCallback(async () => {
-    setAdminTenantsLoading(true);
-    try {
-      const data = await apiRequest<{ tenants: AdminTenant[] }>(
-        "/tenant-requirements/admin-tenants",
-      );
-      setAdminTenants(data.tenants ?? []);
-    } catch {
-      setAdminTenants([]);
-    } finally {
-      setAdminTenantsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (
-      activeTab === "list" ||
-      activeTab === "status" ||
-      activeTab === "documents"
-    ) {
-      fetchAdminTenants();
-    }
-  }, [activeTab, fetchAdminTenants]);
 
   // Value types を取得（List の Add モーダル・Status・Documents タブで利用）
   useEffect(() => {
@@ -272,7 +264,15 @@ export default function TenantRequirementsPage() {
     tenantRequirementValueTypesAPI
       .getAll()
       .then(setValueTypes)
-      .catch(() => setValueTypes([]));
+      .catch((err) => {
+        const message =
+          err instanceof Error ? err.message : "Failed to load value types";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setValueTypes([]);
+        }
+      });
   }, [activeTab]);
 
   // 選択テナントの要件一覧を取得（Status と Documents で共通利用）
@@ -287,7 +287,17 @@ export default function TenantRequirementsPage() {
     tenantRequirementsAPI
       .getAll(selectedTenantId)
       .then(setStatusRequirements)
-      .catch(() => setStatusRequirements([]));
+      .catch((err) => {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Failed to load status requirements";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setStatusRequirements([]);
+        }
+      });
   }, [activeTab, selectedTenantId]);
 
   const fetchStatusData = useCallback(
@@ -369,9 +379,13 @@ export default function TenantRequirementsPage() {
         setStatusMapping(map);
         setStatusMaxGroupKeyByReq(maxGroupKeyByReq);
       } catch (err) {
-        setStatusError(
-          err instanceof Error ? err.message : "Failed to load status data",
-        );
+        const message =
+          err instanceof Error ? err.message : "Failed to load status data";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setStatusError(message);
+        }
       } finally {
         if (background) {
           setStatusRefreshing(false);
@@ -409,9 +423,15 @@ export default function TenantRequirementsPage() {
         ].sort((a, b) => b - a);
         setDetailSelectedGroupKey(keys[0] ?? null);
       })
-      .catch(() => {
-        setDetailRealDataRows([]);
-        setDetailSelectedGroupKey(null);
+      .catch((err) => {
+        const message =
+          err instanceof Error ? err.message : "Failed to load detail data";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setDetailRealDataRows([]);
+          setDetailSelectedGroupKey(null);
+        }
       });
   }, [detailModalReqId]);
 
@@ -522,7 +542,13 @@ export default function TenantRequirementsPage() {
       setDetailRealDataRows(fresh as TenantRequirementRealDataRow[]);
       setDetailUploadMode(false);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to upload document");
+      const message =
+        err instanceof Error ? err.message : "Failed to upload document";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setDetailUploadSaving(false);
     }
@@ -630,7 +656,12 @@ export default function TenantRequirementsPage() {
       setDetailPendingDeleteKeys([]);
       setDetailModalEditMode(false);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save");
+      const message = err instanceof Error ? err.message : "Failed to save";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setSavingDetail(false);
     }
@@ -756,9 +787,13 @@ export default function TenantRequirementsPage() {
       handleCancelRecordPayment();
       await fetchStatusData({ background: true });
     } catch (err) {
-      alert(
-        err instanceof Error ? err.message : "Failed to save record payment",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to save record payment";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setSavingRecordPayment(false);
     }
@@ -889,7 +924,12 @@ export default function TenantRequirementsPage() {
         await fetchStatusData({ background: true });
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save");
+      const message = err instanceof Error ? err.message : "Failed to save";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setRequirementSaving(false);
     }
@@ -905,7 +945,12 @@ export default function TenantRequirementsPage() {
       await tenantRequirementsAPI.delete(id);
       await fetchRequirements();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete");
+      const message = err instanceof Error ? err.message : "Failed to delete";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     }
   };
 
@@ -914,6 +959,24 @@ export default function TenantRequirementsPage() {
       "Edit Requirement")
     : "New Requirement";
   const isNewRequirement = !editingId;
+
+  if (permissionDenied) {
+    return (
+      <div className="px-8 pb-8">
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            You don&apos;t have permission.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-8 pb-8">

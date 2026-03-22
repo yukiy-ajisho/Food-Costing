@@ -3,6 +3,8 @@
 import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/api";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useCompany, type Company } from "@/contexts/CompanyContext";
+import { useTenant } from "@/contexts/TenantContext";
 import {
   Edit,
   Save,
@@ -44,12 +46,6 @@ interface Invitation {
   expires_at: string;
 }
 
-interface Company {
-  id: string;
-  company_name: string;
-  role?: string;
-}
-
 interface CompanyMemberRow {
   user_id: string;
   role: string;
@@ -69,18 +65,22 @@ interface CompanyInvitationRow {
 
 export default function TeamPage() {
   const { theme } = useTheme();
-  // Company 階層（Team ではヘッダーのテナントセレクターを使わず、ページ内でテナントを選択する）
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
-  const [companyTenants, setCompanyTenants] = useState<
-    { id: string; name: string; type: string; created_at?: string }[]
-  >([]);
-  const [loadingCompanies, setLoadingCompanies] = useState(true);
+  const {
+    companies,
+    selectedCompanyId,
+    setSelectedCompanyId,
+    loading: companyLoading,
+    addCompany,
+  } = useCompany();
+  const {
+    tenants: companyTenants,
+    selectedTenantId: teamSelectedTenantId,
+    setSelectedTenantId: setTeamSelectedTenantId,
+    addTenant,
+  } = useTenant();
   const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
   const [newCompanyName, setNewCompanyName] = useState("");
   const [creatingCompany, setCreatingCompany] = useState(false);
-  // Team ページ内でのテナント選択（ヘッダーとは連動しない）
-  const [teamSelectedTenantId, setTeamSelectedTenantId] = useState<string | null>(null);
   // 選択中テナントの情報を表示
   const [tenantsWithMembers, setTenantsWithMembers] = useState<
     TenantWithMembers[]
@@ -124,71 +124,6 @@ export default function TeamPage() {
   const [sendingInviteDirector, setSendingInviteDirector] = useState(false);
 
   const isDark = theme === "dark";
-  const isAdminOfAnyCompany = companies.some(
-    (c) => c.role === "company_admin",
-  );
-
-  // 会社一覧を取得
-  const fetchCompanies = async () => {
-    try {
-      const data = await apiRequest<{ companies: Company[] }>("/companies");
-      setCompanies(data.companies ?? []);
-    } catch (e) {
-      console.error("Failed to fetch companies:", e);
-      setCompanies([]);
-    } finally {
-      setLoadingCompanies(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchCompanies();
-  }, []);
-
-  // 選択した会社に属するテナント一覧を取得（Select tenant の候補として使用）
-  useEffect(() => {
-    if (!selectedCompanyId) {
-      setCompanyTenants([]);
-      setTeamSelectedTenantId(null);
-      return;
-    }
-    const fetchCompanyTenants = async () => {
-      try {
-        const data = await apiRequest<{
-          tenants: { id: string; name: string; type: string; created_at?: string }[];
-        }>(`/companies/${selectedCompanyId}/tenants`);
-        setCompanyTenants(data.tenants ?? []);
-      } catch (e) {
-        console.error("Failed to fetch company tenants:", e);
-        setCompanyTenants([]);
-      }
-    };
-    fetchCompanyTenants();
-  }, [selectedCompanyId]);
-
-  // 会社を切り替えたらテナント選択をリセット
-  useEffect(() => {
-    if (!selectedCompanyId) {
-      setTeamSelectedTenantId(null);
-      return;
-    }
-    setTeamSelectedTenantId(null);
-  }, [selectedCompanyId]);
-
-  // 選択会社のテナント一覧が入ったら、未選択なら先頭を選択（Select tenant は選択会社配下のみ表示するため）
-  useEffect(() => {
-    if (
-      selectedCompanyId &&
-      companyTenants.length > 0 &&
-      (teamSelectedTenantId === null ||
-        !companyTenants.some((t) => t.id === teamSelectedTenantId))
-    ) {
-      setTeamSelectedTenantId(companyTenants[0].id);
-    }
-    if (selectedCompanyId && companyTenants.length === 0) {
-      setTeamSelectedTenantId(null);
-    }
-  }, [selectedCompanyId, companyTenants, teamSelectedTenantId]);
 
   // 選択した会社のメンバー一覧を取得
   useEffect(() => {
@@ -255,9 +190,11 @@ export default function TeamPage() {
             type: string;
             created_at: string;
             role: string;
-          }>(`/tenants/${teamSelectedTenantId}`),
+          }>(`/tenants/${teamSelectedTenantId}`, {}, teamSelectedTenantId),
           apiRequest<{ members: TenantMember[] }>(
             `/tenants/${teamSelectedTenantId}/members`,
+            {},
+            teamSelectedTenantId,
           ),
         ]);
 
@@ -322,7 +259,7 @@ export default function TeamPage() {
         method: "POST",
         body: JSON.stringify({ company_name: name }),
       });
-      setCompanies((prev) => [...prev, company]);
+      addCompany(company);
       setSelectedCompanyId(company.id);
       setShowCreateCompanyModal(false);
       setNewCompanyName("");
@@ -366,15 +303,15 @@ export default function TeamPage() {
         }),
       });
 
-      setCompanyTenants((prev) => [
-        ...prev,
-        {
-          id: newTenant.id,
-          name: newTenant.name,
-          type: newTenant.type,
-          created_at: newTenant.created_at,
-        },
-      ]);
+      addTenant({
+        id: newTenant.id,
+        name: newTenant.name,
+        type: newTenant.type,
+        created_at: newTenant.created_at,
+        role: newTenant.role,
+        company_id: selectedCompanyId,
+        company_name: companies.find((c) => c.id === selectedCompanyId)?.company_name ?? null,
+      });
       setTeamSelectedTenantId(newTenant.id);
       setShowCreateTenantModal(false);
       setNewTenantName("");
@@ -463,10 +400,14 @@ export default function TeamPage() {
         name: string;
         type: string;
         created_at: string;
-      }>(`/tenants/${tenantId}`, {
-        method: "PUT",
-        body: JSON.stringify({ name: editedName.trim() }),
-      });
+      }>(
+        `/tenants/${tenantId}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ name: editedName.trim() }),
+        },
+        tenantId,
+      );
 
       // テナント情報を更新
       setTenantsWithMembers((prev) =>
@@ -496,10 +437,14 @@ export default function TeamPage() {
     newRole: "admin" | "manager" | "staff",
   ) => {
     try {
-      await apiRequest(`/tenants/${tenantId}/members/${userId}/role`, {
-        method: "PUT",
-        body: JSON.stringify({ role: newRole }),
-      });
+      await apiRequest(
+        `/tenants/${tenantId}/members/${userId}/role`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ role: newRole }),
+        },
+        tenantId,
+      );
 
       // メンバー一覧を更新
       setTenantsWithMembers((prev) =>
@@ -529,9 +474,11 @@ export default function TeamPage() {
     }
 
     try {
-      await apiRequest(`/tenants/${tenantId}/members/${userId}`, {
-        method: "DELETE",
-      });
+      await apiRequest(
+        `/tenants/${tenantId}/members/${userId}`,
+        { method: "DELETE" },
+        tenantId,
+      );
 
       // メンバー一覧を更新
       setTenantsWithMembers((prev) =>
@@ -605,7 +552,7 @@ export default function TeamPage() {
     }
   };
 
-  if (loadingCompanies) {
+  if (companyLoading) {
     return (
       <div className="p-8">
         <div className="flex items-center justify-center h-64">
@@ -628,7 +575,7 @@ export default function TeamPage() {
             <Building2 className="h-5 w-5" />
             Companies
           </h2>
-          {loadingCompanies ? (
+          {companyLoading ? (
             <div
               className={
                 isDark ? "text-slate-400" : "text-gray-500"
@@ -687,19 +634,17 @@ export default function TeamPage() {
                     </option>
                   ))}
                 </select>
-                {!isAdminOfAnyCompany && (
-                  <button
-                    onClick={() => setShowCreateCompanyModal(true)}
-                    className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm ${
-                      isDark
-                        ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
-                        : "bg-gray-200 hover:bg-gray-300 text-gray-700"
-                    }`}
-                  >
-                    <Plus className="h-4 w-4" />
-                    New company
-                  </button>
-                )}
+                <button
+                  onClick={() => setShowCreateCompanyModal(true)}
+                  className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm ${
+                    isDark
+                      ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
+                      : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                  }`}
+                >
+                  <Plus className="h-4 w-4" />
+                  New company
+                </button>
               </div>
               {selectedCompanyId && (
                 <div className="mt-4 space-y-2">

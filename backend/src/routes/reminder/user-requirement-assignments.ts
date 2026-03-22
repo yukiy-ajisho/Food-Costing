@@ -1,24 +1,40 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
+import { hasAnyCompanyAccess } from "./authorization-helpers";
+import {
+  getAuthorizedCompanyAdminDirectorCreatorUserIds,
+  getCompanyAdminDirectorCompanyIdsForUser,
+  getCompanyIdsForUserViaProfiles,
+  isUserRequirementAccessibleByCompany,
+} from "./authorization-helpers";
 
 const router = Router();
 
 /**
  * GET /user-requirement-assignments
- * 自分が作成した要件（created_by = 自分）に紐づく適用状態を返す。
+ * company_admin / company_director が操作可能な要件に紐づく適用状態を返す。
  * Query: user_requirement_ids (optional, comma), user_ids (optional, comma).
  * 返却: { assignments: { user_id, user_requirement_id, is_currently_assigned }[] }
  */
 router.get("/", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const requirementIds = req.query.user_requirement_ids as string | undefined;
     const userIds = req.query.user_ids as string | undefined;
+
+    const creatorUserIds = await getAuthorizedCompanyAdminDirectorCreatorUserIds(userId);
+    if (creatorUserIds.length === 0) {
+      return res.json({ assignments: [] });
+    }
 
     const { data: myRequirementIds } = await supabase
       .from("user_requirements")
       .select("id")
-      .eq("created_by", userId);
+      .in("created_by", creatorUserIds);
 
     const ids = (myRequirementIds ?? []).map((r) => r.id);
     if (ids.length === 0) {
@@ -63,12 +79,15 @@ router.get("/", async (req, res) => {
  * PATCH /user-requirement-assignments
  * Body: { user_id, user_requirement_id, is_currently_assigned: boolean }
  * 指定 (user_id, user_requirement_id) の is_currently_assigned を更新。
- * 要件は created_by = 自分 のもののみ操作可能。
  * レコードが無い場合（Add）は INSERT する（バックフィル未実施時のため）。
  */
 router.patch("/", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { user_id, user_requirement_id, is_currently_assigned } = req.body;
 
     if (
@@ -83,13 +102,37 @@ router.patch("/", async (req, res) => {
 
     const { data: requirement, error: reqError } = await supabase
       .from("user_requirements")
-      .select("id")
+      .select("id, created_by")
       .eq("id", user_requirement_id)
-      .eq("created_by", userId)
       .single();
 
     if (reqError || !requirement) {
       return res.status(404).json({ error: "Requirement not found or access denied" });
+    }
+
+    const ok = await isUserRequirementAccessibleByCompany(
+      userId,
+      requirement.created_by ?? null
+    );
+    if (!ok) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const createdByUserId = requirement.created_by;
+    if (!createdByUserId) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    // requirement（created_by）スコープの company に所属しているユーザーだけ変更可能
+    const creatorCompanyIds = await getCompanyAdminDirectorCompanyIdsForUser(
+      createdByUserId
+    );
+    const targetCompanyIds = await getCompanyIdsForUserViaProfiles(user_id);
+    const inScope = creatorCompanyIds.some((cid) =>
+      targetCompanyIds.includes(cid)
+    );
+    if (!inScope) {
+      return res.status(403).json({ error: "Access denied" });
     }
 
     const { data: existing } = await supabase

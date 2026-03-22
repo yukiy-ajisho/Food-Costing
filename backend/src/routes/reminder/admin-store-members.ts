@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
+import { getAuthorizedTenantIds } from "./authorization-helpers";
 
 const router = Router();
 
@@ -12,19 +13,8 @@ router.get("/", async (req, res) => {
   try {
     const userId = req.user!.id;
 
-    // 自分が admin である tenant_id 一覧
-    const { data: myAdminProfiles, error: adminError } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .eq("role", "admin");
-
-    if (adminError) {
-      return res.status(500).json({ error: adminError.message });
-    }
-
-    const adminTenantIds = [...new Set((myAdminProfiles ?? []).map((p) => p.tenant_id))];
-    if (adminTenantIds.length === 0) {
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
+    if (authorizedTenantIds.length === 0) {
       return res.json({ members: [] });
     }
 
@@ -32,7 +22,7 @@ router.get("/", async (req, res) => {
     const { data: profiles, error: profilesError } = await supabase
       .from("profiles")
       .select("user_id")
-      .in("tenant_id", adminTenantIds);
+      .in("tenant_id", authorizedTenantIds);
 
     if (profilesError) {
       return res.status(500).json({ error: profilesError.message });

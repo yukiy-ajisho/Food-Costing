@@ -1089,6 +1089,7 @@ export default function CostPage() {
   const { selectedTenantId, loading: tenantLoading, tenants: contextTenants } =
     useTenant();
   const isDark = theme === "dark";
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
   const [baseItems, setBaseItems] = useState<BaseItem[]>([]);
@@ -1191,6 +1192,8 @@ export default function CostPage() {
   useEffect(() => {
     // tenantLoadingがtrueの間はフェッチしない（二重fetchを防ぐ）
     if (tenantLoading) return;
+
+    setPermissionDenied(false);
 
     // テナントがないことが確定したので、loadingをfalseにする
     if (!selectedTenantId) {
@@ -1360,7 +1363,12 @@ export default function CostPage() {
         }
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("データの取得に失敗しました");
+        }
       } finally {
         setLoading(false);
       }
@@ -3106,6 +3114,24 @@ export default function CostPage() {
     setSearchTerm("");
     setAppliedSearchTerm("");
   };
+
+  if (permissionDenied) {
+    return (
+      <div className="p-8">
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            You don&apos;t have permission.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

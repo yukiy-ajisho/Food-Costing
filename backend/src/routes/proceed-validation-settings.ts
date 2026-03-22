@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { ProceedValidationSettings } from "../types/database";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
+import { getUnifiedTenantResource } from "../middleware/unified-resource-helpers";
 
 const router = Router();
 
@@ -8,7 +11,13 @@ const router = Router();
  * GET /proceed-validation-settings
  * ユーザーのProceed Validation Settingsを取得
  */
-router.get("/", async (req, res) => {
+router.get(
+  "/",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.manage_settings,
+    getUnifiedTenantResource
+  ),
+  async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("proceed_validation_settings")
@@ -33,13 +42,20 @@ router.get("/", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 /**
  * PUT /proceed-validation-settings
  * Proceed Validation Settingsを更新（存在しない場合は作成）
  */
-router.put("/", async (req, res) => {
+router.put(
+  "/",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.manage_settings,
+    getUnifiedTenantResource
+  ),
+  async (req, res) => {
   try {
     const settings: Partial<ProceedValidationSettings> = req.body;
 
@@ -100,6 +116,7 @@ router.put("/", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 export default router;

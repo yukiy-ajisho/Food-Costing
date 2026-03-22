@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc && mkdir -p dist/authz && cp src/authz/schema.json dist/authz/ && cp src/authz/policies.cedar dist/authz/",
+    "build": "tsc && mkdir -p dist/authz dist/authz/team dist/authz/unified && cp src/authz/schema.json src/authz/policies.cedar dist/authz/ && cp src/authz/team/schema.json src/authz/team/policies.cedar dist/authz/team/ && cp src/authz/unified/schema.json src/authz/unified/policies.cedar dist/authz/unified/",
     "start": "node dist/index.js",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit",

@@ -1,6 +1,13 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
 import { MappingUserRequirement } from "../../types/database";
+import { hasAnyCompanyAccess } from "./authorization-helpers";
+import {
+  getAuthorizedCompanyAdminDirectorCreatorUserIds,
+  getCompanyAdminDirectorCompanyIdsForUser,
+  getCompanyIdsForUserViaProfiles,
+  isUserRequirementAccessibleByCompany,
+} from "./authorization-helpers";
 
 const router = Router();
 
@@ -8,13 +15,22 @@ const router = Router();
  * GET /mapping-user-requirements
  * 指定した user_ids / user_requirement_ids の組み合わせについて、
  * 各 (user_id, user_requirement_id) の最新1件を返す。
- * 対象は自分が作成した要件（created_by = 自分）に紐づくマッピングのみ。
+ * 対象は company_admin / company_director が操作可能な要件に紐づくマッピングのみ。
  */
 router.get("/", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const userIds = req.query.user_ids as string | undefined;
     const requirementIds = req.query.user_requirement_ids as string | undefined;
+
+    const creatorUserIds = await getAuthorizedCompanyAdminDirectorCreatorUserIds(userId);
+    if (creatorUserIds.length === 0) {
+      return res.json([]);
+    }
 
     // 1 クエリ: user_requirements を INNER JOIN し created_by でフィルタ（2 本のクエリをやめる）
     let query = supabase
@@ -22,7 +38,7 @@ router.get("/", async (req, res) => {
       .select(
         "id, user_id, user_requirement_id, issued_date, specific_date, created_at, updated_at, user_requirements!inner(created_by)",
       )
-      .eq("user_requirements.created_by", userId)
+      .in("user_requirements.created_by", creatorUserIds)
       .order("created_at", { ascending: false });
 
     if (userIds) {
@@ -68,7 +84,7 @@ router.get("/", async (req, res) => {
 /**
  * POST /mapping-user-requirements
  * 新規マッピングを1件作成（更新時も新規 INSERT で履歴を残す）。
- * user_requirement_id は自分が作成した要件のみ許可。
+ * user_requirement_id は company_admin / company_director が操作可能な要件のみ許可。
  */
 router.post("/", async (req, res) => {
   try {
@@ -86,16 +102,47 @@ router.post("/", async (req, res) => {
     }
 
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const creatorUserIds = await getAuthorizedCompanyAdminDirectorCreatorUserIds(userId);
+    if (creatorUserIds.length === 0) {
+      return res.status(403).json({ error: "Access denied" });
+    }
 
     const { data: requirement, error: reqError } = await supabase
       .from("user_requirements")
-      .select("id")
+      .select("id, created_by")
       .eq("id", body.user_requirement_id)
-      .eq("created_by", userId)
+      .in("created_by", creatorUserIds)
       .single();
 
     if (reqError || !requirement) {
       return res.status(404).json({ error: "Requirement not found or access denied" });
+    }
+
+    const ok = await isUserRequirementAccessibleByCompany(
+      userId,
+      requirement.created_by ?? null
+    );
+    if (!ok || !requirement.created_by) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const createdByUserId = requirement.created_by;
+
+    // その要件（created_by）に紐づく company スコープにいるユーザーだけが対象
+    const creatorCompanyIds = await getCompanyAdminDirectorCompanyIdsForUser(
+      createdByUserId
+    );
+    const targetCompanyIds = await getCompanyIdsForUserViaProfiles(
+      body.user_id
+    );
+    const inScope = creatorCompanyIds.some((cid) => targetCompanyIds.includes(cid));
+    if (!inScope) {
+      return res.status(403).json({ error: "Access denied" });
     }
 
     const row = {

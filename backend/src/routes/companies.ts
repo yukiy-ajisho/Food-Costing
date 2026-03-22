@@ -1,8 +1,9 @@
-import { Router, Response } from "express";
+import { Router } from "express";
 import { randomUUID } from "crypto";
 import { supabase } from "../config/supabase";
 import { authMiddleware } from "../middleware/auth";
 import { sendCompanyInvitationEmail } from "../services/email";
+import { authorizeUnified, UnifiedCompanyAction } from "../authz/unified/authorize";
 
 const router = Router();
 
@@ -99,30 +100,6 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
 });
 
 /**
- * 指定 company に対して、現在ユーザーが company_admin または company_director か確認する。
- * 403 の場合は res に送って false を返す。許可時は true。
- */
-async function ensureCompanyAccess(
-  userId: string,
-  companyId: string,
-  res: Response
-): Promise<boolean> {
-  const { data: member, error } = await supabase
-    .from("company_members")
-    .select("id")
-    .eq("company_id", companyId)
-    .eq("user_id", userId)
-    .in("role", ["company_admin", "company_director"])
-    .maybeSingle();
-
-  if (error || !member) {
-    res.status(403).json({ error: "You do not have access to this company" });
-    return false;
-  }
-  return true;
-}
-
-/**
  * GET /companies/:id/members
  * その会社のメンバー一覧（company_admin / company_director）。認可: 当該会社の admin/director。
  */
@@ -136,8 +113,14 @@ router.get(
         return res.status(400).json({ error: "company id is required" });
       }
 
-      const allowed = await ensureCompanyAccess(req.user!.id, companyId, res);
-      if (!allowed) return;
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedCompanyAction.manage_members,
+        { type: "Company", id: companyId }
+      );
+      if (!allowed) {
+        return res.status(403).json({ error: "You do not have access to this company" });
+      }
 
       const { data: rows, error } = await supabase
         .from("company_members")
@@ -192,8 +175,14 @@ router.get(
         return res.status(400).json({ error: "company id is required" });
       }
 
-      const allowed = await ensureCompanyAccess(req.user!.id, companyId, res);
-      if (!allowed) return;
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedCompanyAction.manage_invitations,
+        { type: "Company", id: companyId }
+      );
+      if (!allowed) {
+        return res.status(403).json({ error: "You do not have access to this company" });
+      }
 
       const status = req.query.status as string | undefined;
 
@@ -235,8 +224,14 @@ router.post(
         return res.status(400).json({ error: "company id is required" });
       }
 
-      const allowed = await ensureCompanyAccess(req.user!.id, companyId, res);
-      if (!allowed) return;
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedCompanyAction.manage_invitations,
+        { type: "Company", id: companyId }
+      );
+      if (!allowed) {
+        return res.status(403).json({ error: "You do not have access to this company" });
+      }
 
       const { email } = req.body;
       if (!email || typeof email !== "string") {
@@ -366,8 +361,14 @@ router.delete(
         return res.status(400).json({ error: "company id and invitation id are required" });
       }
 
-      const allowed = await ensureCompanyAccess(req.user!.id, companyId, res);
-      if (!allowed) return;
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedCompanyAction.manage_invitations,
+        { type: "Company", id: companyId }
+      );
+      if (!allowed) {
+        return res.status(403).json({ error: "You do not have access to this company" });
+      }
 
       const { data: inv, error: fetchErr } = await supabase
         .from("company_invitations")
@@ -415,8 +416,14 @@ router.get("/:id/tenants", authMiddleware({ allowNoProfiles: true }), async (req
       return res.status(400).json({ error: "company id is required" });
     }
 
-    const allowed = await ensureCompanyAccess(req.user!.id, companyId, res);
-    if (!allowed) return;
+      const allowed = await authorizeUnified(
+      req.user!.id,
+        UnifiedCompanyAction.list_tenants,
+        { type: "Company", id: companyId }
+    );
+    if (!allowed) {
+      return res.status(403).json({ error: "You do not have access to this company" });
+    }
 
     const { data: links, error: linkError } = await supabase
       .from("company_tenants")
@@ -463,8 +470,14 @@ router.post(
         return res.status(400).json({ error: "company id is required" });
       }
 
-      const allowed = await ensureCompanyAccess(req.user!.id, companyId, res);
-      if (!allowed) return;
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedCompanyAction.create_tenant,
+        { type: "Company", id: companyId }
+      );
+      if (!allowed) {
+        return res.status(403).json({ error: "You do not have access to this company" });
+      }
 
       const { name, type } = req.body;
 

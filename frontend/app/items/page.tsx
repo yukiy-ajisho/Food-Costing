@@ -71,6 +71,7 @@ export default function ItemsPage() {
   >([]);
   const [isEditModeItems, setIsEditModeItems] = useState(false);
   const [loadingItems, setLoadingItems] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
   // 入力中のpurchase_quantityを文字列として保持（vp.id -> 入力中の文字列）
   const [purchaseQuantityInputs, setPurchaseQuantityInputs] = useState<
     Map<string, string>
@@ -121,6 +122,11 @@ export default function ItemsPage() {
       setFixedHeaderHeight(fixedHeaderRef.current.offsetHeight);
     }
   }, []);
+
+  useEffect(() => {
+    // タブやテナントを切り替えたら、権限メッセージをリセットする
+    setPermissionDenied(false);
+  }, [activeTab, selectedTenantId]);
 
   // 単位オプション（質量単位 + 非質量単位、順番を制御）
   const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
@@ -213,7 +219,12 @@ export default function ItemsPage() {
         setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("データの取得に失敗しました");
+        }
       } finally {
         setLoadingItems(false);
       }
@@ -270,7 +281,12 @@ export default function ItemsPage() {
         setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUI)));
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("データの取得に失敗しました");
+        }
       } finally {
         setLoadingBaseItems(false);
       }
@@ -300,7 +316,12 @@ export default function ItemsPage() {
         setOriginalVendors(JSON.parse(JSON.stringify(vendorsUI)));
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("データの取得に失敗しました");
+        }
       } finally {
         setLoadingVendors(false);
       }
@@ -1017,6 +1038,24 @@ export default function ItemsPage() {
 
   const sortedBaseItemsUI = [...baseItemsUI].sort(makeSortFn(sortOrderBaseItems));
   const sortedVendorsUI = [...vendorsUI].sort(makeSortFn(sortOrderVendors));
+
+  if (permissionDenied) {
+    return (
+      <div className="px-8 pb-8">
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            You don&apos;t have permission.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-8 pb-8">

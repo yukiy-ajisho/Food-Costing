@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
+import { hasAnyCompanyAccess } from "./authorization-helpers";
 
 const router = Router();
 
@@ -12,6 +13,10 @@ const router = Router();
 router.get("/", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const tenantId = req.query.tenant_id as string | undefined;
     const requirementIds = req.query.tenant_requirement_ids as string | undefined;
 
@@ -70,6 +75,10 @@ router.get("/", async (req, res) => {
 router.patch("/", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { tenant_id, tenant_requirement_id, is_currently_assigned } = req.body;
 
     if (

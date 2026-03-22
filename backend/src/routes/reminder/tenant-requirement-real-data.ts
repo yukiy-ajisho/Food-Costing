@@ -5,6 +5,7 @@ import {
   getDocumentPresignedUrl,
   uploadDocumentToR2,
 } from "../../lib/r2-upload";
+import { getAuthorizedTenantIds } from "./authorization-helpers";
 
 const router = Router();
 const upload = multer({
@@ -17,17 +18,12 @@ const upload = multer({
  */
 async function ensureRequirementAccess(userId: string, requirementIds: string[]): Promise<boolean> {
   if (requirementIds.length === 0) return true;
-  const { data: profiles } = await supabase
-    .from("profiles")
-    .select("tenant_id")
-    .eq("user_id", userId)
-    .eq("role", "admin");
-  const adminTenantIds = [...new Set((profiles ?? []).map((p) => p.tenant_id))];
+  const authorizedTenantIds = await getAuthorizedTenantIds(userId);
   const { data: rows } = await supabase
     .from("tenant_requirements")
     .select("id, tenant_id")
     .in("id", requirementIds);
-  return (rows ?? []).every((r) => adminTenantIds.includes(r.tenant_id));
+  return (rows ?? []).every((r) => authorizedTenantIds.includes(r.tenant_id));
 }
 
 /**

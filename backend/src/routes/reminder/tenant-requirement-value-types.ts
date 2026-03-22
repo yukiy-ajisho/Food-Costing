@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
+import { hasAnyCompanyAccess } from "./authorization-helpers";
 
 const router = Router();
 
@@ -9,6 +10,10 @@ const router = Router();
  */
 router.get("/", async (req, res) => {
   try {
+    const allowed = await hasAnyCompanyAccess(req.user!.id);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { data, error } = await supabase
       .from("tenant_requirement_value_types")
       .select("id, name, data_type")

@@ -1,5 +1,26 @@
 import { Request, Response, NextFunction } from "express";
 import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../config/supabase";
+
+async function userHasCompanyAdminOrDirectorOnTenant(
+  userId: string,
+  tenantId: string
+): Promise<boolean> {
+  const { data: link, error } = await supabase
+    .from("company_tenants")
+    .select("company_id")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (error || !link?.company_id) return false;
+  const { data: member } = await supabase
+    .from("company_members")
+    .select("id")
+    .eq("company_id", link.company_id)
+    .eq("user_id", userId)
+    .in("role", ["company_admin", "company_director"])
+    .maybeSingle();
+  return !!member;
+}
 
 // ExpressのRequest型を拡張してuser情報を追加
 /* eslint-disable @typescript-eslint/no-namespace */
@@ -29,6 +50,11 @@ interface AuthMiddlewareOptions {
    * デフォルト: false
    */
   allowNoProfiles?: boolean;
+  /**
+   * X-Tenant-ID が profiles に無くても、company_admin / company_director で
+   * company_tenants 経由に紐づくテナントなら選択テナントとして受け入れる（Team ページ用）
+   */
+  allowCompanyLinkedTenantHeader?: boolean;
 }
 
 /**
@@ -45,7 +71,10 @@ export function authMiddleware(
   res: Response,
   next: NextFunction
 ) => Promise<void | Response> {
-  const { allowNoProfiles = false } = options;
+  const {
+    allowNoProfiles = false,
+    allowCompanyLinkedTenantHeader = false,
+  } = options;
 
   return async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -119,19 +148,28 @@ export function authMiddleware(
       let selectedTenantId: string | undefined = undefined;
 
       if (selectedTenantIdHeader) {
-        // ユーザーがそのテナントに属しているか確認
-        // allowNoProfilesがtrueの場合、tenantIdsが空でもエラーにしない
-        if (tenantIds.length > 0 && !tenantIds.includes(selectedTenantIdHeader)) {
-          // 無効なテナントIDが指定された場合はエラー
+        if (tenantIds.includes(selectedTenantIdHeader)) {
+          selectedTenantId = selectedTenantIdHeader;
+        } else if (allowCompanyLinkedTenantHeader) {
+          const companyLinked = await userHasCompanyAdminOrDirectorOnTenant(
+            user.id,
+            selectedTenantIdHeader
+          );
+          if (companyLinked) {
+            selectedTenantId = selectedTenantIdHeader;
+          } else if (allowNoProfiles && tenantIds.length === 0) {
+            selectedTenantId = selectedTenantIdHeader;
+          } else if (tenantIds.length > 0) {
+            return res.status(403).json({
+              error: "User does not belong to the specified tenant",
+            });
+          }
+        } else if (allowNoProfiles && tenantIds.length === 0) {
+          selectedTenantId = selectedTenantIdHeader;
+        } else if (tenantIds.length > 0) {
           return res.status(403).json({
             error: "User does not belong to the specified tenant",
           });
-        }
-        // allowNoProfilesがtrueでtenantIdsが空の場合、selectedTenantIdHeaderをそのまま使用
-        if (allowNoProfiles && tenantIds.length === 0) {
-          selectedTenantId = selectedTenantIdHeader;
-        } else if (tenantIds.includes(selectedTenantIdHeader)) {
-          selectedTenantId = selectedTenantIdHeader;
         }
       }
 

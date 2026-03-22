@@ -1,11 +1,40 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { supabase } from "../config/supabase";
 import { LaborRole } from "../types/database";
-import { authorizationMiddleware } from "../middleware/authorization";
-import { getCollectionResource } from "../middleware/resource-helpers";
+import {
+  UnifiedTenantAction,
+  type UnifiedResource,
+} from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
+import { getUnifiedTenantResource } from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
+
+async function getUnifiedLaborRoleResource(
+  req: Request
+): Promise<UnifiedResource | null> {
+  const { id } = req.params;
+  if (!id) return null;
+
+  let query = supabase
+    .from("labor_roles")
+    .select("id, tenant_id")
+    .eq("id", id);
+  query = withTenantFilter(query, req);
+
+  const { data, error } = await query.single();
+  if (error || !data) return null;
+
+  const tenantId = data.tenant_id;
+  return {
+    type: "CostResource",
+    id: data.id,
+    resourceType: "labor_role",
+    tenant_id: tenantId,
+    owner_tenant_id: tenantId,
+  };
+}
 
 /**
  * GET /labor-roles
@@ -13,8 +42,9 @@ const router = Router();
  */
 router.get(
   "/",
-  authorizationMiddleware("read", (req) =>
-    getCollectionResource(req, "labor_role")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
     try {
@@ -40,7 +70,13 @@ router.get(
  * GET /labor-roles/:id
  * 役職詳細を取得
  */
-router.get("/:id", async (req, res) => {
+router.get(
+  "/:id",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.read_resource,
+    getUnifiedLaborRoleResource
+  ),
+  async (req, res) => {
   try {
     let query = supabase
       .from("labor_roles")
@@ -58,13 +94,20 @@ router.get("/:id", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 /**
  * POST /labor-roles
  * 役職を作成
  */
-router.post("/", async (req, res) => {
+router.post(
+  "/",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource
+  ),
+  async (req, res) => {
   try {
     const role: Partial<LaborRole> = req.body;
 
@@ -105,13 +148,20 @@ router.post("/", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 /**
  * PUT /labor-roles/:id
  * 役職を更新
  */
-router.put("/:id", async (req, res) => {
+router.put(
+  "/:id",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedLaborRoleResource
+  ),
+  async (req, res) => {
   try {
     const role: Partial<LaborRole> = req.body;
     const { id } = req.params;
@@ -145,13 +195,20 @@ router.put("/:id", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 /**
  * DELETE /labor-roles/:id
  * 役職を削除
  */
-router.delete("/:id", async (req, res) => {
+router.delete(
+  "/:id",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_item,
+    getUnifiedLaborRoleResource
+  ),
+  async (req, res) => {
   try {
     let query = supabase.from("labor_roles").delete().eq("id", req.params.id);
     query = withTenantFilter(query, req);
@@ -166,6 +223,7 @@ router.delete("/:id", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 export default router;

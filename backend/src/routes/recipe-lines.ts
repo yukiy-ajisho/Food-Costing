@@ -2,11 +2,12 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { RecipeLine, Item } from "../types/database";
 import { checkCycle } from "../services/cycle-detection";
-import { authorizationMiddleware } from "../middleware/authorization";
+import { authorizeUnified, UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
-  getRecipeLineResource,
-  getCreateResource,
-} from "../middleware/resource-helpers";
+  getUnifiedRecipeLineResource,
+  getUnifiedTenantResource,
+} from "../middleware/unified-resource-helpers";
 
 /**
  * Recipe Lineのバリデーション: deprecatedな材料やvendor_productを使おうとしていないかチェック
@@ -129,8 +130,9 @@ const router = Router();
  */
 router.post(
   "/",
-  authorizationMiddleware("create", (req) =>
-    getCreateResource(req, "recipe_line")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_recipe,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
     try {
@@ -286,7 +288,10 @@ router.post(
  */
 router.put(
   "/:id",
-  authorizationMiddleware("update", getRecipeLineResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_recipe,
+    getUnifiedRecipeLineResource
+  ),
   async (req, res) => {
     try {
       const line: Partial<RecipeLine> = req.body;
@@ -426,7 +431,10 @@ router.put(
  */
 router.delete(
   "/:id",
-  authorizationMiddleware("delete", getRecipeLineResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_recipe,
+    getUnifiedRecipeLineResource
+  ),
   async (req, res) => {
     try {
       const { error } = await supabase
@@ -464,6 +472,118 @@ router.post("/batch", async (req, res) => {
       return res.status(400).json({
         error: "creates, updates, and deletes must be arrays",
       });
+    }
+
+    // Cedar 統一: batch 内の操作を tenant_role ベースで個別認可
+    const selectedTenantIdForAuth =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+    const selectedTenantRole = req.user!.roles.get(selectedTenantIdForAuth);
+    if (!selectedTenantIdForAuth || !selectedTenantRole) {
+      return res.status(403).json({ error: "Forbidden: No tenant context" });
+    }
+
+    if (creates.length > 0) {
+      const tenantResource = await getUnifiedTenantResource(req);
+      if (!tenantResource) {
+        return res.status(403).json({ error: "Forbidden: Tenant not found" });
+      }
+
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedTenantAction.create_recipe,
+        tenantResource,
+        undefined,
+        { tenantId: selectedTenantIdForAuth, tenantRole: selectedTenantRole }
+      );
+
+      if (!allowed) {
+        return res.status(403).json({
+          error: "Forbidden: Insufficient permissions",
+        });
+      }
+    }
+
+    const batchUpdateIdsArr = updates
+      .map((u: { id?: string }) => u.id)
+      .filter((id: string | undefined): id is string => Boolean(id));
+    const batchDeleteIdsArr = deletes.filter((id: any): id is string => Boolean(id));
+
+    const targetRecipeLineIds = [
+      ...batchUpdateIdsArr,
+      ...batchDeleteIdsArr,
+    ];
+    if (targetRecipeLineIds.length > 0) {
+      const { data: recipeLines, error: recipeLinesError } = await supabase
+        .from("recipe_lines")
+        .select("id, tenant_id")
+        .in("id", targetRecipeLineIds);
+
+      if (recipeLinesError) {
+        return res.status(500).json({ error: recipeLinesError.message });
+      }
+
+      const tenantIdByRecipeLineId = new Map<string, string>();
+      (recipeLines ?? []).forEach((rl) => {
+        tenantIdByRecipeLineId.set(rl.id, rl.tenant_id);
+      });
+
+      for (const id of batchUpdateIdsArr) {
+        const tenantId = tenantIdByRecipeLineId.get(id);
+        if (!tenantId) continue;
+        const tenantRole = req.user!.roles.get(tenantId);
+        if (!tenantRole) return res.status(403).json({ error: "Forbidden" });
+
+        const resource = {
+          type: "CostResource",
+          id,
+          resourceType: "recipe_line",
+          tenant_id: tenantId,
+          owner_tenant_id: tenantId,
+        } as const;
+
+        const allowed = await authorizeUnified(
+          req.user!.id,
+          UnifiedTenantAction.update_recipe,
+          resource,
+          undefined,
+          { tenantId, tenantRole }
+        );
+
+        if (!allowed) {
+          return res.status(403).json({
+            error: "Forbidden: Insufficient permissions",
+          });
+        }
+      }
+
+      for (const id of batchDeleteIdsArr) {
+        const tenantId = tenantIdByRecipeLineId.get(id);
+        if (!tenantId) continue;
+        const tenantRole = req.user!.roles.get(tenantId);
+        if (!tenantRole) return res.status(403).json({ error: "Forbidden" });
+
+        const resource = {
+          type: "CostResource",
+          id,
+          resourceType: "recipe_line",
+          tenant_id: tenantId,
+          owner_tenant_id: tenantId,
+        } as const;
+
+        const allowed = await authorizeUnified(
+          req.user!.id,
+          UnifiedTenantAction.delete_recipe,
+          resource,
+          undefined,
+          { tenantId, tenantRole }
+        );
+
+        if (!allowed) {
+          return res.status(403).json({
+            error: "Forbidden: Insufficient permissions",
+          });
+        }
+      }
     }
 
     // すべてのアイテムとレシピラインを取得（循環参照チェック用）

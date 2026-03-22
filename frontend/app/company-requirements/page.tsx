@@ -117,6 +117,7 @@ export default function CompanyRequirementsPage() {
   const [requirementsError, setRequirementsError] = useState<string | null>(
     null,
   );
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [requirementSaving, setRequirementSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -216,6 +217,13 @@ export default function CompanyRequirementsPage() {
   const [detailEditEstimatedDueDate, setDetailEditEstimatedDueDate] =
     useState("");
 
+  const isPermissionErrorMessage = (message: string) => {
+    return (
+      message.includes("Forbidden: Insufficient permissions") ||
+      message.includes("Access denied")
+    );
+  };
+
   const fetchRequirements = async () => {
     setRequirementsLoading(true);
     setRequirementsError(null);
@@ -223,9 +231,13 @@ export default function CompanyRequirementsPage() {
       const list = await companyRequirementsAPI.getAll();
       setRequirements(list);
     } catch (err) {
-      setRequirementsError(
-        err instanceof Error ? err.message : "Failed to load requirements",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to load requirements";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        setRequirementsError(message);
+      }
     } finally {
       setRequirementsLoading(false);
     }
@@ -240,8 +252,14 @@ export default function CompanyRequirementsPage() {
     try {
       const data = await companyRequirementsAPI.getAdminCompanies();
       setAdminCompanies(data.companies ?? []);
-    } catch {
-      setAdminCompanies([]);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load companies";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        setAdminCompanies([]);
+      }
     } finally {
       setAdminCompaniesLoading(false);
     }
@@ -268,7 +286,15 @@ export default function CompanyRequirementsPage() {
     companyRequirementValueTypesAPI
       .getAll()
       .then(setValueTypes)
-      .catch(() => setValueTypes([]));
+      .catch((err) => {
+        const message =
+          err instanceof Error ? err.message : "Failed to load value types";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setValueTypes([]);
+        }
+      });
   }, [activeTab]);
 
   // 選択会社の要件一覧を取得（Status と Documents で共通利用）
@@ -283,7 +309,17 @@ export default function CompanyRequirementsPage() {
     companyRequirementsAPI
       .getAll(selectedCompanyId)
       .then(setStatusRequirements)
-      .catch(() => setStatusRequirements([]));
+      .catch((err) => {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Failed to load status requirements";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setStatusRequirements([]);
+        }
+      });
   }, [activeTab, selectedCompanyId]);
 
   const fetchStatusData = useCallback(
@@ -365,9 +401,13 @@ export default function CompanyRequirementsPage() {
         setStatusMapping(map);
         setStatusMaxGroupKeyByReq(maxGroupKeyByReq);
       } catch (err) {
-        setStatusError(
-          err instanceof Error ? err.message : "Failed to load status data",
-        );
+        const message =
+          err instanceof Error ? err.message : "Failed to load status data";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setStatusError(message);
+        }
       } finally {
         if (background) {
           setStatusRefreshing(false);
@@ -405,9 +445,15 @@ export default function CompanyRequirementsPage() {
         ].sort((a, b) => b - a);
         setDetailSelectedGroupKey(keys[0] ?? null);
       })
-      .catch(() => {
-        setDetailRealDataRows([]);
-        setDetailSelectedGroupKey(null);
+      .catch((err) => {
+        const message =
+          err instanceof Error ? err.message : "Failed to load detail data";
+        if (isPermissionErrorMessage(message)) {
+          setPermissionDenied(true);
+        } else {
+          setDetailRealDataRows([]);
+          setDetailSelectedGroupKey(null);
+        }
       });
   }, [detailModalReqId]);
 
@@ -518,7 +564,13 @@ export default function CompanyRequirementsPage() {
       setDetailRealDataRows(fresh as CompanyRequirementRealDataRow[]);
       setDetailUploadMode(false);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to upload document");
+      const message =
+        err instanceof Error ? err.message : "Failed to upload document";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setDetailUploadSaving(false);
     }
@@ -626,7 +678,12 @@ export default function CompanyRequirementsPage() {
       setDetailPendingDeleteKeys([]);
       setDetailModalEditMode(false);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save");
+      const message = err instanceof Error ? err.message : "Failed to save";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setSavingDetail(false);
     }
@@ -752,9 +809,13 @@ export default function CompanyRequirementsPage() {
       handleCancelRecordPayment();
       await fetchStatusData({ background: true });
     } catch (err) {
-      alert(
-        err instanceof Error ? err.message : "Failed to save record payment",
-      );
+      const message =
+        err instanceof Error ? err.message : "Failed to save record payment";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setSavingRecordPayment(false);
     }
@@ -885,7 +946,12 @@ export default function CompanyRequirementsPage() {
         await fetchStatusData({ background: true });
       }
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save");
+      const message = err instanceof Error ? err.message : "Failed to save";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     } finally {
       setRequirementSaving(false);
     }
@@ -901,7 +967,12 @@ export default function CompanyRequirementsPage() {
       await companyRequirementsAPI.delete(id);
       await fetchRequirements();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to delete");
+      const message = err instanceof Error ? err.message : "Failed to delete";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
     }
   };
 
@@ -910,6 +981,24 @@ export default function CompanyRequirementsPage() {
       "Edit Requirement")
     : "New Requirement";
   const isNewRequirement = !editingId;
+
+  if (permissionDenied) {
+    return (
+      <div className="px-8 pb-8">
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            You don&apos;t have permission.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-8 pb-8">

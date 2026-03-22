@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
+import { CompanySelector } from "./CompanySelector";
 import { TenantSelector } from "./TenantSelector";
 import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/api";
@@ -196,12 +197,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </h2>
         </div>
 
-        {/* 右側：テナント選択とユーザープロファイル（Team / License & certification 配下ではテナントセレクターは描画しない） */}
+        {/* 右側：Company / Tenant セレクターとユーザープロファイル */}
         <div className="flex items-center space-x-4">
+          <CompanySelector />
           {!pathname.startsWith("/employee-requirements") &&
-            !pathname.startsWith("/tenant-requirements") &&
-            !pathname.startsWith("/company-requirements") &&
-            !pathname.startsWith("/team") && <TenantSelector />}
+            !pathname.startsWith("/company-requirements") && <TenantSelector />}
           <UserProfile />
         </div>
       </header>

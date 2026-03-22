@@ -1,20 +1,35 @@
 import { Router } from "express";
 import { supabase } from "../../config/supabase";
 import { UserRequirement } from "../../types/database";
+import {
+  getAuthorizedTenantIds,
+  getAuthorizedCompanyAdminDirectorCreatorUserIds,
+  isUserRequirementAccessibleByCompany,
+  hasAnyCompanyAccess,
+} from "./authorization-helpers";
 
 const router = Router();
 
 /**
  * GET /user-requirements
- * 現在のユーザーが作成した要件定義一覧を取得（created_by = 自分）
+ * company_admin / company_director が操作可能な要件定義一覧を取得
  */
 router.get("/", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const creatorUserIds = await getAuthorizedCompanyAdminDirectorCreatorUserIds(userId);
+    if (creatorUserIds.length === 0) {
+      return res.json([]);
+    }
+
     const { data, error } = await supabase
       .from("user_requirements")
       .select("*")
-      .eq("created_by", userId)
+      .in("created_by", creatorUserIds)
       .order("title", { ascending: true });
 
     if (error) {
@@ -30,20 +45,31 @@ router.get("/", async (req, res) => {
 
 /**
  * GET /user-requirements/:id
- * 要件定義を1件取得（created_by が自分のもののみ）
+ * 要件定義を1件取得（company_admin / company_director が操作可能なもの）
  */
 router.get("/:id", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { data, error } = await supabase
       .from("user_requirements")
       .select("*")
       .eq("id", req.params.id)
-      .eq("created_by", userId)
       .single();
 
     if (error || !data) {
       return res.status(404).json({ error: "Requirement not found" });
+    }
+
+    const ok = await isUserRequirementAccessibleByCompany(
+      userId,
+      data.created_by
+    );
+    if (!ok) {
+      return res.status(403).json({ error: "Access denied" });
     }
 
     res.json(data);
@@ -59,6 +85,12 @@ router.get("/:id", async (req, res) => {
  */
 router.post("/", async (req, res) => {
   try {
+    const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
     const body: Partial<UserRequirement> = req.body;
 
     if (!body.title || typeof body.title !== "string" || !body.title.trim()) {
@@ -100,7 +132,7 @@ router.post("/", async (req, res) => {
       first_due_on_date: firstDueOnDate === null ? null : String(firstDueOnDate).trim(),
       renewal_advance_days: body.renewal_advance_days ?? null,
       expiry_rule: body.expiry_rule ?? null,
-      created_by: req.user!.id,
+      created_by: userId,
     };
 
     const { data, error } = await supabase
@@ -114,14 +146,8 @@ router.post("/", async (req, res) => {
     }
 
     // 設計: 新規要件作成後、作成者（自分）が admin である全テナントのメンバーに 1 行ずつ user_requirement_assignments を挿入
-    const { data: myAdminProfiles } = await supabase
-      .from("profiles")
-      .select("tenant_id")
-      .eq("user_id", req.user!.id)
-      .eq("role", "admin");
-
-    const adminTenantIds = [...new Set((myAdminProfiles ?? []).map((p) => p.tenant_id))];
-    if (adminTenantIds.length === 0) {
+    const authorizedTenantIds = await getAuthorizedTenantIds(userId);
+    if (authorizedTenantIds.length === 0) {
       res.status(201).json(data);
       return;
     }
@@ -129,7 +155,7 @@ router.post("/", async (req, res) => {
     const { data: profilesInAdminTenants } = await supabase
       .from("profiles")
       .select("user_id")
-      .in("tenant_id", adminTenantIds);
+      .in("tenant_id", authorizedTenantIds);
 
     const memberUserIds = [...new Set((profilesInAdminTenants ?? []).map((p) => p.user_id))];
     if (memberUserIds.length > 0) {
@@ -151,11 +177,15 @@ router.post("/", async (req, res) => {
 
 /**
  * PUT /user-requirements/:id
- * 要件定義を更新（created_by が自分のもののみ更新可能）
+ * 要件定義を更新（company_admin / company_director が操作可能なもの）
  */
 router.put("/:id", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { id } = req.params;
     const body: Partial<UserRequirement> = req.body;
 
@@ -163,11 +193,25 @@ router.put("/:id", async (req, res) => {
       .from("user_requirements")
       .select("id")
       .eq("id", id)
-      .eq("created_by", userId)
       .single();
 
     if (!existing) {
       return res.status(404).json({ error: "Requirement not found" });
+    }
+
+    // existing の時点で created_by は取れていないので、改めて取得して判定する
+    const { data: requirementRow } = await supabase
+      .from("user_requirements")
+      .select("created_by")
+      .eq("id", id)
+      .single();
+
+    const ok = await isUserRequirementAccessibleByCompany(
+      userId,
+      requirementRow?.created_by ?? null
+    );
+    if (!ok) {
+      return res.status(403).json({ error: "Access denied" });
     }
 
     const updates: Partial<UserRequirement> = {
@@ -239,22 +283,39 @@ router.put("/:id", async (req, res) => {
 
 /**
  * DELETE /user-requirements/:id
- * 要件定義を削除（created_by が自分のもののみ削除可能）
+ * 要件定義を削除（company_admin / company_director が操作可能なもの）
  */
 router.delete("/:id", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
     const { id } = req.params;
 
     const { data: existing } = await supabase
       .from("user_requirements")
       .select("id")
       .eq("id", id)
-      .eq("created_by", userId)
       .single();
 
     if (!existing) {
       return res.status(404).json({ error: "Requirement not found" });
+    }
+
+    const { data: requirementRow } = await supabase
+      .from("user_requirements")
+      .select("created_by")
+      .eq("id", id)
+      .single();
+
+    const ok = await isUserRequirementAccessibleByCompany(
+      userId,
+      requirementRow?.created_by ?? null
+    );
+    if (!ok) {
+      return res.status(403).json({ error: "Access denied" });
     }
 
     // 設計: 削除前に user_requirement_assignments の該当全行の deleted_at を設定

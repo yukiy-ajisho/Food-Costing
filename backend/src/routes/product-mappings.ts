@@ -1,11 +1,38 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { supabase } from "../config/supabase";
 import { ProductMapping } from "../types/database";
-import { authorizationMiddleware } from "../middleware/authorization";
-import { getCollectionResource } from "../middleware/resource-helpers";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
+import { getUnifiedTenantResource } from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
+import { type UnifiedResource } from "../authz/unified/authorize";
 
 const router = Router();
+
+async function getUnifiedProductMappingResource(
+  req: Request
+): Promise<UnifiedResource | null> {
+  const { id } = req.params;
+  if (!id) return null;
+
+  let query = supabase
+    .from("product_mappings")
+    .select("id, tenant_id")
+    .eq("id", id);
+  query = withTenantFilter(query, req);
+
+  const { data, error } = await query.single();
+  if (error || !data) return null;
+
+  const tenantId = data.tenant_id;
+  return {
+    type: "CostResource",
+    id: data.id,
+    resourceType: "product_mapping",
+    tenant_id: tenantId,
+    owner_tenant_id: tenantId,
+  };
+}
 
 /**
  * GET /product-mappings
@@ -13,8 +40,9 @@ const router = Router();
  */
 router.get(
   "/",
-  authorizationMiddleware("read", (req) =>
-    getCollectionResource(req, "product_mapping")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
     try {
@@ -53,7 +81,13 @@ router.get(
  * GET /product-mappings/:id
  * Product Mapping詳細を取得
  */
-router.get("/:id", async (req, res) => {
+router.get(
+  "/:id",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.read_resource,
+    getUnifiedProductMappingResource
+  ),
+  async (req, res) => {
   try {
     let query = supabase
       .from("product_mappings")
@@ -79,7 +113,13 @@ router.get("/:id", async (req, res) => {
  * POST /product-mappings
  * Product Mappingを作成
  */
-router.post("/", async (req, res) => {
+router.post(
+  "/",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource
+  ),
+  async (req, res) => {
   try {
     const mapping: Partial<ProductMapping> = req.body;
 
@@ -124,13 +164,20 @@ router.post("/", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 /**
  * DELETE /product-mappings/:id
  * Product Mappingを削除
  */
-router.delete("/:id", async (req, res) => {
+router.delete(
+  "/:id",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_item,
+    getUnifiedProductMappingResource
+  ),
+  async (req, res) => {
   try {
     let query = supabase
       .from("product_mappings")
@@ -150,6 +197,7 @@ router.delete("/:id", async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
   }
-});
+  }
+);
 
 export default router;

@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { VendorProduct } from "../types/database";
-import { authorizationMiddleware } from "../middleware/authorization";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
-  getVendorProductResource,
-  getCreateResource,
-  getCollectionResource,
-} from "../middleware/resource-helpers";
+  getUnifiedTenantResource,
+  getUnifiedVendorProductResource,
+} from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
@@ -17,8 +17,9 @@ const router = Router();
  */
 router.get(
   "/",
-  authorizationMiddleware("read", (req) =>
-    getCollectionResource(req, "vendor_product")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
   try {
@@ -46,7 +47,10 @@ router.get(
  */
 router.get(
   "/:id",
-  authorizationMiddleware("read", getVendorProductResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.read_resource,
+    getUnifiedVendorProductResource
+  ),
   async (req, res) => {
   try {
       let query = supabase
@@ -77,8 +81,9 @@ router.get(
  */
 router.post(
   "/",
-  authorizationMiddleware("create", (req) =>
-    getCreateResource(req, "vendor_product")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
   try {
@@ -163,7 +168,10 @@ router.post(
  */
 router.put(
   "/:id",
-  authorizationMiddleware("update", getVendorProductResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedVendorProductResource
+  ),
   async (req, res) => {
   try {
     const vendorProduct: Partial<VendorProduct> = req.body;
@@ -219,27 +227,34 @@ router.put(
  * PATCH /vendor-products/:id/deprecate
  * Vendor Productをdeprecatedにする
  */
-router.patch("/:id/deprecate", async (req, res) => {
-  try {
-    const { deprecateVendorProduct } = await import("../services/deprecation");
-    const result = await deprecateVendorProduct(
-      req.params.id,
-      req.user!.tenant_ids
-    );
+router.patch(
+  "/:id/deprecate",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedVendorProductResource
+  ),
+  async (req, res) => {
+    try {
+      const { deprecateVendorProduct } = await import("../services/deprecation");
+      const result = await deprecateVendorProduct(
+        req.params.id,
+        req.user!.tenant_ids
+      );
 
-    if (!result.success) {
-      return res.status(400).json({ error: result.error });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.json({
+        message: "Vendor product deprecated successfully",
+        affectedItems: result.affectedItems,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json({
-      message: "Vendor product deprecated successfully",
-      affectedItems: result.affectedItems,
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * DELETE /vendor-products/:id
@@ -247,7 +262,10 @@ router.patch("/:id/deprecate", async (req, res) => {
  */
 router.delete(
   "/:id",
-  authorizationMiddleware("delete", getVendorProductResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_item,
+    getUnifiedVendorProductResource
+  ),
   async (req, res) => {
   try {
       let query = supabase
