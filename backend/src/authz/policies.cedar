@@ -6,14 +6,14 @@
 
 // Pillar 2: RBAC - Role-Based Access Control
 
-// Admin: Full access to all actions
+// Admin / Director: Full access to all actions（テナント内は同等）
 permit (
   principal,
   action,
   resource
 )
 when {
-  principal.role == "admin"
+  principal.role == "admin" || principal.role == "director"
 };
 
 // Manager: 

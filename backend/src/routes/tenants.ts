@@ -1,85 +1,32 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { authMiddleware } from "../middleware/auth";
+import {
+  authorizeTeamTenantAccess,
+  authorizeUnified,
+  UnifiedTenantAction,
+} from "../authz/unified/authorize";
+import { getAuthorizedTenantIds } from "./reminder/authorization-helpers";
 
 const router = Router();
 
 /**
- * POST /tenants
- * 新しいテナントを作成（認証済みユーザーであれば誰でも可能）
+ * POST /tenants — 廃止
+ * テナント作成は Company 経由のみ。POST /companies/:id/tenants を使用すること。
  */
 router.post(
   "/",
   authMiddleware({ allowNoProfiles: true }),
-  async (req, res) => {
-    try {
-      const { name, type } = req.body;
-
-      // バリデーション
-      if (!name || typeof name !== "string") {
-        return res.status(400).json({ error: "name is required" });
-      }
-
-      if (name.length < 5 || name.length > 50) {
-        return res.status(400).json({
-          error: "name must be between 5 and 50 characters",
-        });
-      }
-
-      if (!type || typeof type !== "string") {
-        return res.status(400).json({ error: "type is required" });
-      }
-
-      if (!["restaurant", "vendor"].includes(type)) {
-        return res.status(400).json({
-          error: "type must be one of: restaurant, vendor",
-        });
-      }
-
-      // テナントを作成
-      const { data: tenant, error: tenantError } = await supabase
-        .from("tenants")
-        .insert([{ name, type }])
-        .select()
-        .single();
-
-      if (tenantError || !tenant) {
-        return res.status(500).json({
-          error: tenantError?.message || "Failed to create tenant",
-        });
-      }
-
-      // 作成者をadminロールでprofilesに追加
-      const { error: profileError } = await supabase.from("profiles").insert([
-        {
-          user_id: req.user!.id,
-          tenant_id: tenant.id,
-          role: "admin",
-        },
-      ]);
-
-      if (profileError) {
-        // プロファイル作成に失敗した場合、テナントを削除してロールバック
-        await supabase.from("tenants").delete().eq("id", tenant.id);
-        return res.status(500).json({
-          error: profileError.message || "Failed to create profile",
-        });
-      }
-
-      res.status(201).json({
-        ...tenant,
-        role: "admin",
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      res.status(500).json({ error: message });
-    }
-  }
+  (_req, res) => {
+    res.status(410).json({
+      error: "Tenant creation via POST /tenants is deprecated. Use POST /companies/:id/tenants to create a tenant under a company.",
+    });
+  },
 );
 
 /**
  * GET /tenants
- * ユーザーが属するテナント一覧を取得
+ * ユーザーが属するテナント一覧を取得。所属 Company がある場合は company_id, company_name を付与する。
  */
 router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
   try {
@@ -92,19 +39,122 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    if (!profilesWithTenants || profilesWithTenants.length === 0) {
+    const tenantsWithRole: Record<string, unknown>[] = [];
+    const tenantRoleById = new Map<string, string>();
+
+    if (profilesWithTenants && profilesWithTenants.length > 0) {
+      const fromProfiles = profilesWithTenants
+        .filter((p) => p.tenants != null)
+        .map((p) => ({
+          ...(p.tenants as unknown as Record<string, unknown>),
+          role: p.role,
+        }));
+      for (const t of fromProfiles) {
+        const tenantId = (t as Record<string, unknown>).id as string;
+        const tenantRole = (t as Record<string, unknown>).role as string;
+        tenantRoleById.set(tenantId, tenantRole);
+        tenantsWithRole.push(t);
+      }
+    }
+
+    // profiles が無い／不足でも、会社オフィサーなら company_tenants 上のテナントを追加
+    const companyTenantIds = await getAuthorizedTenantIds(req.user!.id);
+    const missingForCompany = companyTenantIds.filter(
+      (id) => !tenantRoleById.has(id)
+    );
+    if (missingForCompany.length > 0) {
+      const { data: extraRows, error: extraErr } = await supabase
+        .from("tenants")
+        .select("*")
+        .in("id", missingForCompany);
+      if (extraErr) {
+        return res.status(500).json({ error: extraErr.message });
+      }
+      for (const row of extraRows ?? []) {
+        const rec = row as unknown as Record<string, unknown>;
+        const tid = rec.id as string;
+        tenantRoleById.set(tid, "company");
+        tenantsWithRole.push({ ...rec, role: "company" });
+      }
+    }
+
+    if (tenantRoleById.size === 0) {
       return res.json({ tenants: [] });
     }
 
-    // 各 profile の tenants を展開し、role を付与（従来と同じレスポンス形）
-    const tenantsWithRole = profilesWithTenants
-      .filter((p) => p.tenants != null)
-      .map((p) => ({
-        ...(p.tenants as unknown as Record<string, unknown>),
-        role: p.role,
-      }));
+    const allTenantIds = Array.from(tenantRoleById.keys());
 
-    res.json({ tenants: tenantsWithRole });
+    // Cedar 認可（全テナント並列）と company_tenants 取得を同時に走らせる
+    const [cedarResults, linksResult] = await Promise.all([
+      Promise.all(
+        Array.from(tenantRoleById.entries()).map(([tenantId, tenantRole]) =>
+          authorizeUnified(
+            req.user!.id,
+            UnifiedTenantAction.list_resources,
+            { type: "Tenant", id: tenantId },
+            undefined,
+            {
+              tenantId,
+              tenantRole:
+                tenantRole === "company" ? undefined : tenantRole,
+            }
+          ).then((allowed) => ({ tenantId, allowed }))
+        )
+      ),
+      supabase
+        .from("company_tenants")
+        .select("tenant_id, company_id")
+        .in("tenant_id", allTenantIds),
+    ]);
+
+    const authorizedTenantIds = new Set<string>(
+      cedarResults.filter((r) => r.allowed).map((r) => r.tenantId)
+    );
+
+    const filteredTenantsWithRole = tenantsWithRole.filter((t) => {
+      const tenantId = (t as Record<string, unknown>).id as string;
+      return authorizedTenantIds.has(tenantId);
+    });
+
+    if (filteredTenantsWithRole.length === 0) {
+      return res.json({ tenants: [] });
+    }
+
+    // Cedar 結果で許可されたテナントに絞った上で company_id を集める
+    const links = (linksResult.data ?? []).filter((l) =>
+      authorizedTenantIds.has(l.tenant_id)
+    );
+    const companyIds = [...new Set(links.map((l) => l.company_id))];
+    const companyIdToName: Record<string, string> = {};
+    if (companyIds.length > 0) {
+      const { data: companies } = await supabase
+        .from("companies")
+        .select("id, company_name")
+        .in("id", companyIds);
+      (companies ?? []).forEach((c) => {
+        companyIdToName[c.id] = c.company_name;
+      });
+    }
+
+    const tenantIdToCompany: Record<string, { company_id: string; company_name: string }> = {};
+    (links ?? []).forEach((l) => {
+      tenantIdToCompany[l.tenant_id] = {
+        company_id: l.company_id,
+        company_name: companyIdToName[l.company_id] ?? "",
+      };
+    });
+
+    const tenantsWithCompany = filteredTenantsWithRole.map((t) => {
+      const tid = (t as Record<string, unknown>).id as string;
+      const company = tenantIdToCompany[tid];
+      return {
+        ...t,
+        company_id: company?.company_id ?? null,
+        company_name: company?.company_name ?? null,
+      };
+    });
+
+    res.json({ tenants: tenantsWithCompany });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ error: message });
@@ -115,27 +165,36 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
  * GET /tenants/:id
  * テナント情報を取得
  */
-router.get("/:id", authMiddleware(), async (req, res) => {
+router.get(
+  "/:id",
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
+  async (req, res) => {
   try {
-    // ユーザーがそのテナントに属しているか確認
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("user_id", req.user!.id)
-      .eq("tenant_id", req.params.id)
-      .single();
-
-    if (profileError || !profile) {
-      return res.status(403).json({
-        error: "User does not belong to this tenant",
-      });
+    const tenantId = req.params.id;
+    const authz = await authorizeTeamTenantAccess(
+      req.user!.id,
+      tenantId,
+      "read",
+      req.user!.roles
+    );
+    if (!authz.allowed) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Insufficient permissions" });
     }
+
+    const role = authz.viaCompany
+      ? "admin"
+      : (req.user!.roles.get(tenantId) as string);
 
     // テナント情報を取得
     const { data: tenant, error: tenantError } = await supabase
       .from("tenants")
       .select("*")
-      .eq("id", req.params.id)
+      .eq("id", tenantId)
       .single();
 
     if (tenantError || !tenant) {
@@ -144,7 +203,7 @@ router.get("/:id", authMiddleware(), async (req, res) => {
 
     res.json({
       ...tenant,
-      role: profile.role,
+      role,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -156,27 +215,32 @@ router.get("/:id", authMiddleware(), async (req, res) => {
  * GET /tenants/:id/members
  * テナントのメンバー一覧を取得
  */
-router.get("/:id/members", authMiddleware(), async (req, res) => {
+router.get(
+  "/:id/members",
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
+  async (req, res) => {
   try {
-    // ユーザーがそのテナントに属しているか確認
-    const { data: userProfile, error: userProfileError } = await supabase
-      .from("profiles")
-      .select("role")
-      .eq("user_id", req.user!.id)
-      .eq("tenant_id", req.params.id)
-      .single();
-
-    if (userProfileError || !userProfile) {
-      return res.status(403).json({
-        error: "User does not belong to this tenant",
-      });
+    const tenantId = req.params.id;
+    const authz = await authorizeTeamTenantAccess(
+      req.user!.id,
+      tenantId,
+      "read",
+      req.user!.roles
+    );
+    if (!authz.allowed) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Insufficient permissions" });
     }
 
     // テナントのメンバー一覧を取得
     const { data: profiles, error: profilesError } = await supabase
       .from("profiles")
       .select("user_id, role, created_at")
-      .eq("tenant_id", req.params.id)
+      .eq("tenant_id", tenantId)
       .order("created_at", { ascending: true });
 
     if (profilesError) {
@@ -217,7 +281,7 @@ router.get("/:id/members", authMiddleware(), async (req, res) => {
           name,
           email,
         };
-      })
+      }),
     );
 
     res.json({ members });
@@ -229,22 +293,27 @@ router.get("/:id/members", authMiddleware(), async (req, res) => {
 
 /**
  * PUT /tenants/:id
- * テナント名を更新（テナントに属しているユーザーであれば誰でも可能）
+ * テナント名を更新（テナント admin/director または親会社の company_admin / company_director）
  */
-router.put("/:id", authMiddleware(), async (req, res) => {
+router.put(
+  "/:id",
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
+  async (req, res) => {
   try {
-    // ユーザーがそのテナントに属しているか確認
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("user_id", req.user!.id)
-      .eq("tenant_id", req.params.id)
-      .single();
-
-    if (profileError || !profile) {
-      return res.status(403).json({
-        error: "User does not belong to this tenant",
-      });
+    const tenantId = req.params.id;
+    const authz = await authorizeTeamTenantAccess(
+      req.user!.id,
+      tenantId,
+      "manage_tenant",
+      req.user!.roles
+    );
+    if (!authz.allowed) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Insufficient permissions" });
     }
 
     const { name } = req.body;
@@ -257,7 +326,7 @@ router.put("/:id", authMiddleware(), async (req, res) => {
     const { data: tenant, error: tenantError } = await supabase
       .from("tenants")
       .update({ name })
-      .eq("id", req.params.id)
+      .eq("id", tenantId)
       .select()
       .single();
 
@@ -276,29 +345,37 @@ router.put("/:id", authMiddleware(), async (req, res) => {
 
 /**
  * PUT /tenants/:id/members/:userId/role
- * メンバーの役割を変更（テナントに属しているユーザーであれば誰でも可能）
+ * メンバーの役割を変更（manage_members 相当の権限: テナント RBAC または親会社ロール）
  */
-router.put("/:id/members/:userId/role", authMiddleware(), async (req, res) => {
+router.put(
+  "/:id/members/:userId/role",
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
+  async (req, res) => {
   try {
-    // ユーザーがそのテナントに属しているか確認
-    const { data: userProfile, error: userProfileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("user_id", req.user!.id)
-      .eq("tenant_id", req.params.id)
-      .single();
-
-    if (userProfileError || !userProfile) {
-      return res.status(403).json({
-        error: "User does not belong to this tenant",
-      });
+    const tenantId = req.params.id;
+    const authz = await authorizeTeamTenantAccess(
+      req.user!.id,
+      tenantId,
+      "manage_members",
+      req.user!.roles
+    );
+    if (!authz.allowed) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Insufficient permissions" });
     }
 
     const { role } = req.body;
 
-    if (!role || !["admin", "manager", "staff"].includes(role)) {
+    if (
+      !role ||
+      !["admin", "manager", "staff", "director"].includes(role)
+    ) {
       return res.status(400).json({
-        error: "role must be one of: admin, manager, staff",
+        error: "role must be one of: admin, manager, staff, director",
       });
     }
 
@@ -307,7 +384,7 @@ router.put("/:id/members/:userId/role", authMiddleware(), async (req, res) => {
       .from("profiles")
       .update({ role })
       .eq("user_id", req.params.userId)
-      .eq("tenant_id", req.params.id)
+      .eq("tenant_id", tenantId)
       .select()
       .single();
 
@@ -326,22 +403,27 @@ router.put("/:id/members/:userId/role", authMiddleware(), async (req, res) => {
 
 /**
  * DELETE /tenants/:id/members/:userId
- * メンバーをテナントから削除（テナントに属しているユーザーであれば誰でも可能）
+ * メンバーをテナントから削除（manage_members 相当の権限: テナント RBAC または親会社ロール）
  */
-router.delete("/:id/members/:userId", authMiddleware(), async (req, res) => {
+router.delete(
+  "/:id/members/:userId",
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
+  async (req, res) => {
   try {
-    // ユーザーがそのテナントに属しているか確認
-    const { data: userProfile, error: userProfileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("user_id", req.user!.id)
-      .eq("tenant_id", req.params.id)
-      .single();
-
-    if (userProfileError || !userProfile) {
-      return res.status(403).json({
-        error: "User does not belong to this tenant",
-      });
+    const tenantId = req.params.id;
+    const authz = await authorizeTeamTenantAccess(
+      req.user!.id,
+      tenantId,
+      "manage_members",
+      req.user!.roles
+    );
+    if (!authz.allowed) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Insufficient permissions" });
     }
 
     // 自分自身を削除しようとしている場合はエラー
@@ -356,7 +438,7 @@ router.delete("/:id/members/:userId", authMiddleware(), async (req, res) => {
       .from("profiles")
       .delete()
       .eq("user_id", req.params.userId)
-      .eq("tenant_id", req.params.id);
+      .eq("tenant_id", tenantId);
 
     if (deleteError) {
       return res.status(500).json({ error: deleteError.message });

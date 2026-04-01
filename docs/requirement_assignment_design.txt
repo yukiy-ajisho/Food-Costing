@@ -1,0 +1,85 @@
+# Requirement Assignment (適用操作) 設計まとめ
+
+## 方針
+
+- 「誰にどの要件を適用しているか」は **mapping_user_requirements の有無では判断しない**。
+- 新テーブル **user_requirement_assignments** で適用状態を管理する。
+- mapping_user_requirements は **発行日・期限などのデータ用のみ**（適用の有無とは分離）。
+
+---
+
+## テーブル: user_requirement_assignments
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid (PK) | 主キー |
+| user_id | uuid (NOT NULL, FK → users) | ユーザー |
+| user_requirement_id | uuid (NOT NULL, FK → user_requirements) | 要件 |
+| is_currently_assigned | boolean (NOT NULL) | 現在、その要件を適用しているか。false = 適用外 |
+| created_at | timestamptz (NOT NULL) | レコード作成日時 |
+| deleted_at | timestamptz (NULL) | 参照している user_requirement が Requirements List から削除された日時。NULL = 要件はまだ存在する |
+
+- **UNIQUE(user_id, user_requirement_id)** を付ける。同じ (user, requirement) のレコードは 1 行のみ。
+- Remove = is_currently_assigned を false に更新（レコードは残す）。
+- Add = 既存レコードの is_currently_assigned を true に戻す（レコードは作成時に必ず 1 件あるため、新規 INSERT はしない）。
+
+---
+
+## レコードが作成されるタイミング（2パターン）
+
+### 1. 新メンバーが profiles に登録されたとき
+
+- **どこで**: Supabase の **トリガー ＋ ファンクション**（profiles の AFTER INSERT）。
+- **何をするか**: NEW.user_id, NEW.tenant_id を受け取り、user_requirements のうち tenant_id = NEW.tenant_id の要件をすべて取得し、各要件について user_requirement_assignments に 1 行 INSERT（is_currently_assigned = true, deleted_at = null）。
+- **理由**: profiles が作られる経路が複数あるため、DB で一元化する。
+
+### 2. Requirements List で新規要件が定義されたとき
+
+- **どこで**: **アプリのコード**（要件作成 API の POST 処理内）。
+- **何をするか**: 要件 INSERT 後、その要件の tenant に所属するメンバー一覧（profiles から取得）を取得し、各メンバーについて user_requirement_assignments に 1 行 INSERT（is_currently_assigned = true, deleted_at = null）。
+- **理由**: 新規要件の id とテナントが確定した直後の 1 本の API で完結できるため。
+
+---
+
+## 適用／適用外の操作（2通りの UI）
+
+### 方法A: Requirements Status タブのテーブル
+
+- 各セルに Add / Remove を表示（Edit モード時）。
+- **Remove**: その (user_id, user_requirement_id) の user_requirement_assignments の is_currently_assigned を **false** に更新。
+- **Add**: その (user_id, user_requirement_id) の user_requirement_assignments の is_currently_assigned を **true** に更新。
+- **表示**: is_currently_assigned = true の (user, requirement) のみ通常セル。false のセルは **薄いグレー**で「適用されていない」と分かるようにする。
+
+### 方法B: 要件ごとの「タイトル ＋ 適用している人のリスト」
+
+- テーブルの左右または上下などに、要件ごとに「タイトル」と「その要件を適用している人のリスト」を表示。
+- リストに対して **追加・削除** で「誰に適用するか」を変更。中身は user_requirement_assignments の is_currently_assigned の更新（または既存レコードの true に戻す）。
+
+---
+
+## 要件が Requirements List から削除されたとき
+
+- **user_requirements** の該当行は **DELETE** する。
+- **user_requirement_assignments** のうち、user_requirement_id がその要件の id である**全レコード**の **deleted_at** に、削除した日時を設定する（UPDATE）。
+- **実装方針**: **アプリの削除 API 内**で、先に user_requirement_assignments の deleted_at を UPDATE してから、user_requirements を DELETE する。
+- **効果**: deleted_at が非 NULL のレコードは「その要件はもう存在しない」とみなす。同じ名前で新しい要件を Requirements List に追加できる（新規 id で新規 user_requirement_assignments が作られる）。
+
+---
+
+## 参照時のルール
+
+- 「この (user, requirement) に適用しているか」は、**user_requirement_assignments** の **is_currently_assigned = true** かつ **deleted_at IS NULL** の行が存在するかで判断する（deleted_at が入っている要件はリストにないため、通常は対象外）。
+- mapping_user_requirements は「適用されている (user, requirement) のうち、発行日・期限を入力したもの」のデータ用。Status のセル表示では、まず user_requirement_assignments で適用有無を判定し、適用されていれば mapping のデータを表示する。
+
+---
+
+## 決定済み事項
+
+- テーブル名: **user_requirement_assignments**
+- カラム deleted_at: 要件がリストから削除された日時。
+- Add = 既存レコードの is_currently_assigned を true に戻す（新規 INSERT はしない）。
+- Remove = is_currently_assigned を false に更新。
+- UNIQUE(user_id, user_requirement_id)。
+- 新 profiles 登録時 → トリガーで user_requirement_assignments に挿入。
+- 新要件作成時 → アプリの要件作成 API で user_requirement_assignments に挿入。
+- 要件削除時 → アプリの削除 API で deleted_at を UPDATE してから user_requirements を DELETE。

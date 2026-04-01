@@ -1,0 +1,169 @@
+# Tenant Requirements 設計書（新データ構造）v2
+
+## 0. 変更の前提
+
+- 現行仕様は docs/tenant_requirements_design.txt を参照。本ドキュメントはそれを**新データ構造に変更した**設計である。
+- **対象範囲**: 変更するのは**テナント（Tenant）向け要件のみ**。User（従業員）向け要件（user_requirements 等）は**一切変更しない**。
+- **「適用」という概念はない**: 旧設計では「共通の要件をテナントに適用する」ために tenant_requirement_assignments を使っていた。新構造では要件を**最初から「このテナントの要件」として作成**する（tenant_requirements.tenant_id を持つ）ため、「適用する／適用外」の概念は存在しない。
+- 変更理由:
+  - 日付・計算関連の項目が今後増える可能性がある。
+  - due date が複数ある要件（例: 高額で分割払い）などに対応したい。
+- **テーブル・ロジック**: テナント関連のテーブルと API/ロジックを新構造に合わせて変更する。
+- **UI**: 変更するのは **New requirement モーダルから Warning を削除することのみ**。リスト・Status タブの構成は維持し、データ取得・保存先を新テーブルに切り替える。
+
+---
+
+## 1. 概要
+
+テナント向けの要件（ライセンス、届出期限など）を**テナントに紐づけて**定義し、各要件の実データ（due date, bill date, validity duration など）を group_key で組管理する。User requirements とは対象が「人」ではなく「テナント」であり、新構造では「適用」はなく「このテナントの要件」として作成する。
+
+---
+
+## 2. データベース
+
+### 2.1 tenant_requirements（要件定義・テナント紐づき）
+
+要件は**最初から「このテナントの要件」**として作成する。created_by や「適用」は持たない。
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid (PK) | 主キー |
+| title | text (NOT NULL) | 要件名（例: Business License、酒精税申告） |
+| tenant_id | uuid (NOT NULL, FK → tenants) | この要件を持つテナント |
+| expiry_rule | enum (NULL 可) | 期限ルール。型は enum とし、現状は値 'rolling' のみを定義。将来の拡張用 |
+| created_at | timestamptz (NOT NULL) | 作成日時 |
+| updated_at | timestamptz (NOT NULL) | 更新日時 |
+
+- 1 テナントにつき、複数の tenant_requirements 行があり得る。
+- validity_period は持たない。有効期間は tenant_requirement_real_data の「Validity duration」として組ごとに持つ。
+- expiry_rule 用の enum 型（例: tenant_requirement_expiry_rule）を定義し、初期値として 'rolling' を入れておく。将来 'fixed' 等を追加する場合は ALTER TYPE で拡張する。
+
+---
+
+### 2.2 tenant_requirement_value_types（値の種類マスタ）
+
+「どの種類の値を入力するか」を定義するマスタ。due date / bill date / pay date / validity duration など。事前に最低限のデータを投入する。
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid (PK) または serial | 主キー |
+| name | text (NOT NULL) | 表示名（例: Due date, Bill date, Pay date, Validity duration） |
+
+**初期データ（シード）**:
+1. Due date
+2. Bill date
+3. Pay date
+4. Validity duration（現行の validity_period に相当。年数など）
+
+- 将来、日付や計算用の種類を増やす場合はこのテーブルに行を追加する。
+
+---
+
+### 2.3 tenant_requirement_real_data（実データ・組管理）
+
+1 つの要件に対して、**複数レコード**が入る。group_key で「同じ組」をまとめる（例: 1年目・2年目）。
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid (PK) | 主キー |
+| tenant_requirement_id | uuid (NOT NULL, FK → tenant_requirements) | どの要件のデータか |
+| group_key | integer (NOT NULL) | 組の識別。1, 2, 3... のサロゲート。同じ group_key の行は「1組」 |
+| type_id | uuid (NOT NULL, FK → tenant_requirement_value_types) | 何の値か（Due date / Bill date / Validity duration など） |
+| data_type | text (NULL 可) | 値の型（date, number, string）。value の解釈・計算用 |
+| value | text (NULL 可) | 実際の値（例: "2024-06-01", "2"） |
+| created_at | timestamptz (NOT NULL) | 作成日時 |
+| updated_at | timestamptz (NOT NULL) | 更新日時 |
+
+- 例: Business License の 1 年目に due date, bill date, pay date を入れる → group_key=1 で type_id=Due date, Bill date, Pay date の行（＋ Validity duration など）。2 年目を追加する → group_key=2 で同様の行を追加。
+- **Validity duration**: 2 年目以降の組を追加するときは、前年度（前の group_key）の Validity duration の値をコピーする。
+
+---
+
+### 2.4 廃止するテーブル・概念
+
+- **mapping_tenant_requirements**: 廃止。役割は tenant_requirement_real_data に統合。
+- **tenant_requirement_assignments**: 廃止。「適用」の概念はない。要件は最初から tenant_id 付きで作成する。
+
+---
+
+### 2.5 廃止するトリガー
+
+- **after_profiles_insert_assign_tenant_requirements**（profiles の AFTER INSERT）: 廃止。assignment を作らないため不要。
+
+---
+
+## 3. レコードが作られるタイミング
+
+### 3.1 新規要件の追加
+
+- どこで: アプリの要件作成 API（POST）。
+- 何をするか: tenant_requirements に 1 行 INSERT（title, tenant_id, expiry_rule）。作成者は「どのテナントの要件を追加するか」を選んだ結果の tenant_id を渡す想定。assignment の挿入は行わない。
+
+### 3.2 新規テナントが追加されたとき
+
+- 旧設計では「既存の全要件を新テナントに適用」するトリガーがあった。新構造では要件はテナントごとに作るため、新テナント作成時に tenant_requirements を自動作成するかは別途方針による。少なくとも assignment 用のトリガーは不要。
+
+### 3.3 組（group）の追加（例: 2 年目）
+
+- ユーザーが「新しい組」を追加する操作（Renewal に相当）で、tenant_requirement_real_data に新しい group_key の行を追加する。
+- **Validity duration**: 新しい group には、同じ tenant_requirement_id の**前の group_key** の Validity duration の value をコピーして挿入する。
+
+---
+
+## 4. 参照・表示のルール
+
+- あるテナントの「要件一覧」: tenant_requirements を tenant_id で絞る。
+- ある要件の「実データ」: tenant_requirement_real_data を tenant_requirement_id で絞り、group_key ごとにまとめる。type_id で Due date / Bill date / Pay date / Validity duration などを判別する。
+- Expiration 計算: 組ごとに、Due date（type_id = Due date）の value と Validity duration（type_id = Validity duration）の value を使い、expiry_rule（rolling）に従って計算する。現行と同様 due_date + validity_period（年）= expiration の考え方。
+
+---
+
+## 5. 要件削除時
+
+- tenant_requirements の該当行を DELETE する。
+- tenant_requirement_real_data は tenant_requirement_id に FK かつ ON DELETE CASCADE にしておけば、要件削除時にまとめて削除される（または論理削除にするかは方針による）。
+
+---
+
+## 6. UI
+
+### 6.1 新規要件モーダル（New requirement modal）
+
+- 入力項目:
+  - title（必須）
+  - expiry_rule（現状 rolling など）
+- **Warning schedule は一旦取り除く**。警告は 1 から考え直すため、新要件モーダルからは削除する。データ入力用の warning カラムも新テーブルには持たない。
+- Validity duration は、要件作成時ではなく「実データを入力するとき」（Status タブで組ごとに入力）で扱う。
+
+### 6.2 Tenant Requirement Status タブ
+
+- 上部: Select tenant で 1 テナントを選択。そのテナントの要件のみ表示する。
+- テーブル: 選択テナントの tenant_requirements 一覧 × Status。列は Requirement | Status のイメージは維持。
+- Status: 組（group_key）をどう見せるかは実装で決める。例えば「最新の組だけ表示」「組ごとに行を分ける」など。due date / bill date / pay date / validity duration は tenant_requirement_real_data から type_id と value を読んで表示する。
+- Edit: 組ごとの実データ（Due date, Bill date, Pay date, Validity duration）を入力・編集。保存時は tenant_requirement_real_data の該当行を更新または新規挿入。一括 Save の考え方は維持可能。
+
+### 6.3 Expiration 計算
+
+- expiry_rule は現状 rolling のみ。
+- 計算式: Due date（value）+ Validity duration（value、年数）= expiration。組ごとに計算する。
+
+---
+
+## 7. フロントエンド・共通化
+
+- 既存の tenant_requirements_design.txt の「共通化時の原則」を継承する。User（従業員要件）側の見た目・挙動は変えない。
+- テーブルは User 用と Tenant 用で別のまま。部品（ステータス表示・日付編集フォームなど）の共通化は可能な範囲で行う。
+- UI は大きく変えず、データソースを新テーブル（tenant_requirements + tenant_requirement_value_types + tenant_requirement_real_data）に切り替える。
+
+---
+
+## 8. 決定済み事項まとめ
+
+- **tenant_requirements**: id, title, tenant_id, expiry_rule（enum、値は rolling など）, created_at, updated_at。created_by / validity_period / warning 系は持たない。
+- **tenant_requirement_value_types**: マスタ。初期シードで Due date, Bill date, Pay date, Validity duration の 4 種類を投入。
+- **tenant_requirement_real_data**: id, tenant_requirement_id, group_key（整数 1,2,3）, type_id, data_type, value。1 要件につき複数レコード。group_key で組を識別。
+- **Validity duration**: 新しい組（例: 2 年目）を追加するとき、前の group_key の Validity duration の value をコピーする。
+- **mapping_tenant_requirements / tenant_requirement_assignments**: 廃止。トリガー after_profiles_insert_assign_tenant_requirements も廃止。
+- **New requirement モーダル**: Warning 関連を一旦削除。title と expiry_rule を入力する形にする。
+- **Status タブ**: Select tenant → そのテナントの要件一覧。実データは tenant_requirement_real_data から group_key × type_id で参照。
+- **Expiration**: rolling。Due date + Validity duration（年）。組ごとに計算。

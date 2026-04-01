@@ -27,6 +27,7 @@ PORT=4000  # Optional: defaults to 4000
 ## System Admin
 
 The system administrator has special privileges:
+
 - Access to the Admin Panel (`/admin`)
 - Ability to approve/reject access requests
 - Manage the allowlist
@@ -74,6 +75,7 @@ npm run lint
 ## API Endpoints
 
 ### Access Requests (Allowlist)
+
 - `POST /access-requests` - Submit access request (public)
 - `GET /access-requests?status=pending` - List requests (System Admin only)
 - `PUT /access-requests/:id/approve` - Approve request (System Admin only)
@@ -81,6 +83,7 @@ npm run lint
 - `DELETE /access-requests/:id` - Delete request (System Admin only)
 
 ### Invitations
+
 - `POST /invite` - Create invitation (authenticated, tenant admin)
 - `GET /invite` - List invitations (authenticated, tenant admin)
 - `GET /invite/verify/:token` - Verify invitation token (public)
@@ -88,9 +91,11 @@ npm run lint
 - `DELETE /invite/:id` - Cancel invitation (authenticated, tenant admin)
 
 ### Webhooks
+
 - `POST /webhooks/resend` - Resend webhook endpoint (public, signature validated)
 
 ### Tenants
+
 - `POST /tenants` - Create tenant (authenticated, no profile required)
 - `GET /tenants` - List user's tenants (authenticated)
 - `GET /tenants/:id` - Get tenant details (authenticated)
@@ -107,4 +112,3 @@ This application uses **Cedar** for policy-based authorization (RBAC/ABAC):
 - **Cedar policies**: Controls what users can do within the application (tenant-scoped permissions)
 
 See `backend/src/authz/policies.cedar` for policy definitions.
-

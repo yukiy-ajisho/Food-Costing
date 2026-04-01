@@ -1,0 +1,255 @@
+================================================================================
+ヘッダー Company / Tenant Selector 実装計画（確定版）
+================================================================================
+作成日: 2026-03-04
+
+--------------------------------------------------------------------------------
+1. 目的
+--------------------------------------------------------------------------------
+- アプリ全体のヘッダーに Company Selector を追加（全ページ共通）
+- Food Costing、Team、Tenant Requirements のヘッダーに Tenant Selector を追加
+- ヘッダーのセレクターと各ページ内のローカルセレクターを双方向同期させる
+- 会社を選ぶとテナント一覧が自動で絞り込まれる
+
+--------------------------------------------------------------------------------
+2. 現状の整理
+--------------------------------------------------------------------------------
+
+■ グローバル状態
+  - TenantContext (frontend/contexts/TenantContext.tsx)
+      - GET /tenants で全テナントを取得
+        → 返却値に company_id, company_name, role が含まれる（確認済み）
+      - selectedTenantId を localStorage に永続化
+      - 現在 Tenant 型に company_id がない（追加が必要）
+  - TenantSelector (frontend/components/TenantSelector.tsx)
+      - TenantContext を読むだけ → 変更不要
+  - Layout.tsx ヘッダー右側
+      - /team, /employee-requirements, /tenant-requirements,
+        /company-requirements では TenantSelector を非表示
+      - CompanySelector なし
+
+■ ページローカル状態
+  - team/page.tsx（1706 行）
+      - companies, selectedCompanyId, companyTenants, teamSelectedTenantId
+      - GET /companies で会社一覧を取得
+      - GET /companies/:id/tenants で選択会社のテナントを取得
+      - 会社作成後: setCompanies(prev => [...prev, company]) で直接更新
+      - テナント作成後: setCompanyTenants(prev => [...prev, newTenant]) で直接更新
+  - tenant-requirements/page.tsx（中程度）
+      - adminTenants, selectedTenantId（ローカル）
+      - GET /admin-tenants で admin 権限テナントのみ取得
+
+■ バックエンド API（確認済み・変更なし）
+  - GET /companies             → { companies: [{ id, company_name, role, ... }] }
+  - GET /tenants               → { tenants: [{ id, name, type, role, company_id, ... }] }
+  - GET /companies/:id/tenants → { tenants: [...] }（role なし ← 重要）
+  - GET /admin-tenants         → { tenants: [...] }（admin 権限テナントのみ）
+
+--------------------------------------------------------------------------------
+3. 設計上の重要な決定事項
+--------------------------------------------------------------------------------
+
+■ TenantContext は GET /tenants のままにする（GET /companies/:id/tenants に変えない）
+
+  理由:
+    GET /companies/:id/tenants は tenants テーブルの生データを返すだけで、
+    ユーザーの role（admin / manager / staff）が含まれない。
+    一方 GET /tenants は role と company_id の両方を返す。
+    tenant-requirements/page.tsx は role === "admin" でフィルターするため、
+    role が必須。
+
+  代替アプローチ（採用）:
+    GET /tenants で全テナントを取得（role・company_id 付き）し、
+    selectedCompanyId が変わったらクライアント側で company_id でフィルターする。
+    テナント数は少ない（1ユーザーあたり数件）ため、パフォーマンスへの影響はない。
+
+■ CompanyContext に refreshCompanies() を追加する
+
+  理由:
+    team/page.tsx は会社作成後に setCompanies(prev => [...prev, company]) を呼ぶ。
+    グローバル化後は CompanyContext.addCompany(company) で同等の操作が必要。
+
+■ TenantContext に refreshTenants() と addTenant() を追加する
+
+  理由:
+    team/page.tsx はテナント作成後に setCompanyTenants(prev => [...prev, newTenant]) を呼ぶ。
+    グローバル化後は TenantContext.addTenant(tenant) で同等の操作が必要。
+
+--------------------------------------------------------------------------------
+4. 実装ステップ
+--------------------------------------------------------------------------------
+
+Step 1: CompanyContext を新規作成
+  ファイル: frontend/contexts/CompanyContext.tsx（新規）
+  内容:
+    - Company 型: { id, company_name, role }
+    - CompanyContextType:
+        companies: Company[]
+        selectedCompanyId: string | null
+        setSelectedCompanyId: (id: string | null) => void
+        loading: boolean
+        addCompany: (company: Company) => void   ← CRUD 後の更新用
+    - 動作:
+        - GET /companies でユーザーの所属会社一覧を取得
+        - selectedCompanyId を localStorage("selectedCompanyId") に永続化
+        - 1社のみの場合は自動選択
+        - 他タブ同期: storage イベントをリッスン
+        - /join ページではスキップ
+    - useCompany() hook をエクスポート
+
+Step 2: TenantContext を更新
+  ファイル: frontend/contexts/TenantContext.tsx（更新）
+  変更:
+    - Tenant 型に company_id: string | null, company_name: string | null を追加
+    - useCompany() で selectedCompanyId を取得
+    - allTenants を GET /tenants で取得（変更なし）
+    - tenants = selectedCompanyId があれば allTenants を company_id でフィルター、
+              なければ allTenants をそのまま返す
+    - selectedCompanyId が変わったら selectedTenantId をリセット → 先頭を自動選択
+    - TenantContextType に以下を追加:
+        addTenant: (tenant: Tenant) => void    ← CRUD 後の更新用
+        refreshTenants: () => void             ← 強制再取得用
+
+  useEffect 依存配列の修正（重要）:
+    現在: useEffect(..., [selectedTenantId, pathname])
+      → selectedTenantId が変わるたびに GET /tenants を再取得してしまう（過剰 fetch）
+    変更後: useEffect(..., [pathname])
+      → allTenants の再取得はページ遷移時のみ
+      → selectedCompanyId の変化はクライアント側フィルターで対応（fetch 不要）
+      → selectedTenantId の変化はフィルター済み tenants への存在確認のみで対応
+
+Step 3: app/layout.tsx を更新
+  ファイル: frontend/app/layout.tsx（更新）
+  変更:
+    - CompanyProvider を import し TenantProvider の外側に追加
+
+  プロバイダーの階層（必須の順番）:
+    ThemeProvider
+      └─ UserProvider
+           └─ CompanyProvider     ← 新規追加（TenantProvider より外側）
+                └─ TenantProvider ← 内部で useCompany() を呼ぶため外側が必要
+                     └─ Layout
+
+Step 4: CompanySelector コンポーネントを新規作成
+  ファイル: frontend/components/CompanySelector.tsx（新規）
+  内容:
+    - useCompany() を読む
+    - companies.length === 0 → 非表示
+    - companies.length === 1 → 名前のみ表示（クリック不可、会社名ラベルとして機能）
+    - companies.length >= 2  → TenantSelector と同スタイルのドロップダウン
+
+Step 5: Layout.tsx のヘッダーを更新
+  ファイル: frontend/components/Layout.tsx（更新）
+  変更:
+    - CompanySelector を import し全ページで表示
+    - TenantSelector の表示条件を変更:
+        非表示のまま: /employee-requirements, /company-requirements
+        新たに表示:   /team, /tenant-requirements（今まで非表示だったが表示に変更）
+        表示のまま:   /cost, /items, /settings
+
+  ヘッダー右側のレイアウト（変更後）:
+    [CompanySelector（全ページ）] [TenantSelector（指定ページのみ）] [UserProfile]
+
+Step 6: team/page.tsx をリファクタリング
+  ファイル: frontend/app/team/page.tsx（更新・大きい）
+
+  削除するローカル状態・ロジック:
+    companies              → useCompany().companies
+    selectedCompanyId      → useCompany().selectedCompanyId
+    setSelectedCompanyId   → useCompany().setSelectedCompanyId
+    loadingCompanies       → useCompany().loading
+    companyTenants         → useTenant().tenants（company_id でフィルター済み）
+    teamSelectedTenantId   → useTenant().selectedTenantId
+    fetchCompanies()       → CompanyContext が保持（削除）
+    fetchCompanyTenants()  → TenantContext が保持（削除）
+    会社切り替え時の useEffect × 2 → TenantContext が処理（削除）
+
+  CRUD 操作の変更:
+    handleCreateCompany 内の:
+      setCompanies(prev => [...prev, company])  → addCompany(company)
+      setSelectedCompanyId(company.id)          → setSelectedCompanyId(company.id)（変更なし）
+
+    handleCreateTenant 内の:
+      setCompanyTenants(prev => [...prev, newTenant]) → addTenant({...newTenant, company_id: selectedCompanyId})
+      setTeamSelectedTenantId(newTenant.id)           → setSelectedTenantId(newTenant.id)
+
+  isAdminOfAnyCompany の変更:
+    Before: companies.some(c => c.role === "company_admin")
+    After:  useCompany().companies.some(c => c.role === "company_admin")
+
+  ページ内の Company / Tenant セレクター UI:
+    - 表示する値: グローバル状態から取得
+    - 変更操作: setSelectedCompanyId / setSelectedTenantId（グローバル） を呼ぶ
+    - ヘッダーと自動同期される
+
+Step 7: tenant-requirements/page.tsx をリファクタリング
+  ファイル: frontend/app/tenant-requirements/page.tsx（更新・中程度）
+
+  削除するローカル状態・ロジック:
+    adminTenants           → useTenant().tenants（role でフィルター）
+    adminTenantsLoading    → useTenant().loading
+    selectedTenantId（ローカル）→ useTenant().selectedTenantId
+    GET /admin-tenants の fetch ロジック
+
+  置き換えロジック:
+    - useTenant().tenants から role === "admin" のテナントのみ取り出して Status タブに使う
+      （これを adminTenants の代替として使用）
+    - useTenant().selectedTenantId を selectedTenantId として使う
+    - selectedTenantId が変わるとデータ再取得（useEffect の依存配列を更新）
+
+  フォールバック処理（重要）:
+    グローバルの selectedTenantId が admin でないテナントを指している場合がある
+    （例: Food Costing で manager テナントを選択したまま Tenant Requirements を開く）
+    → この場合、Status タブの admin 専用ドロップダウンに選択値が存在しない
+    → 対処: adminTenants（= role === "admin" のみ）に selectedTenantId が含まれない場合は
+      adminTenants の先頭を Status タブの初期選択として使う（ローカル派生 state で管理）
+    → この派生 state が変わっても setSelectedTenantId（グローバル）は更新しない
+      （Status タブ専用のフォールバックなので Food Costing の選択を上書きしない）
+
+  注意:
+    - TenantContext.tenants の role フィールドは GET /tenants が返す（確認済み）
+    - データ取得時に 403 が返った場合は「このテナントへのアクセス権がありません」と表示する
+
+--------------------------------------------------------------------------------
+5. 変更ファイル一覧
+--------------------------------------------------------------------------------
+
+新規作成（2ファイル）:
+  frontend/contexts/CompanyContext.tsx
+  frontend/components/CompanySelector.tsx
+
+変更（5ファイル）:
+  frontend/contexts/TenantContext.tsx
+  frontend/app/layout.tsx
+  frontend/components/Layout.tsx
+  frontend/app/team/page.tsx        ← 大きい（1706 行）、慎重に
+  frontend/app/tenant-requirements/page.tsx
+
+変更なし:
+  frontend/components/TenantSelector.tsx  ← TenantContext を読むだけ
+  backend/*                               ← バックエンド変更なし
+
+--------------------------------------------------------------------------------
+6. リスク・注意事項
+--------------------------------------------------------------------------------
+
+① team/page.tsx は 1706 行の大きなファイル
+   → セレクター関連の state・useEffect・CRUD のみを変更し、
+     それ以外（メンバー管理・招待・モーダル等）は一切触らない
+
+② 初期化の順序（race condition）
+   CompanyContext が /companies を取得する前に TenantContext が動く可能性がある
+   → TenantContext は CompanyContext.loading が true の間は
+     selectedCompanyId を null として扱い、GET /tenants にフォールバックする
+
+③ localStorage の整合性
+   selectedCompanyId を復元 → それに対応するテナントでフィルター →
+   selectedTenantId がフィルター後テナントに存在すれば維持、なければ先頭にリセット
+
+④ company を持たないユーザー（テナントのみ所属）
+   → CompanyContext: companies = [], selectedCompanyId = null
+   → TenantContext: GET /tenants にフォールバック（全テナントを返す）
+   → CompanySelector: 非表示
+   → 既存の Food Costing の動作と変わらない
+
+================================================================================

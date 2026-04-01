@@ -1,0 +1,33 @@
+import { Router } from "express";
+import { supabase } from "../../config/supabase";
+import { hasAnyCompanyAccess } from "./authorization-helpers";
+
+const router = Router();
+
+/**
+ * GET /company-requirement-value-types
+ * 値の種類マスタ一覧（Due date, Bill date, Pay date, Validity duration, Document）
+ */
+router.get("/", async (req, res) => {
+  try {
+    const allowed = await hasAnyCompanyAccess(req.user!.id);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const { data, error } = await supabase
+      .from("company_requirement_value_types")
+      .select("id, name, data_type")
+      .order("name", { ascending: true });
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json(data ?? []);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+export default router;

@@ -181,9 +181,8 @@ export interface VendorProduct {
   brand_name?: string | null;
   purchase_unit: string;
   purchase_quantity: number;
-  purchase_cost: number;
+  current_price: number;
   deprecated?: string | null; // timestamp when deprecated
-  user_id: string; // FK to users
   created_at?: string;
 }
 
@@ -257,12 +256,49 @@ export interface ResourceShare {
   resource_id: string;
   owner_tenant_id: string; // FK to tenants(id)
   target_type: "tenant" | "role" | "user";
-  target_id: string | null; // tenant_id (uuid), role名 ('admin', 'manager', 'staff'), user_id (uuid) - nullable
+  target_id: string | null; // tenant_id (uuid), role名 ('admin','director','manager','staff'), user_id (uuid) - nullable
   is_exclusion: boolean; // TRUE = FORBID（permitを上書き）
   allowed_actions: string[]; // ['read'] または ['read', 'update'] - View only または Editable
   show_history_to_shared: boolean; // 価格履歴の可視性
   created_at?: string;
   updated_at?: string;
+}
+
+// Cross-tenant item sharing（同一 company 内テナント間での prepped item 公開設定）
+export interface CrossTenantItemShare {
+  id: string;
+  company_id: string;
+  item_id: string;
+  owner_tenant_id: string;
+  target_type: "company" | "tenant";
+  // 'company': company_id（全テナント公開）, 'tenant': 対象 tenant_id（特定テナントのみ）
+  target_id: string;
+  created_by: string;
+  allowed_actions: string[]; // ['read'] = view, [] = 明示的 hide
+  created_at?: string;
+  updated_at?: string;
+}
+
+// GET /cross-tenant-item-shares/available のレスポンス（items テーブルの join 込み）
+export interface CrossTenantAvailableItem extends CrossTenantItemShare {
+  items: {
+    id: string;
+    name: string | null;
+    tenant_id: string;
+    proceed_yield_unit?: string | null;
+    each_grams?: number | null;
+    item_kind?: string | null;
+    deprecated?: string | null;
+  } | null;
+}
+
+/** POST /cross-tenant-item-shares/grandfathered-ingredients */
+export interface CrossTenantGrandfatheredIngredientMeta {
+  id: string;
+  name: string | null;
+  tenant_id: string;
+  proceed_yield_unit: string | null;
+  each_grams: number | null;
 }
 
 /**
@@ -292,12 +328,14 @@ export async function apiRequest<T>(
     throw new Error("Authentication required.");
   }
 
-  // ヘッダーを構築
+  // ヘッダーを構築（FormData の場合は Content-Type を付けない＝boundary をブラウザに任せる）
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     Authorization: `Bearer ${session.access_token}`,
     ...(options.headers as Record<string, string>),
   };
+  if (!(options.body instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+  }
 
   // 選択されたテナントIDを取得（tenantIdパラメータを優先、なければLocalStorageから）
   let selectedTenantId: string | null = tenantId ?? null;
@@ -481,6 +519,21 @@ export const costAPI = {
       >;
     }>("/items/costs/breakdown");
   },
+  getCostsBreakdownMissing: (itemIds: string[]) => {
+    return fetchAPI<{
+      costs: Record<
+        string,
+        {
+          food_cost_per_gram: number;
+          labor_cost_per_gram: number;
+          total_cost_per_gram: number;
+        }
+      >;
+    }>("/items/costs/breakdown/missing", {
+      method: "POST",
+      body: JSON.stringify({ item_ids: itemIds }),
+    });
+  },
 };
 
 // Base Items API
@@ -556,6 +609,51 @@ export const vendorProductsAPI = {
     ),
 };
 
+export type PriceHistoryRow = {
+  price_event_id: string;
+  price: number;
+  source_type: string;
+  invoice_id: string | null;
+  created_at: string;
+  virtual_vendor_product_id: string;
+  base_item_names: string;
+  product_name: string | null;
+  brand_name: string | null;
+  purchase_quantity: number | null;
+  purchase_unit: string | null;
+};
+
+export const priceEventsAPI = {
+  getHistory: () => fetchAPI<PriceHistoryRow[]>("/price-events/history"),
+
+  recordManual: (vendorProductId: string, price: number) =>
+    fetchAPI<{
+      id: string;
+      virtual_vendor_product_id: string;
+      price: number;
+      source_type: "manual" | "invoice";
+      created_at: string;
+    }>(`/price-events/vendor-products/${vendorProductId}/manual`, {
+      method: "POST",
+      body: JSON.stringify({ price }),
+    }),
+};
+
+export const ocrTestAPI = {
+  extractPdf: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetchAPI<{
+      model_text: string;
+      raw_text: string;
+      structured_json: { items: unknown[] } | null;
+    }>("/ocr-test/extract", {
+      method: "POST",
+      body: formData,
+    });
+  },
+};
+
 // Labor Roles API
 export const laborRolesAPI = {
   getAll: () => fetchAPI<LaborRole[]>("/labor-roles"),
@@ -624,6 +722,44 @@ export const productMappingsAPI = {
     fetchAPI<void>(`/product-mappings/${id}`, {
       method: "DELETE",
     }),
+};
+
+// Cross-Tenant Item Shares API
+export const crossTenantItemSharesAPI = {
+  getAll: (params: {
+    company_id: string;
+    owner_tenant_id?: string;
+    item_id?: string;
+  }) => {
+    const q = new URLSearchParams({ company_id: params.company_id });
+    if (params.owner_tenant_id) q.append("owner_tenant_id", params.owner_tenant_id);
+    if (params.item_id) q.append("item_id", params.item_id);
+    return fetchAPI<CrossTenantItemShare[]>(`/cross-tenant-item-shares?${q}`);
+  },
+  getAvailable: (tenantId: string) =>
+    fetchAPI<CrossTenantAvailableItem[]>(
+      `/cross-tenant-item-shares/available?tenant_id=${tenantId}`
+    ),
+  resolveGrandfatheredIngredients: (tenantId: string, itemIds: string[]) =>
+    fetchAPI<CrossTenantGrandfatheredIngredientMeta[]>(
+      "/cross-tenant-item-shares/grandfathered-ingredients",
+      {
+        method: "POST",
+        body: JSON.stringify({ tenant_id: tenantId, item_ids: itemIds }),
+      },
+    ),
+  create: (share: Omit<CrossTenantItemShare, "id" | "created_at" | "updated_at">) =>
+    fetchAPI<CrossTenantItemShare>("/cross-tenant-item-shares", {
+      method: "POST",
+      body: JSON.stringify(share),
+    }),
+  update: (id: string, allowedActions: string[]) =>
+    fetchAPI<CrossTenantItemShare>(`/cross-tenant-item-shares/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ allowed_actions: allowedActions }),
+    }),
+  delete: (id: string) =>
+    fetchAPI<void>(`/cross-tenant-item-shares/${id}`, { method: "DELETE" }),
 };
 
 // Resource Shares API

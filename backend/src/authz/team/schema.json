@@ -1,0 +1,112 @@
+{
+  "": {
+    "entityTypes": {
+      "User": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            }
+          }
+        }
+      },
+      "Company": {
+        "memberOfTypes": [],
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "id": {
+              "type": "String",
+              "required": true
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "company::read": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "role": {
+                "type": "String",
+                "required": false
+              }
+            }
+          }
+        }
+      },
+      "company::manage_members": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "role": {
+                "type": "String",
+                "required": false
+              }
+            }
+          }
+        }
+      },
+      "company::manage_invitations": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "role": {
+                "type": "String",
+                "required": false
+              }
+            }
+          }
+        }
+      },
+      "company::list_tenants": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "role": {
+                "type": "String",
+                "required": false
+              }
+            }
+          }
+        }
+      },
+      "company::create_tenant": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Company"],
+          "principalTypes": ["User"],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "role": {
+                "type": "String",
+                "required": false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -3,13 +3,13 @@ import { supabase } from "../config/supabase";
 import { Item, RecipeLine, BaseItem, VendorProduct } from "../types/database";
 import { convertToGrams } from "../services/units";
 import { MASS_UNIT_CONVERSIONS } from "../constants/units";
-import { checkCycle } from "../services/cycle-detection";
-import { authorizationMiddleware } from "../middleware/authorization";
+import { checkCycleCrossTenant } from "../services/cycle-detection-cross-tenant";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
-  getItemResource,
-  getCreateResource,
-  getCollectionResource,
-} from "../middleware/resource-helpers";
+  getUnifiedItemResource,
+  getUnifiedTenantResource,
+} from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
@@ -21,7 +21,10 @@ const router = Router();
  */
 router.get(
   "/",
-  authorizationMiddleware("read", (req) => getCollectionResource(req, "item")),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource,
+  ),
   async (req, res) => {
     try {
       let query = supabase.from("items").select("*");
@@ -51,7 +54,7 @@ router.get(
       if (role === "manager" && data) {
         // Prepped Itemsのみをフィルタリング
         const preppedItems = data.filter(
-          (item) => item.item_kind === "prepped"
+          (item) => item.item_kind === "prepped",
         );
         const otherItems = data.filter((item) => item.item_kind !== "prepped");
 
@@ -59,14 +62,14 @@ router.get(
         const ownPreppedItems = preppedItems.filter(
           (item) =>
             item.user_id === req.user!.id ||
-            item.responsible_user_id === req.user!.id
+            item.responsible_user_id === req.user!.id,
         );
 
         // 自分が作ったものではないPrepped Items
         const otherPreppedItems = preppedItems.filter(
           (item) =>
             item.user_id !== req.user!.id &&
-            item.responsible_user_id !== req.user!.id
+            item.responsible_user_id !== req.user!.id,
         );
 
         // resource_sharesから共有されているPrepped Itemsを一括取得（パフォーマンス最適化）
@@ -113,7 +116,7 @@ router.get(
 
           // 共有されているPrepped Itemsを取得
           const sharedPreppedItems = otherPreppedItems.filter((item) =>
-            sharedItemIds.includes(item.id)
+            sharedItemIds.includes(item.id),
           );
 
           // 自分が作ったもの + 共有されているものを結合
@@ -139,7 +142,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -148,7 +151,10 @@ router.get(
  */
 router.get(
   "/:id",
-  authorizationMiddleware("read", getItemResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.read_resource,
+    getUnifiedItemResource,
+  ),
   async (req, res) => {
     try {
       let query = supabase.from("items").select("*").eq("id", req.params.id);
@@ -180,7 +186,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -189,7 +195,10 @@ router.get(
  */
 router.post(
   "/",
-  authorizationMiddleware("create", (req) => getCreateResource(req, "item")),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource,
+  ),
   async (req, res) => {
     try {
       const item: Partial<Item> = req.body;
@@ -259,7 +268,7 @@ router.post(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -268,7 +277,10 @@ router.post(
  */
 router.put(
   "/:id",
-  authorizationMiddleware("update", getItemResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedItemResource,
+  ),
   async (req, res) => {
     try {
       const item: Partial<Item> = req.body;
@@ -279,7 +291,7 @@ router.put(
       existingItemQuery = withTenantFilter(existingItemQuery, req);
       const { data: existingItem } = await existingItemQuery.single();
 
-      // responsible_user_idの変更権限チェック（Adminのみ許可）
+      // responsible_user_idの変更権限チェック（Admin / Director のみ許可）
       if (
         item.responsible_user_id !== undefined &&
         existingItem &&
@@ -288,9 +300,9 @@ router.put(
         const currentTenantId =
           req.user!.selected_tenant_id || req.user!.tenant_ids[0];
         const role = req.user!.roles.get(currentTenantId);
-        if (role !== "admin") {
+        if (role !== "admin" && role !== "director") {
           return res.status(403).json({
-            error: "Only admins can change responsible_user_id",
+            error: "Only admins and directors can change responsible_user_id",
           });
         }
       }
@@ -334,7 +346,7 @@ router.put(
                   .select("*");
                 vendorProductsQuery = withTenantFilter(
                   vendorProductsQuery,
-                  req
+                  req,
                 );
                 const { data: vendorProducts } = await vendorProductsQuery;
 
@@ -347,7 +359,7 @@ router.put(
 
                 const vendorProductsMap = new Map<string, VendorProduct>();
                 vendorProducts?.forEach((vp) =>
-                  vendorProductsMap.set(vp.id, vp)
+                  vendorProductsMap.set(vp.id, vp),
                 );
 
                 // 材料の総合計を計算
@@ -364,14 +376,14 @@ router.put(
                       line.child_item_id,
                       itemsMap,
                       baseItemsMap,
-                      vendorProductsMap
+                      vendorProductsMap,
                     );
                     void (totalIngredientsGrams += grams);
                   } catch (error) {
                     // 変換エラーは無視（バリデーションをスキップ）
                     console.error(
                       `Failed to convert ${line.quantity} ${line.unit} to grams:`,
-                      error
+                      error,
                     );
                   }
                 }
@@ -429,14 +441,19 @@ router.put(
           });
 
           // 循環参照をチェック（既存データも含めてチェック）
+          const viewerTenantIdItems =
+            req.user!.selected_tenant_id || req.user!.tenant_ids[0];
           try {
-            await checkCycle(
+            await checkCycleCrossTenant(
               id,
-              req.user!.tenant_ids,
+              viewerTenantIdItems,
               new Set(),
               itemsMap,
               recipeLinesMap,
-              []
+              new Map(),
+              new Map(),
+              [],
+              false,
             );
           } catch (cycleError: unknown) {
             const message =
@@ -489,34 +506,41 @@ router.put(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
  * PATCH /items/:id/deprecate
  * Prepped Itemをdeprecatedにする
  */
-router.patch("/:id/deprecate", async (req, res) => {
-  try {
-    const { deprecatePreppedItem } = await import("../services/deprecation");
-    const result = await deprecatePreppedItem(
-      req.params.id,
-      req.user!.tenant_ids
-    );
+router.patch(
+  "/:id/deprecate",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedItemResource,
+  ),
+  async (req, res) => {
+    try {
+      const { deprecatePreppedItem } = await import("../services/deprecation");
+      const result = await deprecatePreppedItem(
+        req.params.id,
+        req.user!.tenant_ids,
+      );
 
-    if (!result.success) {
-      return res.status(400).json({ error: result.error });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.json({
+        message: "Item deprecated successfully",
+        affectedItems: result.affectedItems,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json({
-      message: "Item deprecated successfully",
-      affectedItems: result.affectedItems,
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
-  }
-});
+  },
+);
 
 /**
  * DELETE /items/:id
@@ -524,7 +548,10 @@ router.patch("/:id/deprecate", async (req, res) => {
  */
 router.delete(
   "/:id",
-  authorizationMiddleware("delete", getItemResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_item,
+    getUnifiedItemResource,
+  ),
   async (req, res) => {
     try {
       let deleteQuery = supabase.from("items").delete().eq("id", req.params.id);
@@ -540,7 +567,7 @@ router.delete(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 export default router;

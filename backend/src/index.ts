@@ -6,6 +6,8 @@ import express from "express";
 import cors from "cors";
 import { authMiddleware } from "./middleware/auth";
 import { initializeAuthorizer } from "./authz/authorize";
+import { initializeTeamAuthorizer } from "./authz/team/authorize";
+import { initializeUnifiedAuthorizer } from "./authz/unified/authorize";
 import itemsRouter from "./routes/items";
 import recipeLinesRouter from "./routes/recipe-lines";
 import recipeLinesItemsRouter from "./routes/recipe-lines-items";
@@ -13,25 +15,56 @@ import costRouter from "./routes/cost";
 import baseItemsRouter from "./routes/base-items";
 import vendorsRouter from "./routes/vendors";
 import vendorProductsRouter from "./routes/vendor-products";
+import priceEventsRouter from "./routes/price-events";
 import laborRolesRouter from "./routes/labor-roles";
 import nonMassUnitsRouter from "./routes/non-mass-units";
 import itemUnitProfilesRouter from "./routes/item-unit-profiles";
 import proceedValidationSettingsRouter from "./routes/proceed-validation-settings";
 import tenantsRouter from "./routes/tenants";
+import companiesRouter from "./routes/companies";
 import productMappingsRouter from "./routes/product-mappings";
 import resourceSharesRouter from "./routes/resource-shares";
+import crossTenantItemSharesRouter from "./routes/cross-tenant-item-shares";
 import inviteRouter from "./routes/invite";
 import webhooksRouter from "./routes/webhooks";
 import accessRequestsRouter from "./routes/access-requests";
 import meRouter from "./routes/me";
+import userRequirementsRouter from "./routes/reminder/user-requirements";
+import jurisdictionsRouter from "./routes/reminder/jurisdictions";
+import userJurisdictionsRouter from "./routes/reminder/user-jurisdictions";
+import mappingUserRequirementsRouter from "./routes/reminder/mapping-user-requirements";
+import documentMetadataUserRequirementsRouter from "./routes/reminder/document-metadata-user-requirements";
+import userRequirementAssignmentsRouter from "./routes/reminder/user-requirement-assignments";
+import adminStoreMembersRouter from "./routes/reminder/admin-store-members";
+import tenantRequirementsRouter from "./routes/reminder/tenant-requirements";
+import tenantRequirementValueTypesRouter from "./routes/reminder/tenant-requirement-value-types";
+import tenantRequirementRealDataRouter from "./routes/reminder/tenant-requirement-real-data";
+import companyRequirementsRouter from "./routes/reminder/company-requirements";
+import companyRequirementValueTypesRouter from "./routes/reminder/company-requirement-value-types";
+import companyRequirementRealDataRouter from "./routes/reminder/company-requirement-real-data";
+import ocrTestRouter from "./routes/ocr-test";
+import { getR2Client, getR2BucketName } from "./config/r2";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
 try {
   initializeAuthorizer();
+  initializeTeamAuthorizer();
+  initializeUnifiedAuthorizer();
 } catch (error) {
   console.error("Failed to initialize Cedar Authorizer:", error);
   // 認可エンジンの初期化失敗は致命的なので、サーバーを起動しない
   process.exit(1);
+}
+
+// R2 設定の起動時検証（R2 を利用する環境のみ。未設定の場合はスキップ）
+if (process.env.R2_S3_ENDPOINT) {
+  try {
+    getR2Client();
+    getR2BucketName();
+  } catch (error) {
+    console.error("Failed to initialize R2 client:", error);
+    process.exit(1);
+  }
 }
 
 const app = express();
@@ -79,6 +112,7 @@ app.use("/recipe-lines", authMiddleware(), recipeLinesRouter);
 app.use("/base-items", authMiddleware(), baseItemsRouter);
 app.use("/vendors", authMiddleware(), vendorsRouter);
 app.use("/vendor-products", authMiddleware(), vendorProductsRouter);
+app.use("/price-events", authMiddleware(), priceEventsRouter);
 app.use("/labor-roles", authMiddleware(), laborRolesRouter);
 app.use("/non-mass-units", authMiddleware(), nonMassUnitsRouter);
 app.use("/item-unit-profiles", authMiddleware(), itemUnitProfilesRouter);
@@ -88,8 +122,32 @@ app.use(
   proceedValidationSettingsRouter
 );
 app.use("/tenants", tenantsRouter);
+app.use("/companies", companiesRouter);
 app.use("/product-mappings", authMiddleware(), productMappingsRouter);
 app.use("/resource-shares", authMiddleware(), resourceSharesRouter);
+app.use("/cross-tenant-item-shares", authMiddleware(), crossTenantItemSharesRouter);
+app.use("/user-requirements", authMiddleware({ allowNoProfiles: true }), userRequirementsRouter);
+app.use("/jurisdictions", authMiddleware({ allowNoProfiles: true }), jurisdictionsRouter);
+app.use("/user-jurisdictions", authMiddleware({ allowNoProfiles: true }), userJurisdictionsRouter);
+app.use("/mapping-user-requirements", authMiddleware({ allowNoProfiles: true }), mappingUserRequirementsRouter);
+app.use(
+  "/document-metadata-user-requirements",
+  authMiddleware({ allowNoProfiles: true }),
+  documentMetadataUserRequirementsRouter
+);
+app.use(
+  "/user-requirement-assignments",
+  authMiddleware({ allowNoProfiles: true }),
+  userRequirementAssignmentsRouter
+);
+app.use("/reminder-members", authMiddleware({ allowNoProfiles: true }), adminStoreMembersRouter);
+app.use("/tenant-requirements", authMiddleware(), tenantRequirementsRouter);
+app.use("/tenant-requirement-value-types", authMiddleware(), tenantRequirementValueTypesRouter);
+app.use("/tenant-requirement-real-data", authMiddleware(), tenantRequirementRealDataRouter);
+app.use("/company-requirements", authMiddleware(), companyRequirementsRouter);
+app.use("/company-requirement-value-types", authMiddleware(), companyRequirementValueTypesRouter);
+app.use("/company-requirement-real-data", authMiddleware(), companyRequirementRealDataRouter);
+app.use("/ocr-test", authMiddleware(), ocrTestRouter);
 
 // ============================================
 // 認証が必要なルート（汎用パス - 最後に配置）

@@ -1,0 +1,243 @@
+=============================================================================
+cross-tenant「Hide」と deprecated の整理メモ（設計検討用）
+作成: 会話に基づく整理。実装の最終決定ではない。
+=============================================================================
+
+■ 前提（プロダクトルールの確認）
+-----------------------------------------------------------------------------
+・cross-tenant で共有・参照できるのは prepped item に限定される。
+  raw / base item を他テナントのレシピ材料として直接 cross-tenant する話ではない。
+  （サイクル検出・breakdown・UI の cross-tenant 選択もこの前提に沿っている。）
+
+
+■ 用語の切り分け
+-----------------------------------------------------------------------------
+・cross-tenant Hide
+  owner テナントが cross_tenant_item_shares 上で read を付けない（または撤去）ことにより、
+  閲覧テナントの「他テナント item 選択リスト」から消え、新規の材料追加はできないが、
+  方針次第では既存 recipe line 上の参照（grandfather）は残しうる、という種類のルール。
+
+・deprecated（アイテムの廃止フラグ）
+  同一テナント内の item ライフサイクル用。vendor / base / item の非推奨・後方互換・
+  バリデーション（新規利用禁止・既存行の扱い）とセットで語られることが多い。
+
+
+■ 先に挙げた「例1〜4」を、Hide 中心に整理し直す
+-----------------------------------------------------------------------------
+例1（Hide と直接関連）
+  他テナントの prepped A を B が材料に使っていた。
+  オーナーが A を cross-tenant Hide。
+  → available リストに A が出ない。
+  → UI 上「リストに無いが recipe には残る」状態は、Hide ポリシーと整合的。
+
+例2（Hide とは別軸：参照切れ・削除）
+  recipe_lines.child_item_id が指す item が DB に存在しない。
+  → データ不整合。Hide ではなく「壊れた参照」の問題。
+  → 同じ UI ヒューリスティック（available に無い）だと Hide と見分けが付かない、という話。
+
+例3（Hide とは別軸：読み込みタイミング）
+  一覧取得前の一瞬、または一部 API 失敗で「まだリストが空に近い」。
+  → 一時的な誤表示の可能性。Hide 仕様そのものではない。
+
+例4（Hide とは別軸：deprecated / フィルタ）
+  自テナント prepped が deprecated 等で選択リストから落ちているが、古い line に ID が残る。
+  → 運用ルールは deprecated 側。cross-tenant Hide とは別。
+
+
+■ 「isHiddenOrUnavailableIngredient の“問題”」とは何か
+-----------------------------------------------------------------------------
+仕様バグというより「表示ラベルの意味が広い」ことの注意点。
+  条件は「自テナント items 一覧にも cross-tenant available にも無い child_item_id」なので、
+  真因は Hide だけに限定されない。
+  cross-tenant Hide を主眼にするなら実用上は許容しつつ、
+  文言を厳密に「Hide のときだけ」とするなら、共有テーブル等での明示判定が必要。
+
+
+■ deprecated と cross-tenant の関係（現状イメージ）
+-----------------------------------------------------------------------------
+・deprecated のバリデーションや一覧フィルタは、主に「閲覧テナント自身の tenant 範囲」で効く
+  実装になりがち。
+・他テナント prepped の可否は cross_tenant_item_shares が支配するため、
+  「deprecated が cross-tenant 全体で一貫して効く」とは限らない（ギャップがありうる）。
+
+なので「Hide（共有）」と「deprecated（アイテム寿命）」は別レイヤーだが、
+UI では「リストに出ない」という結果が両方で起きうるため、ユーザー向けには混同しやすい。
+
+
+■ 設計として「遺書に（一文に）まとめ直す」価値
+-----------------------------------------------------------------------------
+・ユーザー向け文言・将来仕様のために、次の2軸を文書化しておくのがよい：
+  (1) 共有（Hide / read） … 他テナント item を「見せるか」
+  (2) 寿命（deprecated） … その item を「製品として続投するか」
+・二者を混ぜず、「既存行の grandfather をどちらが許すか」を表で決めると、
+  implementation と説明がブレにくい。
+
+
+■ 改めて：cross-tenant は prepped のみ
+-----------------------------------------------------------------------------
+・cross-tenant の材料として許されるのは他テナントの prepped。
+・raw / base item を cross-tenant 材料として追加する話ではない、という理解でよい。
+
+
+■ deprecated カスケードとコード上の事実（backend/src/services/deprecation.ts）
+-----------------------------------------------------------------------------
+・連鎖ロジックは既にある：deprecateItemCascade が recipe_lines で
+  child_item_id = 対象 item を材料にしている親を探し、親を indirect deprecated にし、
+  再帰でさらに上の親へ辿る。
+
+・ただし recipe_lines の取得は .in("tenant_id", tenantIds) で絞っている。
+  deprecatePreppedItem 等に渡る tenantIds が「オーナー側のテナントだけ」のとき、
+  閲覧側テナントに存在する recipe_lines（parent の item は閲覧側、line.tenant_id も閲覧側）
+  はクエリに乗らない。
+
+・結論：「カスケードの考え方はあるが、cross-tenant の消費側には今のスコープでは届かない」
+  という理解はコードと一致する。cross-tenant 「未対応」の主因は別ロジックの不在というより
+  tenantIds による絞り込み。
+
+
+■ 「テナントをまたいでも deprecated を適用する」の難しさ（実装量より仕様）
+-----------------------------------------------------------------------------
+・機械的には tenantIds を広げる／会社内テナント列挙／共有が有効な先だけ、などで
+  recipe_lines を拾いに行くことはできる。
+
+・先に決めるべきはプロダクト仕様のほう：
+  - オーナーが prepped を deprecated にしたとき、閲覧テナントの prepped を
+    自動で indirect にするか。
+  - 閲覧側は recipe 行だけ残す／閲覧側の item は触らない、など。
+  - undeprecate（checkAllIngredientsActive / recursivelyUndeprecateParents）とも
+    同じルールで整合させるか。
+
+・中途半端に避け、一貫させるなら：
+  「伝播の適用範囲」（単一テナント／同一 company 全テナント／共有相手のみ等）を
+  先に固定し、その前提で deprecation.ts のクエリ・undeprecate・recipe バリデーションを
+  揃えるのが安全。
+
+
+■ 補足（説明の信頼性）
+-----------------------------------------------------------------------------
+・上記 deprecated の段落は、会話時点で deprecation.ts を読んだうえでの整理。
+・「Hide」と「deprecated」の早期の短文回答は概念ベースが混ざっていた可能性があり、
+  カスケードの有無・tenant 絞りはこのセクションを正とする。
+
+
+■ 合意したプロダクト方針（Hide と deprecated の優先・下流禁止）
+-----------------------------------------------------------------------------
+・cross-tenant で「Hide のまま」共有されていた先が、その後 **deprecated** になった場合は、
+  **deprecated を優先**する（＝「まだ Hide だから緩い」ではなく、**使えない側のルールで統一**）。
+
+・その状態の材料（共有先の prepped が Hide 経緯のうえ deprecated）を **レシピに含む item A** について、
+  **A を材料としてさらに item B を新規に作ることはできない**（下流への依存拡張を止める）。
+
+・本セクションは **仕様の合意メモ**。**コードがこのとおりにすべて満たしているかは別**。
+  「B を禁止する」は、保存時バリデーション・間接 deprecated・オーナー側カスケード拡張など、
+  実装手段は複数ありうる。
+
+
+■ 上記方針に対する解釈メモ（会話時点のアシスタント整理）
+-----------------------------------------------------------------------------
+・Hide（read 無し＝新規ピック不可）と deprecated（利用禁止寄り）が同じ child を指すとき、
+  **deprecated で一本化**すれば、「grandfather はどっち？」の緊張は説明上ほどけやすい。
+
+・「A を材料に B を作れない」は、**壊れた／非推奨な依存チェーンをさらに伸ばさない**という意味で、
+  先に挙げた「deprecated カスケードが閲覧テナントまで自動で届かない」ギャップを、
+  **明示ルールで補う**考え方に合わせることができる。
+
+
+■ Hide と deprecated が関わりうるその他の箇所（仕様で揃える余地）
+-----------------------------------------------------------------------------
+・**他テナント候補リスト（available / GET cross-tenant-item-shares 系）**
+  Hide は read が無いと出ない。一方 **deprecated だが read は付いたまま**のケースでは、
+  理屈上ドロップダウンに載りうる（クエリが items.deprecated で落としているかは別問題）。
+  「deprecated は候補から外す」などを仕様で決める余地がある。
+
+・**画面の「Hidden by owner」系の表示**（例: cost ページのヒューリスティック）
+  条件が「自テナント一覧にも cross available にも無い child_item_id」寄りだと、
+  **本当は deprecated だけ**のときも見た目が似うる。文言・判定を仕様で分けるかどうか。
+
+・**コスト breakdown**
+  共有が無い／計算対象外だと金額が出ない、などは **Hide 寄り**の現象になりやすい。
+  deprecated 自体を breakdown でどう扱うかは、別途ポリシーで揃えると安心。
+
+・**カスケード deprecated（オーナー側 deprecation.ts）**
+  テナント内の連鎖はあるが、cross-tenant 消費側までは自動で辿らない（別セクション参照）。
+  「B は作れない」を **自動連鎖**で満たすか **保存時バリデーション**で満たすかは設計の選択。
+
+
+■ Hide 対応として実装済みの内容（差分・コードに基づく記述）
+-----------------------------------------------------------------------------
+目的の要約: オーナーが read 共有を外した（Hide）あとも **既存のレシピ行は DB に残りうる**。
+その状態で **新規に隠れた材料を指すことは禁止**しつつ、**グラフのサイクル検査だけ**が
+「共有が無い＝エラー」で落ちないようにする（共有検証とサイクル検証の役割分離）。
+
+差分で触れている主ファイルは次の4つ（写真のサマリと一致）。
+  `cycle-detection-cross-tenant.ts` / `recipe-lines.ts` / `items.ts` /
+  `frontend/app/cost/page.tsx`
+
+
+（1）backend/src/services/cycle-detection-cross-tenant.ts
+-----------------------------------------------------------------------------
+・`checkCycleCrossTenant(..., enforceShareCheck: boolean = true)`
+  - **true**（既定）: 親子が **別テナント** かつ子が **prepped** の辺について、
+    `hasCrossTenantReadShare(viewerTenantId, childItem, …)` で
+    `cross_tenant_item_shares` の **read** と company/tenant ターゲットを検査し、
+    無ければ `CrossTenantShareDeniedError`（コスト breakdown の seed と同系の意味合い）。
+  - **false**: 上記の共有検査を **スキップ**し、非 prepped の cross-tenant 禁止などは従来どおり。
+    **サイクル（`RecipeDependencyCycleError`）の検出だけ**を行う。
+
+・再帰呼び出しでは、次に辿る子アイテムの **所在テナント** `childItem.tenant_id` を
+  次の `viewerTenantId` として渡す。`enforceShareCheck === true` の経路では
+  「各辺で、子アイテムのオーナーテナント側の文脈で共有を見る」意図に揃える。
+
+・現状、ルートからの呼び出し（recipe-lines / items）はすべて **`enforceShareCheck: false`**。
+  既定 true は「この関数単体のデフォルト挙動」として残している。
+
+
+（2）backend/src/routes/recipe-lines.ts
+-----------------------------------------------------------------------------
+・**`validateCrossTenantIngredientShare(line, viewerTenantId)`**
+  - 閲覧テナントに紐づく `company_tenants` から company を決め、
+    同一 company の `cross_tenant_item_shares` で **read** があり、
+    target が company 全体または当該 viewer テナントに効いているかを見る。
+  - 自テナントの子、または非 prepped の他テナント子はここ以前の分岐で弾く。
+
+・**共有検証が走る条件（Hide 後の新規ピックをここで防ぐ）**
+  - **POST** `ingredient`: 常に `validateCrossTenantIngredientShare` → 通ったあと
+    `checkCycleCrossTenant(parent, …, false)`。
+  - **PUT** `ingredient`: **`child_item_id` が既存と変わったときだけ**
+    共有検証 → 同ブロック内で `checkCycleCrossTenant(..., false)`。
+    数量・単位など **子 ID 以外の更新**では、この共有検証ブロックもサイクル検査も **走らない**。
+  - **バッチ**: `create` の ingredient は常に共有検証（＋別関数の deprecated 検証）。
+    `update` の ingredient は **`child_item_id` が変わったときだけ** 共有検証
+    （＋マージ後の deprecated 検証）。
+    その後、影響を受ける各親 `parent_item_id` について
+    `checkCycleCrossTenant(parentId, …, false)` を順に実行。
+
+・**サイクル検査**はいずれも **`enforceShareCheck: false`**。
+  共有は上記の「新規行・子差し替え」のときだけ必須。既存の grandfather 行を含むグラフでも
+  サイクル判定だけは完走できる。
+
+
+（3）backend/src/routes/items.ts
+-----------------------------------------------------------------------------
+・**PUT** で、更新後または更新前のどちらかが **`item_kind === "prepped"`** かつ
+  そのアイテムに **ingredient の recipe_lines が1行以上**ある場合、更新前に
+  `checkCycleCrossTenant(当該 item id, viewerTenantId, …, false)` を実行。
+  prepped だがレシピ行が無い更新ではサイクル検査はスキップ。
+  共有検査はここでは行わない（recipe-lines 側の新規・子変更と同じ分離）。
+
+
+（4）frontend/app/cost/page.tsx
+-----------------------------------------------------------------------------
+・閲覧テナント向けに `cross_tenant_item_shares` 系 API で **read 可能な他テナント prepped** を読み、
+  `crossTenantAvailableItems` 等として保持（Hide 後は候補に載らない＝新規選択しにくい）。
+・材料 UI で **オーナーテナント別フィルタ**（行ごとの state / モーダル用のテナント一覧など）。
+・**`isHiddenOrUnavailableIngredient(child_item_id)`**:
+  `availableItems` にも `crossTenantAvailableItems` にも **載っていない**子 ID を
+  「隠れ／利用不可」扱いにし、読み取り専用で **「Hidden by owner (existing …)」** 等を表示。
+  判定はヒューリスティック（deprecated のみ等でも同様に見えることがある）は
+  別セクション「その他の箇所」参照。
+
+※ バッチ内の **`validateRecipeLineNotDeprecated`** は deprecated 方針用で、
+  Hide／共有とは別軸の検証。
+
+=============================================================================

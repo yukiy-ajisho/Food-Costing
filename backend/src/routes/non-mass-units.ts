@@ -1,5 +1,8 @@
 import { Router } from "express";
 import { NON_MASS_UNITS } from "../constants/units";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
+import { getUnifiedTenantResource } from "../middleware/unified-resource-helpers";
 
 const router = Router();
 
@@ -7,21 +10,28 @@ const router = Router();
  * GET /non-mass-units
  * 全非質量単位を取得（ハードコードされたデータを返す）
  */
-router.get("/", async (req, res) => {
-  try {
-    // ハードコードされた非質量単位を返す
-    const nonMassUnits = NON_MASS_UNITS.map((name, index) => ({
-      id: `hardcoded-${index}`,
-      name: name,
-    }));
+router.get(
+  "/",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource
+  ),
+  async (req, res) => {
+    try {
+      // ハードコードされた非質量単位を返す
+      const nonMassUnits = NON_MASS_UNITS.map((name, index) => ({
+        id: `hardcoded-${index}`,
+        name: name,
+      }));
 
-    res.json(nonMassUnits);
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
+      res.json(nonMassUnits);
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
   }
-});
+);
 
 /**
  * POST /non-mass-units

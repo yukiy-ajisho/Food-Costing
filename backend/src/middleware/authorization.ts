@@ -48,7 +48,7 @@ export function authorizationMiddleware(
       const principal: Principal = {
         id: req.user.id,
         tenant_id: currentTenantId,
-        role: role as "admin" | "manager" | "staff",
+        role: role as "admin" | "director" | "manager" | "staff",
       };
 
       // 認可チェックを実行（resource_sharesを考慮）

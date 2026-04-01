@@ -48,7 +48,7 @@ export function initializeAuthorizer(): void {
 export interface Principal {
   id: string;
   tenant_id: string;
-  role: "admin" | "manager" | "staff";
+  role: "admin" | "director" | "manager" | "staff";
 }
 
 /**
@@ -98,6 +98,10 @@ export async function authorize(
   }
 
   try {
+    // resource_shares の role ターゲットは従来「admin」で付与されることが多いため、director は admin と同じマッチとして扱う
+    const roleForShareMatching =
+      principal.role === "director" ? "admin" : principal.role;
+
     // コレクションリソース（collection-で始まるID）または一時リソース（temp-で始まるID）の場合はresource_sharesチェックをスキップ
     const isCollectionResource = resource.id.startsWith("collection-");
     const isTemporaryResource = resource.id.startsWith("temp-");
@@ -128,7 +132,7 @@ export async function authorize(
             resource.resource_type,
             resource.id,
             principal.tenant_id,
-            principal.role,
+            roleForShareMatching,
             principal.id
           );
 
@@ -162,14 +166,14 @@ export async function authorize(
       }
       // item_kindがrawまたはその他のリソースタイプの場合は制限なし（通常の認可チェックに進む）
     } else {
-      // Adminまたはその他のリソースタイプの場合、通常のresource_sharesチェック
+      // Admin/Director またはその他のリソースタイプの場合、通常のresource_sharesチェック
       // ただし、コレクションリソースまたは一時リソースの場合はスキップ
       if (checkResourceShares && !shouldSkipResourceSharesCheck) {
         const shares = await getResourceShares(
           resource.resource_type,
           resource.id,
           principal.tenant_id,
-          principal.role,
+          roleForShareMatching,
           principal.id
         );
 

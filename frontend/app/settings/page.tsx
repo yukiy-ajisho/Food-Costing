@@ -24,6 +24,7 @@ export default function SettingsPage() {
   const { selectedTenantId } = useTenant();
   const isDark = theme === "dark";
   const [activeTab, setActiveTab] = useState<TabType>("labor");
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   // Laborタブ用のstate
   const [laborRoles, setLaborRoles] = useState<LaborRoleUI[]>([]);
@@ -71,7 +72,12 @@ export default function SettingsPage() {
         setHasLoadedLaborOnce(true);
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("Failed to fetch data");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("Failed to fetch data");
+        }
       } finally {
         setLoadingLabor(false);
       }
@@ -86,9 +92,15 @@ export default function SettingsPage() {
     if (activeTab === "labor") {
       setHasLoadedLaborOnce(false);
       setLaborRoles([]);
+      setPermissionDenied(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTenantId]);
+
+  useEffect(() => {
+    // タブを切り替えたら権限メッセージをリセット
+    setPermissionDenied(false);
+  }, [activeTab]);
 
   // =========================================================
   // Overweightタブのデータ取得
@@ -117,7 +129,12 @@ export default function SettingsPage() {
         setHasLoadedOverweightOnce(true);
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("Failed to fetch data");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("Failed to fetch data");
+        }
       } finally {
         setLoadingOverweight(false);
       }
@@ -325,6 +342,24 @@ export default function SettingsPage() {
   const loading =
     (activeTab === "labor" && loadingLabor) ||
     (activeTab === "overweight" && loadingOverweight);
+
+  if (permissionDenied) {
+    return (
+      <div className="p-8">
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            You don&apos;t have permission.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading && !hasLoadedLaborOnce && !hasLoadedOverweightOnce) {
     return (

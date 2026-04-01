@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { render } from "@react-email/render";
 import { InvitationEmail } from "../emails/invitation-email";
+import { CompanyInvitationEmail } from "../emails/company-invitation-email";
 import * as React from "react";
 
 // Resendクライアントを遅延初期化（関数内で初期化）
@@ -67,6 +68,71 @@ export async function sendInvitationEmail(
     return data.id; // email_idを返す
   } catch (error) {
     console.error("[Email Service] Failed to send invitation email:", error);
+    throw error;
+  }
+}
+
+export interface CompanyInvitationEmailParams {
+  to: string;
+  companyName: string;
+  inviterName: string;
+  acceptUrl: string;
+}
+
+/**
+ * 会社招待メールを送信（director として参加を促す）
+ * @returns email_id (Resendが返すメール送信の一意ID)
+ */
+export async function sendCompanyInvitationEmail(
+  params: CompanyInvitationEmailParams
+): Promise<string> {
+  const { to, companyName, inviterName, acceptUrl } = params;
+
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is not configured");
+  }
+
+  const resend = getResendClient();
+
+  try {
+    const html = await render(
+      React.createElement(CompanyInvitationEmail, {
+        companyName,
+        inviterName,
+        acceptUrl,
+      })
+    );
+
+    const { data, error } = await resend.emails.send({
+      from:
+        process.env.RESEND_FROM_EMAIL || "Food Costing <onboarding@resend.dev>",
+      to: [to],
+      subject: `You've been invited to join ${companyName} as a director on Food Costing`,
+      html,
+    });
+
+    if (error) {
+      console.error(
+        "[Email Service] Error sending company invitation email:",
+        error
+      );
+      throw error;
+    }
+
+    if (!data || !data.id) {
+      throw new Error("Resend did not return an email_id");
+    }
+
+    console.log(
+      "[Email Service] Company invitation email sent successfully:",
+      data
+    );
+    return data.id;
+  } catch (error) {
+    console.error(
+      "[Email Service] Failed to send company invitation email:",
+      error
+    );
     throw error;
   }
 }

@@ -1,0 +1,246 @@
+================================================================================
+Company Director 招待 — 何をするか・どのようにするか
+================================================================================
+作成: 2026-03
+ベストプラクティスに沿い、無理に既存と共有せず、分けた方がよいものは別実装とする。
+
+--------------------------------------------------------------------------------
+1. 目的とスコープ
+--------------------------------------------------------------------------------
+
+1.1 目的
+  - 会社の company_admin または company_director が、メールアドレスを指定して
+    「company_director としてこの会社に参加してほしい」と招待できるようにする。
+  - 招待された人がリンクから受け入れると、company_members に company_director で
+    追加され、その会社配下でテナントを作成・管理できるようになる。
+  - company_admin の招待は行わない（作成者のみ。1 company に 1 人）。
+
+1.2 スコープ
+  - 招待の作成・一覧・取り消し（キャンセル）
+  - 招待メール送信（受信者が受け入れ用リンクを開く）
+  - トークン検証（公開）と受け入れ（認証必須、メール一致時のみ company_members に追加）
+  - 新規ユーザーが招待メールのみでサインアップできるようにするため、招待作成時に
+    allowlist にそのメールを追加する（既存の仕組みを利用。Auth Hook は変更しない）。
+
+--------------------------------------------------------------------------------
+2. 方針：何を共有し、何を分けるか
+--------------------------------------------------------------------------------
+
+2.1 共有するもの（既存のまま利用）
+  - allowlist テーブル
+    - 会社招待作成時に、招待の email を allowlist に 1 行追加する（status='approved', source='invitation'）。
+    - 既存のカラム・制約のまま。company 用のカラムは追加しない。
+  - Auth Hook（check_before_signup）
+    - 変更しない。allowlist の status='approved' だけを見てサインアップ可否を判定する。
+    - 会社招待でも「招待作成時に allowlist に追加」するため、そのまま動作する。
+
+2.2 分けるもの（テナント招待と混ぜない）
+  - 招待用テーブル
+    - テナント招待: 既存の invitations（tenant_id, role=manager|staff）。
+    - 会社招待: 新規の company_invitations（company_id、role は常に director のためカラム省略可）。
+    - 理由: 参照先（tenant vs company）・役割の意味が異なり、既存 API や Cedar との結合を避けるため。
+  - 招待用 API
+    - テナント: POST/GET /invite, GET /invite/verify/:token, POST /invite/accept（Cedar + tenant スコープ）。
+    - 会社: 別ルート（例: POST/GET /companies/:id/invitations, GET /invite/verify-company/:token, POST /invite/accept-company）。
+    - 理由: 認可が異なる（Cedar vs ensureCompanyAccess）。URL とトークンの名前空間を分け、誤ってテナント招待のトークンで会社受け入れをしないようにする。
+  - メール送信
+    - テナント: 既存の sendInvitationEmail（テナント名・role manager/staff・acceptUrl）。
+    - 会社: 会社招待用の送信関数とメールテンプレートを新規作成（会社名・「director として」・別の acceptUrl）。
+    - 理由: 文面・件名・リンク先が異なる。1 関数に type を渡して分岐させるより、別関数の方が読みやすくテストしやすい。
+  - 受け入れページ（フロント）
+    - テナント: 既存の /join?token=xxx。
+    - 会社: 新規の /join-company?token=xxx（または /invite/accept-company?token=xxx）。
+    - 理由: 受け入れ後のリダイレクト先や表示メッセージが異なる。混在させない。
+
+--------------------------------------------------------------------------------
+3. データベース：何をするか・どのように
+--------------------------------------------------------------------------------
+
+3.1 新規テーブル company_invitations（schema_dump の invitations を参考にしつつ独立定義）
+
+  カラム案（推奨）:
+    - id              uuid PRIMARY KEY DEFAULT gen_random_uuid()
+    - email           text NOT NULL
+    - company_id      uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE
+    - token           text NOT NULL UNIQUE
+    - status          text NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'accepted', 'expired', 'canceled'))
+    - email_status    text CHECK (email_status IN ('delivered', 'failed'))  -- 送信結果（任意）
+    - created_by      uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE
+    - created_at      timestamptz DEFAULT now()
+    - expires_at      timestamptz NOT NULL
+    - email_id        text   -- Resend 等のメール ID（任意）
+
+  - role は「company_director 固定」のためカラムにしない。受け入れ時に company_members に role=company_director で挿入する。
+
+  制約・インデックス:
+    - 同一 (email, company_id) で status='pending' が複数存在しないようにする:
+      CREATE UNIQUE INDEX idx_company_invitations_unique_pending
+        ON company_invitations (email, company_id) WHERE status = 'pending';
+    - 検索用: company_id, token, status, expires_at, email, created_by にインデックスを張る。
+
+  参照: schema_dump.sql の invitations テーブル（tenant_id → company_id、role なし、FK 先を companies に変更）。
+
+3.2 既存テーブルの変更
+  - allowlist: 変更しない。
+  - invitations: 変更しない。
+  - companies / company_members: 変更しない。
+
+--------------------------------------------------------------------------------
+4. バックエンド API：何をするか・どのように
+--------------------------------------------------------------------------------
+
+4.1 招待の作成
+  - エンドポイント: POST /companies/:id/invitations（または POST /companies/:id/invite）
+  - 認可: 当該 company の company_admin または company_director のみ（ensureCompanyAccess）。
+  - Body: { email: string }
+  - 処理の流れ:
+    1. company_id = :id、email をバリデーション。
+    2. 同一 (email, company_id) で status='pending' の行が既にあれば 409 Conflict。
+    3. token を UUID で生成。expires_at を 7 日後などに設定。
+    4. company_invitations に 1 行 insert（created_by = 認証ユーザー id）。
+    5. allowlist にその email を 1 行 insert（status='approved', source='invitation'）。
+       - 既に存在する場合は UNIQUE 違反を無視するなどしてよい（既存のテナント招待と同じ扱い）。
+    6. 会社名を companies から取得。招待者名を auth.users などから取得。
+    7. 会社招待用メール送信関数を呼び、acceptUrl は FRONTEND_URL/join-company?token=xxx 形式で渡す。
+    8. 送信成功時は email_id / email_status を company_invitations に update。失敗時は email_status='failed' に update（招待は作成済みのまま）。
+  - レスポンス: 201、作成した招待の id, email, company_id, status, created_at, expires_at など。
+
+4.2 招待一覧の取得
+  - エンドポイント: GET /companies/:id/invitations
+  - 認可: 当該 company の company_admin または company_director のみ。
+  - クエリ: status（任意。pending のみなど）
+  - 処理: company_invitations を company_id で検索し、created_at 降順で返す。
+  - レスポンス: { invitations: [...] }
+
+4.3 招待のキャンセル（任意だが推奨）
+  - エンドポイント: DELETE /companies/:id/invitations/:invitationId
+  - 認可: 当該 company の admin/director、かつ その招待の created_by であるか、または同一 company の admin/director なら可、など。
+  - 処理: 該当行の status を 'canceled' に更新（または物理削除。論理削除の方が履歴が残りやすい）。
+
+4.4 トークン検証（公開・認証不要）
+  - エンドポイント: GET /invite/verify-company/:token（または /companies/invitations/verify/:token）
+  - 認可: 不要。トークンを知っている人が招待内容を確認するため。
+  - 処理:
+    1. company_invitations を token で検索。
+    2. 存在しない or status != 'pending' なら 404 または 410。
+    3. expires_at をチェック。期限切れなら status を 'expired' に更新して 410。
+    4. 返却: company_id, company_name（companies から取得）, email, expires_at など（受け入れページで表示する用）。
+  - テナント用の GET /invite/verify/:token はそのまま（invitations テーブル参照）。URL を分けることでトークン名前空間を分離。
+
+4.5 招待の受け入れ
+  - エンドポイント: POST /invite/accept-company
+  - Body: { token: string }
+  - 認可: 認証必須（authMiddleware({ allowNoProfiles: true })）。
+  - 処理:
+    1. company_invitations を token で検索。status='pending'、expires_at > now であること。
+    2. 認証ユーザーの email と招待の email が一致するか確認。一致しなければ 403。
+    3. 既に company_members に同じ (company_id, user_id) が存在するなら 409 または 200（既にメンバー）。
+    4. company_members に 1 行 insert（company_id, user_id=認証ユーザー id, role='company_director'）。
+    5. company_invitations の該当行の status を 'accepted' に更新。
+    6. 必要なら allowlist にその email がなければ追加（招待受け入れ時も既存テナント招待と同様に安全のため追加してよい）。
+  - レスポンス: 200、会社情報や「参加しました」メッセージ。フロントは /team などへリダイレクトしてよい。
+
+4.6 会社メンバー一覧（招待 UI で「誰が director か」を見る用）
+  - エンドポイント: GET /companies/:id/members
+  - 認可: 当該 company の company_admin または company_director のみ。
+  - 処理: company_members を company_id で取得。user の表示名・email は auth.users や users から取得して付与。
+  - レスポンス: { members: [{ user_id, role, email?, display_name? }] }
+  - 既存に同じ API がなければ新規作成。あればそれを使う。
+
+4.7 ルーティングの置き場所
+  - 会社招待の「作成・一覧・キャンセル・メンバー一覧」は companies ルーター（backend/src/routes/companies.ts）に追加するか、backend/src/routes/company-invitations.ts を新設して app.use("/companies", ...) 内で /companies/:id/invitations を処理する。
+  - 検証・受け入れは「招待全般」のイメージなので、invite ルーターに POST /invite/accept-company と GET /invite/verify-company/:token を追加するか、専用の company-invitations ルーターにまとめるかは好み。URL が /invite/verify-company の方が「招待の受け入れ」と分かりやすいので、invite ルーターに追加する案を推奨。
+
+--------------------------------------------------------------------------------
+5. メール送信：何をするか・どのように
+--------------------------------------------------------------------------------
+
+5.1 会社招待用の送信関数（新規）
+  - 関数名例: sendCompanyInvitationEmail(params)
+  - パラメータ例: { to, companyName, inviterName, acceptUrl }
+  - やること:
+    - 件名: "You've been invited to join [Company Name] as a director on Food Costing" など。
+    - 本文: 会社名・招待者名・「director として参加すると、この会社のテナントを作成・管理できます」・acceptUrl のボタン/リンク。
+  - 既存の InvitationEmail（テナント用）とは別に、CompanyInvitationEmail のような React Email コンポーネントを 1 つ作り、それを render して Resend で送信。
+  - 戻り値: Resend の email id（company_invitations.email_id に保存する用）。
+
+5.2 既存の sendInvitationEmail
+  - 変更しない。テナント招待専用のままにする。
+
+--------------------------------------------------------------------------------
+6. フロントエンド：何をするか・どのように
+--------------------------------------------------------------------------------
+
+6.1 Team ページ（会社を選択しているとき）
+  - 表示するもの:
+    - その会社のメンバー一覧（GET /companies/:id/members）。company_admin / company_director の表示と役割表示。
+    - その会社の招待一覧（GET /companies/:id/invitations）。pending を中心に、送信日・有効期限・キャンセルボタン。
+    - 「Director を招待」ボタン。クリックでメール入力フォームを表示。
+  - 送信時: POST /companies/:id/invitations に { email } を送る。成功したら招待一覧を再取得。
+  - キャンセル: DELETE /companies/:id/invitations/:id を呼び、一覧を再取得。
+  - 既存のテナント招待 UI（Invite Member）とは別ブロックとして「Company directors」または「会社メンバー・招待」セクションを設ける。
+
+6.2 会社招待の受け入れページ（新規）
+  - パス例: /join-company?token=xxx または /invite/accept-company?token=xxx
+  - 流れ:
+    1. クエリの token で GET /invite/verify-company/:token を呼ぶ（認証不要）。
+    2. 期限切れ・無効ならエラーメッセージを表示。
+    3. 有効なら「〇〇会社に director として参加しますか？」と会社名を表示。
+    4. 未ログインならログインを促し、ログイン後に同じページに戻る（token は URL に残す）。
+    5. ログイン済みなら「参加する」ボタンで POST /invite/accept-company に { token } を送る。
+    6. 成功したら /team や「参加しました」メッセージのあと /team へリダイレクト。
+  - テナント招待の /join とは別ページにし、混同しないようにする。
+
+--------------------------------------------------------------------------------
+7. 実装順序の推奨
+--------------------------------------------------------------------------------
+
+  1. マイグレーション: company_invitations テーブルとインデックス・制約の作成。
+  2. 型定義: backend の database 型に CompanyInvitation を追加。
+  3. メール: CompanyInvitationEmail コンポーネントと sendCompanyInvitationEmail を追加。
+  4. API: POST/GET /companies/:id/invitations, GET /companies/:id/members（未実装なら）, GET /invite/verify-company/:token, POST /invite/accept-company。必要なら DELETE /companies/:id/invitations/:id。
+  5. フロント: Team ページに会社メンバー・招待セクションと「Director を招待」を追加。
+  6. フロント: /join-company ページを新設し、検証→ログイン誘導→受け入れの流れを実装。
+
+--------------------------------------------------------------------------------
+8. 補足：認可の意味とメンバーシップの対応
+--------------------------------------------------------------------------------
+
+8.1 「ensureCompanyAccess で company_admin / company_director に限定。Cedar は使わない」とは
+  - 会社に関わる API（招待の作成・一覧・キャンセル、会社のテナント一覧・作成、メンバー一覧など）の認可は、Cedar を使わず、ensureCompanyAccess だけで行う、という意味です。
+  - ensureCompanyAccess の動き:
+    - 認証ユーザー ID と company_id を受け取り、company_members テーブルを検索する。
+    - その (company_id, user_id) で role が company_admin または company_director の行が 1 件あれば「アクセス可」、なければ 403 を返して「アクセス不可」。
+  - Cedar は「テナント内リソース」（items, recipes, テナント招待の create など）の権限判定に使っている。会社は「テナントの親」であり、テナント内のデータではないため、会社レベルの操作は DB の company_members だけで判定し、Cedar には載せない、という分担です。
+
+8.2 招待受け入れ時のメンバーシップ
+  - 会社招待を受け入れたら、company_members に新規レコードを 1 件追加する（company_id, user_id, role='company_director'）。これでそのユーザーが「その会社の director」になります。計画書の 4.5 に記載のとおりです。
+  - テナント招待の受け入れでは、別テーブル「tenant_members」は使っておらず、profiles テーブルで「そのテナントのメンバー」を表現しています。
+    - profiles の 1 行 = 1 ユーザーが 1 テナントに属し、そのテナント内での role（admin / manager / staff）を持つ。
+    - テナント招待の accept（POST /invite/accept）では、招待が有効な場合に profiles に 1 行 insert（user_id, tenant_id, role=招待の role）している（backend/src/routes/invite.ts の 458–464 行付近）。
+  - 対応関係の整理:
+    - テナントのメンバーになる → profiles にレコード追加（user_id, tenant_id, role）。
+    - 会社のメンバー（director）になる → company_members にレコード追加（company_id, user_id, role）。会社招待の accept ではこちらだけを行う。
+
+--------------------------------------------------------------------------------
+9. セキュリティ・ベストプラクティス
+--------------------------------------------------------------------------------
+
+  - トークン: UUID v4 など推測困難な値を使う。既存のテナント招待と同様。
+  - 有効期限: 7 日など明確にし、検証・受け入れの両方でチェックする。
+  - 受け入れ時: 必ず「ログイン中の email と招待の email の一致」を確認する。
+  - 重複: 同一 (email, company_id) で pending が複数できないように DB 制約で担保する。
+  - 認可: 会社向けはすべて ensureCompanyAccess で company_admin / company_director に限定。Cedar は使わない。
+  - allowlist: 招待作成時にのみ追加。既存行がある場合は上書きしない（upsert で status を approved にすることは可。要検討）。
+
+--------------------------------------------------------------------------------
+10. 参照
+--------------------------------------------------------------------------------
+
+  - テーブル定義の参考: supabase/schema_dump.sql の invitations, allowlist
+  - 既存招待フロー: backend/src/routes/invite.ts, backend/src/services/email.ts
+  - 会社認可: backend/src/routes/companies.ts の ensureCompanyAccess
+  - 受け入れページ例: frontend/app/join/ のテナント招待受け入れ
+
+================================================================================

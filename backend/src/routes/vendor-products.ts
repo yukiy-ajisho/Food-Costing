@@ -1,12 +1,12 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { VendorProduct } from "../types/database";
-import { authorizationMiddleware } from "../middleware/authorization";
+import { UnifiedTenantAction } from "../authz/unified/authorize";
+import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
-  getVendorProductResource,
-  getCreateResource,
-  getCollectionResource,
-} from "../middleware/resource-helpers";
+  getUnifiedTenantResource,
+  getUnifiedVendorProductResource,
+} from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
 
 const router = Router();
@@ -17,8 +17,9 @@ const router = Router();
  */
 router.get(
   "/",
-  authorizationMiddleware("read", (req) =>
-    getCollectionResource(req, "vendor_product")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.list_resources,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
   try {
@@ -46,7 +47,10 @@ router.get(
  */
 router.get(
   "/:id",
-  authorizationMiddleware("read", getVendorProductResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.read_resource,
+    getUnifiedVendorProductResource
+  ),
   async (req, res) => {
   try {
       let query = supabase
@@ -77,51 +81,52 @@ router.get(
  */
 router.post(
   "/",
-  authorizationMiddleware("create", (req) =>
-    getCreateResource(req, "vendor_product")
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource
   ),
   async (req, res) => {
   try {
-    const vendorProduct: Partial<VendorProduct> = req.body;
+    const vendorProduct: Partial<VendorProduct> & { base_item_id?: string } =
+      req.body;
 
-    // バリデーション（base_item_idは不要 - マッピングは別途作成）
+    const currentPrice = Number(vendorProduct.current_price);
+    const qty = Number(vendorProduct.purchase_quantity);
     if (
       !vendorProduct.vendor_id ||
       !vendorProduct.purchase_unit ||
-      !vendorProduct.purchase_quantity ||
-      !vendorProduct.purchase_cost
+      !Number.isFinite(qty) ||
+      qty <= 0 ||
+      !Number.isFinite(currentPrice) ||
+      currentPrice <= 0
     ) {
       return res.status(400).json({
         error:
-          "vendor_id, purchase_unit, purchase_quantity, and purchase_cost are required",
+          "vendor_id, purchase_unit, purchase_quantity (> 0), and current_price (> 0) are required",
       });
     }
 
-      // tenant_idとuser_idを自動設定（選択されたテナントID、または最初のテナント）
-      const selectedTenantId =
-        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
-    const vendorProductWithTenantId = {
-      ...vendorProduct,
-        tenant_id: selectedTenantId,
-        user_id: req.user!.id, // 作成者を記録
+    const selectedTenantId =
+      req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+
+    const insertRow = {
+      vendor_id: vendorProduct.vendor_id,
+      product_name: vendorProduct.product_name ?? null,
+      brand_name: vendorProduct.brand_name ?? null,
+      purchase_unit: vendorProduct.purchase_unit,
+      purchase_quantity: qty,
+      current_price: currentPrice,
+      tenant_id: selectedTenantId,
+      deprecated: vendorProduct.deprecated ?? null,
     };
 
-    // base_item_idを削除（Phase 1b: マッピングは別途作成）
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { base_item_id: _base_item_id, ...vendorProductWithoutBaseItemId } =
-        vendorProductWithTenantId as typeof vendorProductWithTenantId & {
-          base_item_id?: string;
-        };
-
-    // virtual_vendor_productsを作成
     const { data: newVendorProduct, error: vpError } = await supabase
       .from("virtual_vendor_products")
-      .insert([vendorProductWithoutBaseItemId])
+      .insert([insertRow])
       .select()
       .single();
 
     if (vpError) {
-      // unique constraint違反の場合、より分かりやすいメッセージに変換
       if (
         vpError.code === "23505" ||
         vpError.message.includes("duplicate key") ||
@@ -133,6 +138,26 @@ router.post(
         });
       }
       return res.status(400).json({ error: vpError.message });
+    }
+
+    const { error: peError } = await supabase.from("price_events").insert([
+      {
+        tenant_id: selectedTenantId,
+        virtual_vendor_product_id: newVendorProduct.id,
+        price: currentPrice,
+        source_type: "manual",
+        user_id: req.user!.id,
+      },
+    ]);
+
+    if (peError) {
+      await supabase
+        .from("virtual_vendor_products")
+        .delete()
+        .eq("id", newVendorProduct.id);
+      return res.status(400).json({
+        error: `Vendor product rolled back: ${peError.message}`,
+      });
     }
 
     // 自動undeprecateをチェック
@@ -163,21 +188,30 @@ router.post(
  */
 router.put(
   "/:id",
-  authorizationMiddleware("update", getVendorProductResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedVendorProductResource
+  ),
   async (req, res) => {
   try {
-    const vendorProduct: Partial<VendorProduct> = req.body;
+    const vendorProduct = req.body as Partial<VendorProduct> & {
+      base_item_id?: string;
+      purchase_cost?: number;
+      user_id?: string;
+    };
     const { id } = req.params;
 
-    // user_id、tenant_id、base_item_idを更新から除外（セキュリティのため、base_item_idはproduct_mappingsで管理）
+    // Price changes must go through POST /price-events/.../manual (ledger).
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const {
-        user_id: _user_id,
-        tenant_id: _tenant_id,
-        id: _id,
-        base_item_id: _base_item_id,
-        ...vendorProductWithoutIds
-      } = vendorProduct as typeof vendorProduct & { base_item_id?: string };
+    const {
+      user_id: _user_id,
+      tenant_id: _tenant_id,
+      id: _id,
+      base_item_id: _base_item_id,
+      current_price: _current_price,
+      purchase_cost: _purchase_cost,
+      ...vendorProductWithoutIds
+    } = vendorProduct;
 
       let query = supabase
       .from("virtual_vendor_products")
@@ -219,27 +253,34 @@ router.put(
  * PATCH /vendor-products/:id/deprecate
  * Vendor Productをdeprecatedにする
  */
-router.patch("/:id/deprecate", async (req, res) => {
-  try {
-    const { deprecateVendorProduct } = await import("../services/deprecation");
-    const result = await deprecateVendorProduct(
-      req.params.id,
-      req.user!.tenant_ids
-    );
+router.patch(
+  "/:id/deprecate",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedVendorProductResource
+  ),
+  async (req, res) => {
+    try {
+      const { deprecateVendorProduct } = await import("../services/deprecation");
+      const result = await deprecateVendorProduct(
+        req.params.id,
+        req.user!.tenant_ids
+      );
 
-    if (!result.success) {
-      return res.status(400).json({ error: result.error });
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.json({
+        message: "Vendor product deprecated successfully",
+        affectedItems: result.affectedItems,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    res.json({
-      message: "Vendor product deprecated successfully",
-      affectedItems: result.affectedItems,
-    });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
   }
-});
+);
 
 /**
  * DELETE /vendor-products/:id
@@ -247,7 +288,10 @@ router.patch("/:id/deprecate", async (req, res) => {
  */
 router.delete(
   "/:id",
-  authorizationMiddleware("delete", getVendorProductResource),
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.delete_item,
+    getUnifiedVendorProductResource
+  ),
   async (req, res) => {
   try {
       let query = supabase

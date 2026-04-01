@@ -1,0 +1,90 @@
+クロステナント breakdown 再帰問題（今回の事象）
+===============================================
+
+背景
+----
+この文書は、COST BREAKDOWN 計算で発生している再帰ループ問題についてまとめたものです。  
+保存 API における cycle detection の成否そのものとは別の問題です。
+
+観測された挙動
+--------------
+1) レシピ保存自体は cycle detection を通過する（backend log: "No cycle detected"）。  
+2) 保存直後の `GET /items/costs/breakdown` が 500 を返す。  
+3) breakdown 取得失敗により、UI の Cost 列が多く/全件で `-` 表示になる。
+
+確認済みエラー履歴
+------------------
+A. 最初のエラー（部分的に対処済み）
+   - code: `42P07`
+   - message: `relation "_ct_brk_pause_tic" already exists`
+   - 原因: 再帰呼び出し中に、退避用 temp テーブル名が固定で衝突していた。
+
+B. 現在のエラー
+   - code: `P0001`
+   - message: `calculate_item_costs_with_breakdown: cross-tenant recursion depth exceeded (max 8)`
+   - 原因: テナント間コスト解決の再帰が往復（A -> B -> A -> ...）して収束しない。
+
+重要な切り分け
+--------------
+- 本件は SQL 関数 `public.calculate_item_costs_with_breakdown(...)` の再帰計算問題。  
+- `checkCycleCrossTenant` の保存時バリデーション問題とは分離して扱う。
+
+なぜ起きるか
+------------
+現行関数の挙動（簡略）:
+1) テナント T のレシピから必要な foreign prepped を `temp_ct_foreign_needed` に作る。  
+2) `temp_ct_foreign_needed` の owner tenant ごとに  
+   `calculate_item_costs_with_breakdown(owner_tid, depth+1)` を再帰呼び出しする。  
+3) 返却結果から必要な foreign item 行だけを抜いて `temp_item_costs` に取り込む。
+
+問題点:
+- 手順 2 で、owner tenant の広いスコープを先に計算してしまう。  
+- owner tenant 側が元テナントの shared item に依存していると、再帰が往復しやすい。  
+- 結果として depth guard（max 8）で例外になる。
+
+副作用
+------
+`/items/costs/breakdown` は全件一括返却 API のため、  
+1件でも再帰例外が出るとレスポンス全体が失敗し、  
+同一テナント内の無関係な行まで `-` になる。
+
+目標
+----
+1) テナント間の再帰往復を発生させない。  
+2) 必要な foreign item（＋必要依存）だけを計算し、広域計算を避ける。  
+3) 既存の share 意味論（read 条件）を維持する。  
+4) 現在の API 返却契約を維持する。
+
+解決方針
+--------
+Phase 1（まず安定化）
+- `(tenant_id, item_id)` キーで再帰再入ガードを導入する。  
+- 同一 run 中に「計算中」のキーへ再入しない。  
+- 既に計算済みキーはメモ化結果を再利用する。
+
+Phase 2（計算範囲縮小 / 性能改善）
+- owner tenant の広域再帰を、必要 item 起点の再帰へ置き換える。  
+- 起点は `temp_ct_foreign_needed.child_item_id` のみ。  
+- その item の計算に必要な依存サブグラフだけを解く。  
+- 計算済み foreign 行のみを親側 temp に取り込む。
+
+なぜこの方針で2問題を同時に改善できるか
+----------------------------------------
+- ループ抑止: `(tenant,item)` 再入ガードで A<->B の往復再帰を切断できる。  
+- 効率改善: 必要 item 起点に限定することで、不要な owner tenant 全計算を回避できる。
+
+実装後の確認チェックリスト
+--------------------------
+1) 既存の再現シナリオで  
+   - 保存が成功し、  
+   - `/items/costs/breakdown` が 200 を返し、  
+   - backend に depth exceeded が出ない。  
+2) temp pause 名衝突（42P07）が再発しない。  
+3) クロステナント構成があっても、同一テナント行のコストが計算される。  
+4) 必要な shared prepped の材料行コストが取得できる。  
+5) 非共有 foreign item は引き続き share 意味論どおり除外される。
+
+備考
+----
+- cycle detection の仕様変更とは混ぜない。  
+- 本計画は SQL breakdown 再帰問題の解消に限定する。

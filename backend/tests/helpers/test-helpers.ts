@@ -6,6 +6,11 @@ import {
   RecipeLine,
 } from "../../src/types/database";
 
+/** `getCost(..., tenantIds, ...)` と buildTestMaps の tenant_id で共通利用 */
+export const TEST_TENANT_ID = "test-tenant-id";
+
+export const TEST_USER_ID = "test-user-id";
+
 /**
  * テスト用のマップを構築するヘルパー関数
  * テストデータから直接Mapを構築する
@@ -70,8 +75,8 @@ export function buildTestMaps(data: {
         id: bi.id,
         name: bi.name,
         specific_weight: bi.specificWeight ?? null,
-        user_id: "test-user-id",
-        tenant_id: "test-tenant-id", // Required field
+        user_id: TEST_USER_ID,
+        tenant_id: TEST_TENANT_ID,
       });
     });
   }
@@ -89,8 +94,8 @@ export function buildTestMaps(data: {
         proceed_yield_unit: item.proceedYieldUnit ?? null,
         each_grams: item.eachGrams ?? null,
         notes: item.notes ?? null,
-        user_id: "test-user-id",
-        tenant_id: "test-tenant-id", // Required field
+        user_id: TEST_USER_ID,
+        tenant_id: TEST_TENANT_ID,
       });
     });
   }
@@ -106,9 +111,8 @@ export function buildTestMaps(data: {
         brand_name: vp.brandName ?? null,
         purchase_unit: vp.purchaseUnit,
         purchase_quantity: vp.purchaseQuantity,
-        purchase_cost: vp.purchaseCost,
-        user_id: "test-user-id",
-        tenant_id: "test-tenant-id", // Required field
+        current_price: vp.purchaseCost,
+        tenant_id: TEST_TENANT_ID,
       });
     });
   }
@@ -120,8 +124,8 @@ export function buildTestMaps(data: {
         id: lr.id,
         name: lr.name,
         hourly_wage: lr.hourlyWage,
-        user_id: "test-user-id",
-        tenant_id: "test-tenant-id", // Required field
+        user_id: TEST_USER_ID,
+        tenant_id: TEST_TENANT_ID,
       });
     });
   }
@@ -138,8 +142,8 @@ export function buildTestMaps(data: {
         unit: rl.unit ?? null,
         labor_role: rl.laborRoleId ?? null,
         minutes: rl.minutes ?? null,
-        user_id: "test-user-id",
-        tenant_id: "test-tenant-id", // Required field
+        user_id: TEST_USER_ID,
+        tenant_id: TEST_TENANT_ID,
       };
 
       if (!recipeLinesMap.has(rl.parentItemId)) {

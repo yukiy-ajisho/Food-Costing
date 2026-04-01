@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, Fragment, useEffect, useRef } from "react";
-import { Edit, Save, Plus, Trash2, X } from "lucide-react";
+import { Edit, Save, Plus, Trash2, X, ArrowRight } from "lucide-react";
 import {
   vendorProductsAPI,
   itemsAPI,
   baseItemsAPI,
   vendorsAPI,
   productMappingsAPI,
+  priceEventsAPI,
   saveChangeHistory,
   type Item,
   type BaseItem as APIBaseItem,
@@ -46,6 +47,36 @@ interface BaseItemUI {
   created_at?: string;
 }
 
+/** blur / Save 前 flush 共通: 小数入力の文字列を数値へ（0 も有効） */
+function parseDecimalInputForCommit(raw: string): number | null {
+  const v = raw.trim();
+  if (v === "" || v === ".") return null;
+  const n = Number.parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** 入力中 Map のドラフトを行データへ反映（種別と一致する行のみ） */
+function flushBaseItemDraftsIntoRows(
+  rows: BaseItemUI[],
+  swInputs: Map<string, string>,
+  egInputs: Map<string, string>
+): BaseItemUI[] {
+  return rows.map((row) => {
+    const sel = row.selectedType ?? "none";
+    let next: BaseItemUI = { ...row };
+
+    if (swInputs.has(row.id) && sel === "specific_weight") {
+      const n = parseDecimalInputForCommit(swInputs.get(row.id) ?? "");
+      next = { ...next, specific_weight: n };
+    }
+    if (egInputs.has(row.id) && sel === "each") {
+      const n = parseDecimalInputForCommit(egInputs.get(row.id) ?? "");
+      next = { ...next, each_grams: n };
+    }
+    return next;
+  });
+}
+
 interface VendorUI {
   id: string;
   name: string;
@@ -70,15 +101,21 @@ export default function ItemsPage() {
     VendorProductUI[]
   >([]);
   const [isEditModeItems, setIsEditModeItems] = useState(false);
+  const [isRecordPriceModeItems, setIsRecordPriceModeItems] = useState(false);
   const [loadingItems, setLoadingItems] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
   // 入力中のpurchase_quantityを文字列として保持（vp.id -> 入力中の文字列）
   const [purchaseQuantityInputs, setPurchaseQuantityInputs] = useState<
     Map<string, string>
   >(new Map());
-  // 入力中のpurchase_costを文字列として保持（vp.id -> 入力中の文字列）
-  const [purchaseCostInputs, setPurchaseCostInputs] = useState<
+  // 入力中の current_price（新規行のみ Edit で編集可）
+  const [currentPriceInputs, setCurrentPriceInputs] = useState<
     Map<string, string>
   >(new Map());
+  // Manual record new price 用の入力値（vp.id -> 入力中の文字列）
+  const [newPriceInputs, setNewPriceInputs] = useState<Map<string, string>>(
+    new Map()
+  );
 
   // Base Itemsタブ用のstate
   const [baseItemsUI, setBaseItemsUI] = useState<BaseItemUI[]>([]);
@@ -121,6 +158,11 @@ export default function ItemsPage() {
       setFixedHeaderHeight(fixedHeaderRef.current.offsetHeight);
     }
   }, []);
+
+  useEffect(() => {
+    // タブやテナントを切り替えたら、権限メッセージをリセットする
+    setPermissionDenied(false);
+  }, [activeTab, selectedTenantId]);
 
   // 単位オプション（質量単位 + 非質量単位、順番を制御）
   const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED];
@@ -200,9 +242,8 @@ export default function ItemsPage() {
               brand_name: vp.brand_name,
               purchase_unit: vp.purchase_unit,
               purchase_quantity: vp.purchase_quantity,
-              purchase_cost: vp.purchase_cost,
-              user_id: vp.user_id, // Required field from VendorProduct
-              each_grams: item?.each_grams || null,
+              current_price: vp.current_price,
+              each_grams: item?.each_grams ?? null,
               needsWarning,
               created_at: vp.created_at,
             };
@@ -213,7 +254,12 @@ export default function ItemsPage() {
         setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("データの取得に失敗しました");
+        }
       } finally {
         setLoadingItems(false);
       }
@@ -246,8 +292,8 @@ export default function ItemsPage() {
             const correspondingItem = itemsData.find(
               (item) => item.base_item_id === baseItem.id
             );
-            const specificWeight = baseItem.specific_weight || null;
-            const eachGrams = correspondingItem?.each_grams || null;
+            const specificWeight = baseItem.specific_weight ?? null;
+            const eachGrams = correspondingItem?.each_grams ?? null;
             // 既存の値から選択状態を判定
             let selectedType: "specific_weight" | "each" | "none" = "none";
             if (specificWeight !== null && specificWeight !== undefined) {
@@ -270,7 +316,12 @@ export default function ItemsPage() {
         setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUI)));
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("データの取得に失敗しました");
+        }
       } finally {
         setLoadingBaseItems(false);
       }
@@ -300,7 +351,12 @@ export default function ItemsPage() {
         setOriginalVendors(JSON.parse(JSON.stringify(vendorsUI)));
       } catch (error) {
         console.error("Failed to fetch data:", error);
-        alert("データの取得に失敗しました");
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Forbidden: Insufficient permissions")) {
+          setPermissionDenied(true);
+        } else {
+          alert("データの取得に失敗しました");
+        }
       } finally {
         setLoadingVendors(false);
       }
@@ -314,15 +370,141 @@ export default function ItemsPage() {
   // =========================================================
   const handleEditClickItems = () => {
     setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProducts)));
+    setIsRecordPriceModeItems(false);
+    setNewPriceInputs(new Map());
+    setCurrentPriceInputs(new Map());
     setIsEditModeItems(true);
   };
 
+  const handleRecordNewPriceClickItems = () => {
+    setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProducts)));
+    setIsEditModeItems(false);
+    setPurchaseQuantityInputs(new Map());
+    setCurrentPriceInputs(new Map());
+    setIsRecordPriceModeItems(true);
+  };
+
   const handleCancelClickItems = () => {
+    if (isRecordPriceModeItems) {
+      setNewPriceInputs(new Map());
+      setIsRecordPriceModeItems(false);
+      return;
+    }
     setVendorProducts(JSON.parse(JSON.stringify(originalVendorProducts)));
+    setPurchaseQuantityInputs(new Map());
+    setCurrentPriceInputs(new Map());
     setIsEditModeItems(false);
   };
 
   const handleSaveClickItems = async () => {
+    if (isRecordPriceModeItems) {
+      try {
+        setLoadingItems(true);
+        const updates: Array<{ id: string; price: number }> = [];
+
+        for (const vp of vendorProducts) {
+          const raw = newPriceInputs.get(vp.id);
+          if (raw === undefined) continue;
+          const parsed = parseDecimalInputForCommit(raw);
+          if (parsed === null) continue;
+          if (parsed <= 0) {
+            alert("New price must be greater than 0");
+            return;
+          }
+          updates.push({ id: vp.id, price: parsed });
+        }
+
+        if (updates.length === 0) {
+          setNewPriceInputs(new Map());
+          setIsRecordPriceModeItems(false);
+          return;
+        }
+
+        const changedVendorProductIds: string[] = [];
+        for (const update of updates) {
+          await priceEventsAPI.recordManual(update.id, update.price);
+          changedVendorProductIds.push(update.id);
+        }
+
+        saveChangeHistory({
+          changed_vendor_product_ids: changedVendorProductIds,
+        });
+
+        const [
+          vendorProductsData,
+          baseItemsData,
+          vendorsData,
+          itemsData,
+          mappingsData,
+        ] = await Promise.all([
+          vendorProductsAPI.getAll(),
+          baseItemsAPI.getAll(),
+          vendorsAPI.getAll(),
+          itemsAPI.getAll({ item_kind: "raw" }),
+          productMappingsAPI.getAll(),
+        ]);
+
+        setBaseItems(baseItemsData);
+        setVendors(vendorsData);
+        setItems(itemsData);
+        setMappings(mappingsData || []);
+
+        const virtualProductToBaseItemMap = new Map<string, string>();
+        mappingsData?.forEach((mapping) => {
+          virtualProductToBaseItemMap.set(
+            mapping.virtual_product_id,
+            mapping.base_item_id
+          );
+        });
+
+        const vendorProductsUI: VendorProductUI[] = vendorProductsData
+          .filter((vp) => !vp.deprecated)
+          .map((vp): VendorProductUI | null => {
+            const baseItemId = virtualProductToBaseItemMap.get(vp.id);
+            if (!baseItemId) return null;
+
+            const item = itemsData.find((i) => i.base_item_id === baseItemId);
+            const baseItem = baseItemsData.find((b) => b.id === baseItemId);
+            let needsWarning = false;
+
+            if (vp.purchase_unit) {
+              if (vp.purchase_unit === "each") {
+                needsWarning = !item?.each_grams;
+              } else if (isNonMassUnit(vp.purchase_unit)) {
+                needsWarning = !baseItem?.specific_weight;
+              }
+            }
+
+            return {
+              id: vp.id,
+              base_item_id: baseItemId,
+              vendor_id: vp.vendor_id,
+              product_name: vp.product_name,
+              brand_name: vp.brand_name,
+              purchase_unit: vp.purchase_unit,
+              purchase_quantity: vp.purchase_quantity,
+              current_price: vp.current_price,
+              each_grams: item?.each_grams ?? null,
+              needsWarning,
+              created_at: vp.created_at,
+            };
+          })
+          .filter((vp): vp is VendorProductUI => vp !== null);
+
+        setVendorProducts(vendorProductsUI);
+        setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
+        setNewPriceInputs(new Map());
+        setIsRecordPriceModeItems(false);
+      } catch (error: unknown) {
+        console.error("Failed to record prices:", error);
+        const message = error instanceof Error ? error.message : String(error);
+        alert(`価格記録に失敗しました: ${message}`);
+      } finally {
+        setLoadingItems(false);
+      }
+      return;
+    }
+
     try {
       setLoadingItems(true);
 
@@ -335,12 +517,27 @@ export default function ItemsPage() {
           vp.vendor_id === "" &&
           (!vp.product_name || vp.product_name.trim() === "") &&
           vp.purchase_quantity === 0 &&
-          vp.purchase_cost === 0
+          vp.current_price === 0
         ) {
           return false;
         }
         return true;
       });
+
+      for (const vp of filteredVendorProducts) {
+        if (vp.isNew) {
+          if (
+            !Number.isFinite(vp.current_price) ||
+            vp.current_price <= 0
+          ) {
+            alert(
+              "新規行の Cost は 0 より大きい数値にしてください（変更は New price で記録します）。"
+            );
+            setLoadingItems(false);
+            return;
+          }
+        }
+      }
 
       // 変更されたvendor_productのIDを追跡
       const changedVendorProductIds: string[] = [];
@@ -348,14 +545,14 @@ export default function ItemsPage() {
       // API呼び出し
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
-          // 新規作成: virtual_vendor_productsを作成（base_item_idは含めない）
+          // 新規作成: virtual_vendor_products + price_events（バックエンド）
           const newVp = await vendorProductsAPI.create({
             vendor_id: vp.vendor_id,
             product_name: vp.product_name || null,
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
-            purchase_cost: vp.purchase_cost,
+            current_price: vp.current_price,
           });
           changedVendorProductIds.push(newVp.id);
 
@@ -376,7 +573,6 @@ export default function ItemsPage() {
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
-            purchase_cost: vp.purchase_cost,
           });
           changedVendorProductIds.push(vp.id);
 
@@ -475,9 +671,8 @@ export default function ItemsPage() {
             brand_name: vp.brand_name,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
-            purchase_cost: vp.purchase_cost,
-            user_id: vp.user_id, // Required field from VendorProduct
-            each_grams: item?.each_grams || null,
+            current_price: vp.current_price,
+            each_grams: item?.each_grams ?? null,
             needsWarning,
             created_at: vp.created_at,
           };
@@ -486,7 +681,10 @@ export default function ItemsPage() {
 
       setVendorProducts(vendorProductsUI);
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
+      setPurchaseQuantityInputs(new Map());
+      setCurrentPriceInputs(new Map());
       setIsEditModeItems(false);
+      setIsRecordPriceModeItems(false);
     } catch (error: unknown) {
       console.error("Failed to save:", error);
       const message = error instanceof Error ? error.message : String(error);
@@ -549,8 +747,7 @@ export default function ItemsPage() {
       brand_name: null,
       purchase_unit: "kg",
       purchase_quantity: 0,
-      purchase_cost: 0,
-      user_id: "", // Required field from VendorProduct (will be set by backend)
+      current_price: 0,
       isNew: true,
     };
 
@@ -567,17 +764,78 @@ export default function ItemsPage() {
   // =========================================================
   const handleEditClickBaseItems = () => {
     setOriginalBaseItems(JSON.parse(JSON.stringify(baseItemsUI)));
+    setSpecificWeightInputs(new Map());
+    setEachGramsInputs(new Map());
     setIsEditModeBaseItems(true);
   };
 
   const handleCancelClickBaseItems = () => {
     setBaseItemsUI(JSON.parse(JSON.stringify(originalBaseItems)));
+    setSpecificWeightInputs(new Map());
+    setEachGramsInputs(new Map());
     setIsEditModeBaseItems(false);
   };
 
   const handleSaveClickBaseItems = async () => {
     try {
       setLoadingBaseItems(true);
+
+      const merged = flushBaseItemDraftsIntoRows(
+        baseItemsUI,
+        specificWeightInputs,
+        eachGramsInputs
+      );
+      setBaseItemsUI(merged);
+      setSpecificWeightInputs(new Map());
+      setEachGramsInputs(new Map());
+
+      for (const item of merged) {
+        if (item.isMarkedForDeletion) continue;
+        if (item.isNew && item.name.trim() === "") continue;
+
+        if (item.selectedType === "specific_weight") {
+          const sw = item.specific_weight;
+          if (sw === null || sw === undefined) {
+            alert(
+              `"${
+                item.name?.trim() || "(untitled)"
+              }" has Specific weight selected but no value was entered.\n\nEnter a positive number or switch to None before saving.`
+            );
+            setLoadingBaseItems(false);
+            return;
+          }
+          if (sw === 0) {
+            alert(
+              `"${
+                item.name?.trim() || "(untitled)"
+              }": Specific weight cannot be 0 (it would make cost calculations invalid).\n\nEnter a positive number or switch to None before saving.`
+            );
+            setLoadingBaseItems(false);
+            return;
+          }
+        }
+        if (item.selectedType === "each") {
+          const eg = item.each_grams;
+          if (eg === null || eg === undefined) {
+            alert(
+              `"${
+                item.name?.trim() || "(untitled)"
+              }" has Each (g) selected but no value was entered.\n\nEnter a positive number or switch to None before saving.`
+            );
+            setLoadingBaseItems(false);
+            return;
+          }
+          if (eg === 0) {
+            alert(
+              `"${
+                item.name?.trim() || "(untitled)"
+              }": Each (g) cannot be 0 (it would make cost calculations invalid).\n\nEnter a positive number or switch to None before saving.`
+            );
+            setLoadingBaseItems(false);
+            return;
+          }
+        }
+      }
 
       // ============================================================
       // バリデーション: specific_weightやeach_gramsを削除しようとしている場合、
@@ -603,7 +861,7 @@ export default function ItemsPage() {
         base_item_id: virtualProductToBaseItemMap.get(vp.id) || "",
       }));
 
-      for (const item of baseItemsUI) {
+      for (const item of merged) {
         if (item.isNew) continue; // 新規追加は対象外
 
         // オリジナルを取得
@@ -661,7 +919,7 @@ export default function ItemsPage() {
         }
       }
 
-      const filteredBaseItems = baseItemsUI.filter((item) => {
+      const filteredBaseItems = merged.filter((item) => {
         if (item.isMarkedForDeletion) return false;
         if (item.isNew && item.name.trim() === "") return false;
         return true;
@@ -678,7 +936,7 @@ export default function ItemsPage() {
           // Base Itemを作成
           const newBaseItem = await baseItemsAPI.create({
             name: item.name,
-            specific_weight: item.specific_weight || null,
+            specific_weight: item.specific_weight ?? null,
           });
           baseItemId = newBaseItem.id;
           changedBaseItemIds.push(baseItemId);
@@ -686,7 +944,7 @@ export default function ItemsPage() {
           // Base Itemを更新
           await baseItemsAPI.update(item.id, {
             name: item.name,
-            specific_weight: item.specific_weight || null,
+            specific_weight: item.specific_weight ?? null,
           });
           baseItemId = item.id;
           changedBaseItemIds.push(baseItemId);
@@ -705,7 +963,7 @@ export default function ItemsPage() {
             item_kind: "raw",
             is_menu_item: false,
             base_item_id: baseItemId,
-            each_grams: item.each_grams || null,
+            each_grams: item.each_grams ?? null,
           });
           correspondingItem = newItem;
           changedItemIds.push(newItem.id);
@@ -713,14 +971,14 @@ export default function ItemsPage() {
           // itemsレコードが存在する場合は、each_gramsのみ更新（nameは更新しない）
           if (item.each_grams !== undefined) {
             await itemsAPI.update(correspondingItem.id, {
-              each_grams: item.each_grams || null,
+              each_grams: item.each_grams ?? null,
             });
             changedItemIds.push(correspondingItem.id);
           }
         }
       }
 
-      for (const item of baseItemsUI) {
+      for (const item of merged) {
         if (item.isMarkedForDeletion && !item.isNew) {
           // 削除ではなくdeprecateを使用
           await baseItemsAPI.deprecate(item.id);
@@ -749,8 +1007,8 @@ export default function ItemsPage() {
           const correspondingItem = itemsData.find(
             (item) => item.base_item_id === baseItem.id
           );
-          const specificWeight = baseItem.specific_weight || null;
-          const eachGrams = correspondingItem?.each_grams || null;
+          const specificWeight = baseItem.specific_weight ?? null;
+          const eachGrams = correspondingItem?.each_grams ?? null;
           // 既存の値から選択状態を判定
           let selectedType: "specific_weight" | "each" | "none" = "none";
           if (specificWeight !== null && specificWeight !== undefined) {
@@ -787,10 +1045,8 @@ export default function ItemsPage() {
     field: keyof BaseItemUI,
     value: string | number | null
   ) => {
-    setBaseItemsUI(
-      baseItemsUI.map((item) =>
-        item.id === id ? { ...item, [field]: value } : item
-      )
+    setBaseItemsUI((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
     );
   };
 
@@ -798,8 +1054,8 @@ export default function ItemsPage() {
     id: string,
     type: "specific_weight" | "each" | "none"
   ) => {
-    setBaseItemsUI(
-      baseItemsUI.map((item) => {
+    setBaseItemsUI((prev) =>
+      prev.map((item) => {
         if (item.id !== id) return item;
 
         // 既に選択されているタイプの場合は何もしない
@@ -809,8 +1065,8 @@ export default function ItemsPage() {
 
         // NONEに切り替える場合
         if (type === "none") {
-            return {
-              ...item,
+          return {
+            ...item,
             selectedType: "none",
             specific_weight: null,
             each_grams: null,
@@ -822,16 +1078,27 @@ export default function ItemsPage() {
         return {
           ...item,
           selectedType: type,
-          specific_weight: type === "specific_weight" ? item.specific_weight : null,
+          specific_weight:
+            type === "specific_weight" ? item.specific_weight : null,
           each_grams: type === "each" ? item.each_grams : null,
         };
       })
     );
+    setSpecificWeightInputs((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+    setEachGramsInputs((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
   };
 
   const handleDeleteClickBaseItems = (id: string) => {
-    setBaseItemsUI(
-      baseItemsUI.map((item) =>
+    setBaseItemsUI((prev) =>
+      prev.map((item) =>
         item.id === id
           ? { ...item, isMarkedForDeletion: !item.isMarkedForDeletion }
           : item
@@ -848,7 +1115,7 @@ export default function ItemsPage() {
       selectedType: "none",
       isNew: true,
     };
-    setBaseItemsUI([...baseItemsUI, newItem]);
+    setBaseItemsUI((prev) => [...prev, newItem]);
   };
 
   // =========================================================
@@ -969,7 +1236,7 @@ export default function ItemsPage() {
 
   // 現在のタブのEditモード
   const isEditMode =
-    (activeTab === "items" && isEditModeItems) ||
+    (activeTab === "items" && (isEditModeItems || isRecordPriceModeItems)) ||
     (activeTab === "raw-items" && isEditModeBaseItems) ||
     (activeTab === "vendors" && isEditModeVendors);
 
@@ -978,6 +1245,10 @@ export default function ItemsPage() {
     if (activeTab === "items") handleEditClickItems();
     else if (activeTab === "raw-items") handleEditClickBaseItems();
     else if (activeTab === "vendors") handleEditClickVendors();
+  };
+
+  const handleRecordNewPriceClick = () => {
+    if (activeTab === "items") handleRecordNewPriceClickItems();
   };
 
   const handleCancelClick = () => {
@@ -1017,6 +1288,24 @@ export default function ItemsPage() {
 
   const sortedBaseItemsUI = [...baseItemsUI].sort(makeSortFn(sortOrderBaseItems));
   const sortedVendorsUI = [...vendorsUI].sort(makeSortFn(sortOrderVendors));
+
+  if (permissionDenied) {
+    return (
+      <div className="px-8 pb-8">
+        <div className="max-w-7xl mx-auto">
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            You don&apos;t have permission.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="px-8 pb-8">
@@ -1155,17 +1444,27 @@ export default function ItemsPage() {
                 </button>
               </>
             ) : (
-              <button
-                onClick={handleEditClick}
-                className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
-                  isDark
-                    ? "bg-slate-600 hover:bg-slate-500"
-                    : "bg-gray-600 hover:bg-gray-700"
-                }`}
-              >
-                <Edit className="w-5 h-5" />
-                Edit
-              </button>
+              <>
+                <button
+                  onClick={handleEditClick}
+                  className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
+                    isDark
+                      ? "bg-slate-600 hover:bg-slate-500"
+                      : "bg-gray-600 hover:bg-gray-700"
+                  }`}
+                >
+                  <Edit className="w-5 h-5" />
+                  Edit
+                </button>
+                {activeTab === "items" && (
+                  <button
+                    onClick={handleRecordNewPriceClick}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    Manual record new price
+                  </button>
+                )}
+              </>
             )}
             </div>
           </div>
@@ -1261,6 +1560,20 @@ export default function ItemsPage() {
                       >
                         Cost
                       </th>
+                      {isRecordPriceModeItems && (
+                        <>
+                          <th
+                            className="px-1 py-3"
+                            style={{ width: "4%" }}
+                          />
+                          <th
+                            className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-blue-700"
+                            style={{ width: "15%" }}
+                          >
+                            New price
+                          </th>
+                        </>
+                      )}
                       {isEditModeItems && (
                         <th
                           className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
@@ -1761,12 +2074,127 @@ export default function ItemsPage() {
                               }}
                             >
                               {isEditModeItems ? (
+                                vp.isNew ? (
+                                  <div
+                                    className="flex items-center gap-1"
+                                    style={{ height: "20px" }}
+                                  >
+                                    <span
+                                      className="text-gray-500"
+                                      style={{ lineHeight: "20px" }}
+                                    >
+                                      $
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={
+                                        currentPriceInputs.has(vp.id)
+                                          ? currentPriceInputs.get(vp.id) || ""
+                                          : vp.current_price === 0
+                                            ? ""
+                                            : String(vp.current_price)
+                                      }
+                                      onChange={(e) => {
+                                        const value = e.target.value;
+                                        const numericPattern =
+                                          /^(\d+\.?\d*|\.\d+)?$/;
+                                        if (numericPattern.test(value)) {
+                                          setCurrentPriceInputs((prev) => {
+                                            const newMap = new Map(prev);
+                                            newMap.set(vp.id, value);
+                                            return newMap;
+                                          });
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        const value = e.target.value;
+                                        const numValue =
+                                          value === "" || value === "."
+                                            ? 0
+                                            : parseFloat(value) || 0;
+                                        handleVendorProductChange(
+                                          vp.id,
+                                          "current_price",
+                                          numValue
+                                        );
+                                        setCurrentPriceInputs((prev) => {
+                                          const newMap = new Map(prev);
+                                          newMap.delete(vp.id);
+                                          return newMap;
+                                        });
+                                      }}
+                                      className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      placeholder="0.00"
+                                      style={{
+                                        height: "20px",
+                                        minHeight: "20px",
+                                        maxHeight: "20px",
+                                        lineHeight: "20px",
+                                        padding: "0 4px",
+                                        fontSize: "0.875rem",
+                                        boxSizing: "border-box",
+                                        margin: 0,
+                                      }}
+                                    />
+                                  </div>
+                                ) : (
+                                  <div
+                                    className={`text-sm ${
+                                      isDark ? "text-slate-100" : "text-gray-900"
+                                    }`}
+                                    style={{ height: "20px", lineHeight: "20px" }}
+                                    title="Change price using Record new price"
+                                  >
+                                    ${(vp.current_price ?? 0).toFixed(2)}
+                                  </div>
+                                )
+                              ) : (
+                                <div
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  ${(vp.current_price ?? 0).toFixed(2)}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {isRecordPriceModeItems && (
+                            <>
+                              <td
+                                className="pl-0 pr-1 whitespace-nowrap text-left"
+                                style={{
+                                  paddingTop: "16px",
+                                  paddingBottom: "16px",
+                                  boxSizing: "border-box",
+                                }}
+                              >
+                                <ArrowRight
+                                  className={`w-5 h-5 inline ${
+                                    isDark ? "text-slate-100" : "text-black"
+                                  }`}
+                                  strokeWidth={2.6}
+                                />
+                              </td>
+                              <td
+                                className="px-6 whitespace-nowrap"
+                                style={{
+                                  paddingTop: "16px",
+                                  paddingBottom: "16px",
+                                  boxSizing: "border-box",
+                                }}
+                              >
                                 <div
                                   className="flex items-center gap-1"
                                   style={{ height: "20px" }}
                                 >
                                   <span
-                                    className="text-gray-500"
+                                    className={`${
+                                      isDark ? "text-slate-400" : "text-gray-500"
+                                    }`}
                                     style={{ lineHeight: "20px" }}
                                   >
                                     $
@@ -1774,47 +2202,28 @@ export default function ItemsPage() {
                                   <input
                                     type="text"
                                     inputMode="decimal"
-                                    value={
-                                      purchaseCostInputs.has(vp.id)
-                                        ? purchaseCostInputs.get(vp.id) || ""
-                                        : vp.purchase_cost === 0
-                                        ? ""
-                                        : String(vp.purchase_cost)
-                                    }
+                                    value={newPriceInputs.get(vp.id) || ""}
                                     onChange={(e) => {
                                       const value = e.target.value;
-                                      // 数字と小数点のみを許可（空文字列も許可）
                                       const numericPattern =
                                         /^(\d+\.?\d*|\.\d+)?$/;
                                       if (numericPattern.test(value)) {
-                                        setPurchaseCostInputs((prev) => {
+                                        setNewPriceInputs((prev) => {
                                           const newMap = new Map(prev);
-                                          newMap.set(vp.id, value);
+                                          if (value === "") {
+                                            newMap.delete(vp.id);
+                                          } else {
+                                            newMap.set(vp.id, value);
+                                          }
                                           return newMap;
                                         });
                                       }
-                                      // マッチしない場合は何もしない（前の値を保持）
                                     }}
-                                    onBlur={(e) => {
-                                      const value = e.target.value;
-                                      // フォーカスアウト時に数値に変換
-                                      const numValue =
-                                        value === "" || value === "."
-                                          ? 0
-                                          : parseFloat(value) || 0;
-                                      handleVendorProductChange(
-                                        vp.id,
-                                        "purchase_cost",
-                                        numValue
-                                      );
-                                      // 入力状態をクリア（次回表示時は実際の値から取得）
-                                      setPurchaseCostInputs((prev) => {
-                                        const newMap = new Map(prev);
-                                        newMap.delete(vp.id);
-                                        return newMap;
-                                      });
-                                    }}
-                                    className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                      isDark
+                                        ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                        : "border-gray-300"
+                                    }`}
                                     placeholder="0.00"
                                     style={{
                                       height: "20px",
@@ -1828,29 +2237,20 @@ export default function ItemsPage() {
                                     }}
                                   />
                                 </div>
-                              ) : (
-                                <div
-                                  className={`text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
-                                >
-                                  ${vp.purchase_cost.toFixed(2)}
-                                </div>
-                              )}
-                            </div>
-                          </td>
+                              </td>
+                            </>
+                          )}
 
                           {/* ゴミ箱 */}
-                          <td
-                            className="px-6 whitespace-nowrap"
-                            style={{
-                              paddingTop: "16px",
-                              paddingBottom: "16px",
-                              boxSizing: "border-box",
-                            }}
-                          >
-                            {isEditModeItems && (
+                          {isEditModeItems && (
+                            <td
+                              className="px-6 whitespace-nowrap"
+                              style={{
+                                paddingTop: "16px",
+                                paddingBottom: "16px",
+                                boxSizing: "border-box",
+                              }}
+                            >
                               <button
                                 onClick={() => handleDeleteClickItems(vp.id)}
                                 className={`p-2 rounded-md transition-colors ${
@@ -1872,8 +2272,8 @@ export default function ItemsPage() {
                               >
                                 <Trash2 className="w-5 h-5" />
                               </button>
-                            )}
-                          </td>
+                            </td>
+                          )}
                         </tr>
                       </Fragment>
                     ))}
@@ -1882,7 +2282,7 @@ export default function ItemsPage() {
                     {isEditModeItems && (
                       <tr>
                         <td
-                          colSpan={isEditModeItems ? 8 : 7}
+                          colSpan={8}
                           className="px-6"
                           style={{
                             paddingTop: "16px",
@@ -2204,28 +2604,29 @@ export default function ItemsPage() {
                                     // マッチしない場合は何もしない（前の値を保持）
                                   }}
                                   onBlur={(e) => {
-                                    const value = e.target.value;
-                                    // フォーカスアウト時に数値に変換
-                                    const numValue =
-                                      value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    handleBaseItemChange(
-                                      item.id,
-                                      "specific_weight",
-                                      numValue
+                                    const numValue = parseDecimalInputForCommit(
+                                      e.target.value
                                     );
-                                    // 値が入力された場合、selectedTypeを自動更新
-                                    if (numValue !== null && numValue !== undefined) {
-                                      handleBaseItemTypeChange(
-                                        item.id,
-                                        "specific_weight"
-                                      );
-                                    } else {
-                                      // 値がクリアされた場合、selectedTypeを"none"に更新
-                                      handleBaseItemTypeChange(item.id, "none");
-                                    }
-                                    // 入力中の文字列をクリア
+                                    setBaseItemsUI((prev) =>
+                                      prev.map((row) => {
+                                        if (row.id !== item.id) return row;
+                                        if (numValue !== null) {
+                                          return {
+                                            ...row,
+                                            selectedType: "specific_weight",
+                                            specific_weight: numValue,
+                                            each_grams: null,
+                                          };
+                                        }
+                                        // 空で blur してもラジオ選択は維持（Save で未入力エラーにできる）
+                                        return {
+                                          ...row,
+                                          selectedType: "specific_weight",
+                                          specific_weight: null,
+                                          each_grams: null,
+                                        };
+                                      })
+                                    );
                                     setSpecificWeightInputs((prev) => {
                                       const newMap = new Map(prev);
                                       newMap.delete(item.id);
@@ -2328,25 +2729,29 @@ export default function ItemsPage() {
                                     // マッチしない場合は何もしない（前の値を保持）
                                   }}
                                   onBlur={(e) => {
-                                    const value = e.target.value;
-                                    // フォーカスアウト時に数値に変換
-                                    const numValue =
-                                      value === "" || value === "."
-                                        ? null
-                                        : parseFloat(value) || null;
-                                    handleBaseItemChange(
-                                      item.id,
-                                      "each_grams",
-                                      numValue
+                                    const numValue = parseDecimalInputForCommit(
+                                      e.target.value
                                     );
-                                    // 値が入力された場合、selectedTypeを自動更新
-                                    if (numValue !== null && numValue !== undefined) {
-                                      handleBaseItemTypeChange(item.id, "each");
-                                    } else {
-                                      // 値がクリアされた場合、selectedTypeを"none"に更新
-                                      handleBaseItemTypeChange(item.id, "none");
-                                    }
-                                    // 入力中の文字列をクリア
+                                    setBaseItemsUI((prev) =>
+                                      prev.map((row) => {
+                                        if (row.id !== item.id) return row;
+                                        if (numValue !== null) {
+                                          return {
+                                            ...row,
+                                            selectedType: "each",
+                                            each_grams: numValue,
+                                            specific_weight: null,
+                                          };
+                                        }
+                                        // 空で blur してもラジオ選択は維持（Save で未入力エラーにできる）
+                                        return {
+                                          ...row,
+                                          selectedType: "each",
+                                          specific_weight: null,
+                                          each_grams: null,
+                                        };
+                                      })
+                                    );
                                     setEachGramsInputs((prev) => {
                                       const newMap = new Map(prev);
                                       newMap.delete(item.id);

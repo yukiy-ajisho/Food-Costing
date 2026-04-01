@@ -1,0 +1,163 @@
+Price Events Ledger Migration Summary (2026-03-31)
+
+1) Background and purpose
+
+Food costing relies on vendor product prices being up to date.
+Before this work, virtual_vendor_products stored only one mutable price value (purchase_cost),
+so each update overwrote the previous value and no durable price history existed.
+
+The goal of this work was to introduce a dynamic ledger model:
+- Keep a full append-only history of price changes.
+- Keep a fast current value for cost calculation.
+- Prepare for two future sources of price updates:
+  1) manual entry
+  2) invoice/AI ingestion
+
+
+2) Core design decisions
+
+2.1 Separation of concerns
+- price_events = source of truth for price history (ledger).
+- virtual_vendor_products.current_price = cache/projection of latest value for fast reads.
+
+2.2 Timing semantics
+- On each inserted price event, virtual_vendor_products.current_price is updated immediately.
+- virtual_vendor_products.updated_at is set to NEW.created_at (same event timestamp basis).
+
+2.3 Event actor policy
+- user_id belongs in price_events (event ownership/audit), not in virtual_vendor_products.
+- This aligns with ledger modeling where "who recorded the event" is tied to the event row.
+
+
+3) Implemented DB migration (first migration)
+
+File:
+- supabase/migrations/20260331110000_virtual_vendor_price_events_ledger.sql
+
+What it does:
+- Renames virtual_vendor_products.purchase_cost -> current_price
+- Renames related check constraint to vendor_products_current_price_check
+- Creates public.price_events table with:
+  - id (uuid pk)
+  - tenant_id
+  - virtual_vendor_product_id
+  - price
+  - source_type (manual | invoice)
+  - invoice_id (nullable)
+  - user_id
+  - created_at
+- Adds indexes for tenant/product/source/invoice query patterns
+- Backfills one baseline price_events row from existing virtual_vendor_products rows
+  (only rows where legacy user_id is present and current_price > 0)
+- Adds append-only protections (reject UPDATE/DELETE on price_events)
+- Adds trigger: after INSERT on price_events, sync current_price and updated_at on vvp
+- Drops legacy virtual_vendor_products.user_id FK/index/column
+
+
+4) Important correction made in migration logic
+
+Originally, trigger used:
+- updated_at = now()
+
+It was revised to:
+- updated_at = NEW.created_at
+
+Reason:
+- Keep strict timestamp consistency between the event and cached row update.
+- Avoid subtle mismatches when auditing or debugging event chronology.
+
+
+5) Runtime issue encountered after migration and root cause
+
+Symptom:
+- Cost page returned 500 Internal Server Error on breakdown endpoint.
+
+Root cause:
+- SQL cost functions still referenced old column name purchase_cost,
+  while table column had already been renamed to current_price.
+
+Affected currently-used functions:
+- calculate_item_costs_with_breakdown (GET /items/costs/breakdown uses this wrapper)
+- calculate_item_costs_with_breakdown_scoped (used by missing breakdown endpoint)
+- calculate_item_costs (still used by another cost route)
+
+
+6) Fix migration for function references (second migration)
+
+File:
+- supabase/migrations/20260331113000_replace_purchase_cost_refs_in_cost_functions.sql
+
+What it does:
+- Recreates the three functions by reading current definitions and replacing
+  purchase_cost -> current_price.
+- Covers both wrapper and scoped paths, and legacy calculate_item_costs usage.
+
+Result:
+- Runtime error on cost page was resolved.
+
+
+7) Backup workflow discussion and status
+
+Requested:
+- Create pre-change schema/data backups similar to prior dated backup folder.
+
+Attempted commands:
+- supabase db dump --linked ... schema.sql
+- supabase db dump --linked ... data.sql --data-only --use-copy
+
+Observed blocker:
+- Supabase CLI auth/login-role failed (Forbidden), and CLI requested SUPABASE_DB_PASSWORD.
+
+Implication:
+- Backup commands require valid linked project auth/session and DB password in env.
+
+
+8) Related UI stream (separate but concurrent work)
+
+In employee requirements modal, terminology and interaction were adjusted:
+- Distinguish "Record new" (new record creation) vs "Edit" (modify existing record intent).
+- Move action placement per-card and adjust labels.
+- Hide "Remove from employee" for now.
+
+For New Requirement jurisdiction input:
+- Migrated from plain select to searchable combobox style.
+- Added "+ Create \"...\"" affordance.
+- Revised creation timing so jurisdiction is created only when Requirement Save is executed
+  (avoid orphan creation on modal cancel).
+
+These UI changes were discussed and iterated separately from the price ledger migration.
+
+
+9) Intended model after all current DB changes
+
+Write path (manual or invoice):
+1) Insert row into price_events
+2) Trigger updates virtual_vendor_products.current_price and updated_at
+
+Read path for costing:
+- Continue reading virtual_vendor_products.current_price for performance
+  (without needing to compute latest event per request).
+
+Audit/reporting path:
+- Read from price_events for full chronology and source traceability.
+
+
+10) Open follow-up items
+
+- Confirm all remaining backend/frontend typed models and SQL snippets use current_price
+  (not purchase_cost) across non-cost modules too.
+- If invoice table/spec is finalized later, add FK from price_events.invoice_id accordingly.
+- Add tests for:
+  - append-only enforcement
+  - trigger sync behavior
+  - cost RPC correctness after current_price migration
+- Re-run/automate backup dump once CLI auth/env is stable.
+
+
+11) Summary
+
+This work established a ledger-first pricing architecture:
+- price history is durable and append-only in price_events
+- current calculation remains fast through virtual_vendor_products.current_price cache
+- existing runtime breakage after rename was identified and repaired through targeted
+  function reference migration.
