@@ -96,6 +96,15 @@ function normalizeTenantRoleForShares(
   return tenantRole === "director" ? "admin" : tenantRole;
 }
 
+function normalizeTenantRoleForPolicy(
+  tenantRole: string | undefined
+): string | undefined {
+  if (!tenantRole) return undefined;
+  // company 経由で見えている会社オフィサーは、tenant 認可では director 相当として扱う
+  if (tenantRole === "company") return "director";
+  return tenantRole;
+}
+
 /** 統一認可のリソース入力 */
 export type UnifiedResource =
   | { type: "Company"; id: string }
@@ -115,6 +124,7 @@ export type UnifiedResource =
 export interface UnifiedContext {
   is_owner?: boolean;
   is_shared?: boolean;
+  is_cross_tenant_shared?: boolean;
 }
 
 /** authorizeUnified のオプション */
@@ -160,6 +170,58 @@ async function resolveResourceSharesForPrincipal(
 }
 
 /**
+ * cross_tenant_item_shares を参照して、principalTenantId が itemId を閲覧できるか確認する。
+ * target_type='company' かつ同じ company_id、または target_type='tenant' かつ自分のテナントID が
+ * 対象で allowed_actions に 'read' が含まれる場合に true を返す。
+ */
+async function isCrossTenantSharedForPrincipal(
+  itemId: string,
+  itemTenantId: string,
+  principalTenantId: string
+): Promise<boolean> {
+  // 自分のテナントのアイテムは cross-tenant ではない
+  if (itemTenantId === principalTenantId) return false;
+
+  // 2つのテナントが同じ company に属しているか確認
+  const { data: companyLinks } = await supabase
+    .from("company_tenants")
+    .select("company_id, tenant_id")
+    .in("tenant_id", [itemTenantId, principalTenantId]);
+
+  if (!companyLinks || companyLinks.length < 2) return false;
+
+  const ownerCompanyIds = companyLinks
+    .filter((r) => r.tenant_id === itemTenantId)
+    .map((r) => r.company_id);
+  const viewerCompanyIds = companyLinks
+    .filter((r) => r.tenant_id === principalTenantId)
+    .map((r) => r.company_id);
+
+  // 共通の company_id を探す
+  const sharedCompanyId = ownerCompanyIds.find((id) =>
+    viewerCompanyIds.includes(id)
+  );
+  if (!sharedCompanyId) return false;
+
+  // cross_tenant_item_shares を確認
+  const { data: shares } = await supabase
+    .from("cross_tenant_item_shares")
+    .select("allowed_actions")
+    .eq("item_id", itemId)
+    .eq("company_id", sharedCompanyId)
+    .or(
+      `and(target_type.eq.company,target_id.eq.${sharedCompanyId}),and(target_type.eq.tenant,target_id.eq.${principalTenantId})`
+    );
+
+  if (!shares || shares.length === 0) return false;
+
+  // allowed_actions に 'read' が含まれるレコードが 1 つでもあれば OK
+  return shares.some(
+    (s) => Array.isArray(s.allowed_actions) && s.allowed_actions.includes("read")
+  );
+}
+
+/**
  * company_members から当該ユーザーの当該会社のロールを取得する。
  */
 async function getCompanyRole(
@@ -176,6 +238,27 @@ async function getCompanyRole(
 
   if (error || !member) return null;
   return member.role;
+}
+
+/**
+ * テナントの profiles が無い場合でも、親会社で manage_members（Cedar）が通るなら
+ * そのテナントを「一覧に載せる」ために list_resources を許可する。
+ */
+async function canListTenantViaCompanyManageMembers(
+  userId: string,
+  tenantId: string
+): Promise<boolean> {
+  const { data: link, error } = await supabase
+    .from("company_tenants")
+    .select("company_id")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (error || !link?.company_id) return false;
+  return authorizeUnified(
+    userId,
+    UnifiedCompanyAction.manage_members,
+    { type: "Company", id: link.company_id }
+  );
 }
 
 /**
@@ -285,8 +368,23 @@ export async function authorizeUnified(
         console.error("Unified authorize: tenant scope requires tenant_id");
         return false;
       }
-      const tenantRole =
+      const tenantRoleRaw =
         options?.tenantRole ?? (await getTenantRole(userId, tenantId));
+      const tenantRole = normalizeTenantRoleForPolicy(tenantRoleRaw);
+
+      // profiles が無くても会社オフィサーなら Tenant コンテナの list_resources のみ許可
+      if (
+        action === UnifiedTenantAction.list_resources &&
+        resource.type === "Tenant" &&
+        !tenantRole
+      ) {
+        const viaCompany = await canListTenantViaCompanyManageMembers(
+          userId,
+          tenantId
+        );
+        return viaCompany;
+      }
+
       if (tenantRole) {
         principalAttrs.tenant_role = tenantRole;
         principalAttrs.tenant_id = tenantId;
@@ -364,6 +462,25 @@ export async function authorizeUnified(
 
           const legacyCrud = mapTenantActionToLegacyCrud(action);
           const sharesRole = normalizeTenantRoleForShares(tenantRole);
+
+          // cross-tenant アクセス判定（アイテムのテナントが自分のテナントと異なる場合）
+          // intra-tenant の manager/shared チェックとは独立して処理し、Cedar に直接渡す。
+          if (
+            resource.resourceType === "item" &&
+            resource.item_kind === "prepped" &&
+            resource.tenant_id !== tenantId
+          ) {
+            const isCrossShared = await isCrossTenantSharedForPrincipal(
+              resource.id,
+              resource.tenant_id,
+              tenantId
+            );
+            // cross-tenant アクセスは read のみ・共有設定が必要
+            if (!isCrossShared || legacyCrud !== "read") return false;
+            computed.is_cross_tenant_shared = true;
+            // intra-tenant チェック（is_owner / is_shared）はスキップして Cedar へ
+            contextAttrs = computed as CedarContext;
+          } else
 
           // manager: prepped items は owner/responsible か、shared かつ allowed_actions に CRUD が含まれる場合のみ
           if (

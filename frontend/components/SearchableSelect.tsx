@@ -8,6 +8,7 @@ interface SearchableSelectProps {
   options: {
     id: string;
     name: string;
+    subLabel?: string;
     disabled?: boolean;
     deprecated?: boolean;
     isUnused?: boolean;
@@ -112,18 +113,23 @@ export function SearchableSelect({
             margin: 0,
           }}
         >
-          <span
-            className={
-              selectedItem
-                ? isDark
-                  ? "text-slate-100"
-                  : "text-gray-900"
-                : isDark
-                ? "text-slate-400"
-                : "text-gray-500"
-            }
-          >
-            {selectedItem ? selectedItem.name : placeholder}
+          <span className="flex items-center gap-1 overflow-hidden">
+            {selectedItem ? (
+              <>
+                <span className={isDark ? "text-slate-100" : "text-gray-900"}>
+                  {selectedItem.name}
+                </span>
+                {selectedItem.subLabel && (
+                    <span className={`text-xs ${isDark ? "text-slate-400" : "text-gray-400"}`} style={{ flexShrink: 0 }}>
+                    {selectedItem.subLabel}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className={isDark ? "text-slate-400" : "text-gray-500"}>
+                {placeholder}
+              </span>
+            )}
           </span>
           <ChevronDown
             className={`w-4 h-4 transition-transform ${
@@ -181,7 +187,7 @@ export function SearchableSelect({
                   type="button"
                   onClick={() => !option.disabled && handleSelect(option.id)}
                   disabled={option.disabled}
-                  className={`block w-full px-2 py-2 text-left transition-colors flex justify-between items-center ${
+                  className={`w-full px-2 py-2 text-left transition-colors flex justify-between items-center ${
                     option.disabled || option.deprecated
                       ? isDark
                         ? "opacity-50 cursor-not-allowed text-slate-500"
@@ -197,9 +203,16 @@ export function SearchableSelect({
                       : ""
                   }`}
                 >
-                  <span>
-                  {option.deprecated && "[Deprecated] "}
-                  {option.name}
+                  <span className="flex items-center gap-1">
+                    <span>
+                      {option.deprecated && "[Deprecated] "}
+                      {option.name}
+                    </span>
+                    {option.subLabel && (
+                      <span className={`text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}>
+                        {option.subLabel}
+                      </span>
+                    )}
                   </span>
                   {option.isUnused && (
                     <span

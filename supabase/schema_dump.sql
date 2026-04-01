@@ -67,7 +67,13 @@ CREATE OR REPLACE FUNCTION "public"."after_profiles_insert_assign_requirements"(
     SET "search_path" TO 'public'
     AS $$
 BEGIN
-  INSERT INTO public.user_requirement_assignments (user_id, user_requirement_id, is_currently_assigned, created_at, deleted_at)
+  INSERT INTO public.user_requirement_assignments (
+    user_id,
+    user_requirement_id,
+    is_currently_assigned,
+    created_at,
+    deleted_at
+  )
   SELECT
     NEW.user_id,
     ur.id,
@@ -75,11 +81,15 @@ BEGIN
     now(),
     NULL
   FROM public.user_requirements ur
-  WHERE ur.created_by IN (
-    SELECT p.user_id FROM public.profiles p
-    WHERE p.tenant_id = NEW.tenant_id AND p.role = 'admin'
-  )
-  ON CONFLICT (user_id, user_requirement_id) DO NOTHING;
+  INNER JOIN public.company_tenants ct ON ct.tenant_id = NEW.tenant_id
+    AND ct.company_id = ur.company_id
+  INNER JOIN public.user_jurisdictions uj ON uj.company_id = ur.company_id
+    AND uj.user_id = NEW.user_id
+    AND uj.jurisdiction_id = ur.jurisdiction_id
+  ON CONFLICT (user_id, user_requirement_id)
+    DO UPDATE SET
+      is_currently_assigned = true,
+      deleted_at = NULL;
 
   RETURN NEW;
 END;
@@ -164,20 +174,20 @@ BEGIN
                 WHEN rl.specific_child = 'lowest' OR rl.specific_child IS NULL THEN
                   (SELECT MIN(
                     CASE
-                      WHEN vvp.purchase_unit = 'g' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity, 0))
-                      WHEN vvp.purchase_unit = 'kg' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * 1000, 0))
-                      WHEN vvp.purchase_unit = 'lb' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * 453.592, 0))
-                      WHEN vvp.purchase_unit = 'oz' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * 28.3495, 0))
+                      WHEN vvp.purchase_unit = 'g' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity, 0))
+                      WHEN vvp.purchase_unit = 'kg' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity * 1000, 0))
+                      WHEN vvp.purchase_unit = 'lb' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity * 453.592, 0))
+                      WHEN vvp.purchase_unit = 'oz' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity * 28.3495, 0))
                       WHEN vvp.purchase_unit = 'each' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(child_items.each_grams, 0), 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(child_items.each_grams, 0), 0))
                       WHEN vvp.purchase_unit = 'gallon' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541, 0))
                       WHEN vvp.purchase_unit = 'liter' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1, 0))
                       WHEN vvp.purchase_unit = 'floz' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735, 0))
                       WHEN vvp.purchase_unit = 'ml' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001, 0))
                       ELSE NULL
                     END
                   )
@@ -189,27 +199,27 @@ BEGIN
                     AND vvp.tenant_id = p_tenant_id
                     AND bi.tenant_id = p_tenant_id
                     AND vvp.deprecated IS NULL
-                    AND vvp.purchase_cost > 0
+                    AND vvp.current_price > 0
                     AND vvp.purchase_quantity > 0)
                 -- specific_childがvirtual_product.idの場合、そのvirtual_productを使用
                 -- ただし、product_mappingsでマッピングが存在することを確認
                 ELSE
                   (SELECT
                     CASE
-                      WHEN vvp.purchase_unit = 'g' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity, 0))
-                      WHEN vvp.purchase_unit = 'kg' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * 1000, 0))
-                      WHEN vvp.purchase_unit = 'lb' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * 453.592, 0))
-                      WHEN vvp.purchase_unit = 'oz' THEN (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * 28.3495, 0))
+                      WHEN vvp.purchase_unit = 'g' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity, 0))
+                      WHEN vvp.purchase_unit = 'kg' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity * 1000, 0))
+                      WHEN vvp.purchase_unit = 'lb' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity * 453.592, 0))
+                      WHEN vvp.purchase_unit = 'oz' THEN (vvp.current_price / NULLIF(vvp.purchase_quantity * 28.3495, 0))
                       WHEN vvp.purchase_unit = 'each' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(child_items.each_grams, 0), 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(child_items.each_grams, 0), 0))
                       WHEN vvp.purchase_unit = 'gallon' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541, 0))
                       WHEN vvp.purchase_unit = 'liter' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1, 0))
                       WHEN vvp.purchase_unit = 'floz' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735, 0))
                       WHEN vvp.purchase_unit = 'ml' THEN 
-                        (vvp.purchase_cost / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001, 0))
+                        (vvp.current_price / NULLIF(vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001, 0))
                       ELSE NULL
                     END
                   FROM virtual_vendor_products vvp
@@ -220,7 +230,7 @@ BEGIN
                     AND pm.tenant_id = p_tenant_id
                     AND vvp.tenant_id = p_tenant_id
                     AND bi.tenant_id = p_tenant_id
-                    AND vvp.purchase_cost > 0
+                    AND vvp.current_price > 0
                     AND vvp.purchase_quantity > 0)
               END
             ELSE
@@ -415,257 +425,30 @@ $$;
 ALTER FUNCTION "public"."calculate_item_costs"("p_tenant_id" "uuid", "p_item_ids" "uuid"[]) OWNER TO "postgres";
 
 
-CREATE OR REPLACE FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid") RETURNS TABLE("out_item_id" "uuid", "out_item_name" "text", "out_total_cost_per_gram" numeric, "out_food_cost_per_gram" numeric, "out_labor_cost_per_gram" numeric)
+CREATE OR REPLACE FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid", "p_call_depth" integer DEFAULT 0) RETURNS TABLE("out_item_id" "uuid", "out_item_name" "text", "out_total_cost_per_gram" numeric, "out_food_cost_per_gram" numeric, "out_labor_cost_per_gram" numeric)
     LANGUAGE "plpgsql"
     AS $$
 DECLARE
-  v_rows_inserted integer;
-  v_iteration integer := 0;
+  v_seed_item_ids uuid[];
 BEGIN
-  -- 全temp tableをクリア（前回の失敗した実行からの残りを防ぐ）
-  DROP TABLE IF EXISTS temp_item_costs;
-  DROP TABLE IF EXISTS temp_labor_costs;
-  DROP TABLE IF EXISTS temp_ingredient_edges;
-  DROP TABLE IF EXISTS temp_ingredient_counts;
-
-  -- メインコスト管理テーブル
-  CREATE TEMP TABLE temp_item_costs (
-    item_id uuid PRIMARY KEY,
-    item_name text,
-    food_cost_per_gram numeric,
-    labor_cost_per_gram numeric
-  );
-
-  -- 最適化①: Labor costsをループ外で一度だけ計算
-  CREATE TEMP TABLE temp_labor_costs AS
-  SELECT
-    rl.parent_item_id AS item_id,
-    SUM((rl.minutes / 60.0) * COALESCE(lr.hourly_wage, 0)) AS labor_cost_batch
+  SELECT array_agg(DISTINCT rl.parent_item_id)
+  INTO v_seed_item_ids
   FROM recipe_lines rl
-  LEFT JOIN labor_roles lr ON rl.labor_role = lr.name
-  WHERE rl.line_type = 'labor'
-    AND rl.tenant_id = p_tenant_id
-    AND lr.tenant_id = p_tenant_id
-  GROUP BY rl.parent_item_id;
+  WHERE rl.tenant_id = p_tenant_id
+    AND rl.line_type = 'ingredient';
 
-  CREATE INDEX ON temp_labor_costs(item_id);
-
-  -- 最適化②: Ingredient edgesをループ外でマテリアライズ + インデックス追加
-  CREATE TEMP TABLE temp_ingredient_edges AS
-  SELECT
-    rl.parent_item_id,
-    rl.child_item_id,
-    rl.quantity,
-    rl.unit
-  FROM recipe_lines rl
-  WHERE rl.line_type = 'ingredient'
-    AND rl.tenant_id = p_tenant_id;
-
-  CREATE INDEX ON temp_ingredient_edges(parent_item_id);
-  CREATE INDEX ON temp_ingredient_edges(child_item_id);
-
-  -- 最適化③: 各prepped itemのingredient数を事前計算（二重NOT EXISTSの代替用）
-  CREATE TEMP TABLE temp_ingredient_counts AS
-  SELECT parent_item_id, COUNT(DISTINCT child_item_id) AS total_count
-  FROM temp_ingredient_edges
-  GROUP BY parent_item_id;
-
-  CREATE INDEX ON temp_ingredient_counts(parent_item_id);
-
-  -- ステップ1: Raw Itemsのコストを計算（tenant_idでフィルタリング、specific_child処理を保持）
-  -- ※ specific_child判定のためrecipe_linesを直接使用（ループ外の一回のみ）
-  INSERT INTO temp_item_costs (item_id, item_name, food_cost_per_gram, labor_cost_per_gram)
-  SELECT
-    i.id,
-    i.name,
-    CASE
-      WHEN rl.specific_child = 'lowest' OR rl.specific_child IS NULL THEN
-        (SELECT MIN(
-          CASE
-            WHEN vvp.purchase_unit = 'kg' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 1000))
-            WHEN vvp.purchase_unit = 'lb' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 453.592))
-            WHEN vvp.purchase_unit = 'oz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 28.3495))
-            WHEN vvp.purchase_unit = 'g' THEN (vvp.purchase_cost / vvp.purchase_quantity)
-            WHEN vvp.purchase_unit = 'each' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(i.each_grams, 0)))
-            WHEN vvp.purchase_unit = 'gallon' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
-            WHEN vvp.purchase_unit = 'liter' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
-            WHEN vvp.purchase_unit = 'floz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
-            WHEN vvp.purchase_unit = 'ml' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
-            ELSE NULL
-          END
-        )
-        FROM virtual_vendor_products vvp
-        JOIN product_mappings pm ON vvp.id = pm.virtual_product_id
-        JOIN base_items bi ON pm.base_item_id = bi.id
-        WHERE pm.base_item_id = i.base_item_id
-          AND pm.tenant_id = p_tenant_id
-          AND vvp.tenant_id = p_tenant_id
-          AND bi.tenant_id = p_tenant_id
-          AND vvp.deprecated IS NULL
-          AND vvp.purchase_cost > 0
-          AND vvp.purchase_quantity > 0)
-      ELSE
-        (SELECT
-          CASE
-            WHEN vvp.purchase_unit = 'kg' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 1000))
-            WHEN vvp.purchase_unit = 'lb' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 453.592))
-            WHEN vvp.purchase_unit = 'oz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * 28.3495))
-            WHEN vvp.purchase_unit = 'g' THEN (vvp.purchase_cost / vvp.purchase_quantity)
-            WHEN vvp.purchase_unit = 'each' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(i.each_grams, 0)))
-            WHEN vvp.purchase_unit = 'gallon' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
-            WHEN vvp.purchase_unit = 'liter' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
-            WHEN vvp.purchase_unit = 'floz' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
-            WHEN vvp.purchase_unit = 'ml' THEN (vvp.purchase_cost / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
-            ELSE NULL
-          END
-        FROM virtual_vendor_products vvp
-        JOIN product_mappings pm ON vvp.id = pm.virtual_product_id
-        JOIN base_items bi ON pm.base_item_id = bi.id
-        WHERE vvp.id = rl.specific_child::uuid
-          AND pm.base_item_id = i.base_item_id
-          AND pm.tenant_id = p_tenant_id
-          AND vvp.tenant_id = p_tenant_id
-          AND bi.tenant_id = p_tenant_id
-          AND vvp.purchase_cost > 0
-          AND vvp.purchase_quantity > 0)
-    END as food_cost_per_gram,
-    0::numeric as labor_cost_per_gram
-  FROM items i
-  LEFT JOIN recipe_lines rl ON i.id = rl.child_item_id AND rl.line_type = 'ingredient'
-  LEFT JOIN base_items bi ON i.base_item_id = bi.id
-  WHERE i.item_kind = 'raw'
-    AND i.tenant_id = p_tenant_id
-    AND (rl.tenant_id = p_tenant_id OR rl.tenant_id IS NULL)
-    AND (bi.tenant_id = p_tenant_id OR bi.tenant_id IS NULL)
-  GROUP BY i.id, i.name, i.each_grams, i.base_item_id, bi.specific_weight, rl.specific_child
-  ON CONFLICT (item_id) DO NOTHING;
-
-  -- ステップ2: ループでPrepped Itemsを計算
-  -- 最適化: temp_ingredient_edges / temp_labor_costs / temp_ingredient_counts を使用
-  LOOP
-    v_iteration := v_iteration + 1;
-
-    INSERT INTO temp_item_costs (item_id, item_name, food_cost_per_gram, labor_cost_per_gram)
-    SELECT
-      parent.id,
-      parent.name,
-      -- Food Cost: 材料のfood costを積算 / yield
-      SUM(
-        tc.food_cost_per_gram *
-        CASE
-          WHEN rl.unit = 'kg' THEN rl.quantity * 1000
-          WHEN rl.unit = 'lb' THEN rl.quantity * 453.592
-          WHEN rl.unit = 'oz' THEN rl.quantity * 28.3495
-          WHEN rl.unit = 'g' THEN rl.quantity
-          WHEN rl.unit = 'liter' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 1000
-          WHEN rl.unit = 'floz' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 29.5735
-          WHEN rl.unit = 'each' THEN rl.quantity * COALESCE(child_items.each_grams, 0)
-          ELSE 0
-        END
-      ) / NULLIF(
-        CASE
-          WHEN parent.proceed_yield_unit = 'kg' THEN parent.proceed_yield_amount * 1000
-          WHEN parent.proceed_yield_unit = 'g' THEN parent.proceed_yield_amount
-          WHEN parent.proceed_yield_unit = 'each' THEN parent.proceed_yield_amount * COALESCE(parent.each_grams, 1)
-          ELSE 1
-        END, 0
-      ) AS food_cost_per_gram,
-      -- Labor Cost: 子の合計labor cost（Inherited + Direct）を積算 / yield
-      SUM(
-        (tc.labor_cost_per_gram + COALESCE(
-          tlc_child.labor_cost_batch / NULLIF(
-            CASE
-              WHEN child_items.proceed_yield_unit = 'kg' THEN child_items.proceed_yield_amount * 1000
-              WHEN child_items.proceed_yield_unit = 'g' THEN child_items.proceed_yield_amount
-              WHEN child_items.proceed_yield_unit = 'each' THEN child_items.proceed_yield_amount * COALESCE(child_items.each_grams, 1)
-              ELSE 1
-            END, 0
-          ), 0
-        )) *
-        CASE
-          WHEN rl.unit = 'kg' THEN rl.quantity * 1000
-          WHEN rl.unit = 'lb' THEN rl.quantity * 453.592
-          WHEN rl.unit = 'oz' THEN rl.quantity * 28.3495
-          WHEN rl.unit = 'g' THEN rl.quantity
-          WHEN rl.unit = 'liter' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 1000
-          WHEN rl.unit = 'floz' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 29.5735
-          WHEN rl.unit = 'each' THEN rl.quantity * COALESCE(child_items.each_grams, 0)
-          ELSE 0
-        END
-      ) / NULLIF(
-        CASE
-          WHEN parent.proceed_yield_unit = 'kg' THEN parent.proceed_yield_amount * 1000
-          WHEN parent.proceed_yield_unit = 'g' THEN parent.proceed_yield_amount
-          WHEN parent.proceed_yield_unit = 'each' THEN parent.proceed_yield_amount * COALESCE(parent.each_grams, 1)
-          ELSE 1
-        END, 0
-      ) AS labor_cost_per_gram
-    FROM items parent
-    INNER JOIN temp_ingredient_edges rl ON parent.id = rl.parent_item_id
-    INNER JOIN temp_item_costs tc ON rl.child_item_id = tc.item_id
-    LEFT JOIN items child_items ON rl.child_item_id = child_items.id
-    LEFT JOIN base_items bi ON child_items.base_item_id = bi.id
-    LEFT JOIN temp_labor_costs tlc_child ON child_items.id = tlc_child.item_id
-    WHERE parent.item_kind = 'prepped'
-      AND parent.tenant_id = p_tenant_id
-      AND child_items.tenant_id = p_tenant_id
-      AND (bi.tenant_id = p_tenant_id OR bi.tenant_id IS NULL)
-      AND NOT EXISTS (SELECT 1 FROM temp_item_costs t WHERE t.item_id = parent.id)
-    GROUP BY parent.id, parent.name, parent.proceed_yield_amount, parent.proceed_yield_unit, parent.each_grams
-    -- 最適化: 二重NOT EXISTSをHAVING COUNT比較に置換
-    -- 「計算済みのingredient数 = 全ingredient数」であれば全材料が揃っている
-    HAVING COUNT(DISTINCT rl.child_item_id) = (
-      SELECT total_count FROM temp_ingredient_counts WHERE parent_item_id = parent.id
-    )
-    ON CONFLICT (item_id) DO NOTHING;
-
-    GET DIAGNOSTICS v_rows_inserted = ROW_COUNT;
-    EXIT WHEN v_rows_inserted = 0 OR v_iteration > 50;
-  END LOOP;
-
-  -- ステップ3: Labor コストを追加して最終結果を返す
-  -- 最適化: temp_labor_costsを再利用（再計算不要）
   RETURN QUERY
-  SELECT
-    tc.item_id,
-    tc.item_name,
-    (tc.food_cost_per_gram + COALESCE(tc.labor_cost_per_gram, 0) + COALESCE(
-      lc.labor_cost_batch / NULLIF(
-        CASE
-          WHEN i.proceed_yield_unit = 'kg' THEN i.proceed_yield_amount * 1000
-          WHEN i.proceed_yield_unit = 'g' THEN i.proceed_yield_amount
-          WHEN i.proceed_yield_unit = 'each' THEN i.proceed_yield_amount * COALESCE(i.each_grams, 1)
-          ELSE 1
-        END, 0
-      ), 0
-    ))::numeric AS total_cost_per_gram,
-    tc.food_cost_per_gram::numeric,
-    (COALESCE(tc.labor_cost_per_gram, 0) + COALESCE(
-      lc.labor_cost_batch / NULLIF(
-        CASE
-          WHEN i.proceed_yield_unit = 'kg' THEN i.proceed_yield_amount * 1000
-          WHEN i.proceed_yield_unit = 'g' THEN i.proceed_yield_amount
-          WHEN i.proceed_yield_unit = 'each' THEN i.proceed_yield_amount * COALESCE(i.each_grams, 1)
-          ELSE 1
-        END, 0
-      ), 0
-    ))::numeric AS labor_cost_per_gram
-  FROM temp_item_costs tc
-  LEFT JOIN items i ON tc.item_id = i.id
-  LEFT JOIN temp_labor_costs lc ON tc.item_id = lc.item_id
-  WHERE tc.food_cost_per_gram IS NOT NULL
-    AND i.tenant_id = p_tenant_id
-  ORDER BY tc.item_name;
-
-  DROP TABLE IF EXISTS temp_item_costs;
-  DROP TABLE IF EXISTS temp_labor_costs;
-  DROP TABLE IF EXISTS temp_ingredient_edges;
-  DROP TABLE IF EXISTS temp_ingredient_counts;
+    SELECT *
+    FROM public.calculate_item_costs_with_breakdown_scoped(p_tenant_id, p_call_depth, v_seed_item_ids);
 END;
 $$;
 
 
-ALTER FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid") OWNER TO "postgres";
+ALTER FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid", "p_call_depth" integer) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid", "p_call_depth" integer) IS 'Phase2: required-item scoped cross-tenant breakdown recursion. (RPC wrapper)';
+
 
 
 CREATE OR REPLACE FUNCTION "public"."calculate_item_costs_with_breakdown_old"() RETURNS TABLE("out_item_id" "uuid", "out_item_name" "text", "out_total_cost_per_gram" numeric, "out_food_cost_per_gram" numeric, "out_labor_cost_per_gram" numeric)
@@ -882,6 +665,489 @@ $$;
 ALTER FUNCTION "public"."calculate_item_costs_with_breakdown_old"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."calculate_item_costs_with_breakdown_scoped"("p_tenant_id" "uuid", "p_call_depth" integer, "p_seed_item_ids" "uuid"[]) RETURNS TABLE("out_item_id" "uuid", "out_item_name" "text", "out_total_cost_per_gram" numeric, "out_food_cost_per_gram" numeric, "out_labor_cost_per_gram" numeric)
+    LANGUAGE "plpgsql"
+    AS $_$
+DECLARE
+  v_rows_inserted integer;
+  v_iteration integer := 0;
+  r_owner record;
+
+  v_pause_tic text;
+  v_pause_tlc text;
+  v_pause_tie text;
+  v_pause_ticnt text;
+  v_pause_fn text;
+  v_pause_need text;
+
+  v_seed_item_ids_norm uuid[];
+  v_owner_seeds uuid[];
+BEGIN
+  IF p_call_depth > 8 THEN
+    RAISE EXCEPTION 'calculate_item_costs_with_breakdown: cross-tenant recursion depth exceeded (max 8)';
+  END IF;
+
+  -- Per-depth pause names to avoid recursive rename collisions.
+  v_pause_tic := format('_ct_brk_pause_tic_%s', p_call_depth);
+  v_pause_tlc := format('_ct_brk_pause_tlc_%s', p_call_depth);
+  v_pause_tie := format('_ct_brk_pause_tie_%s', p_call_depth);
+  v_pause_ticnt := format('_ct_brk_pause_ticnt_%s', p_call_depth);
+  v_pause_fn := format('_ct_brk_pause_fn_%s', p_call_depth);
+  v_pause_need := format('_ct_brk_pause_need_%s', p_call_depth);
+
+  -- Normalize seeds to prepped items owned by this tenant.
+  SELECT array_agg(DISTINCT i.id)
+  INTO v_seed_item_ids_norm
+  FROM items i
+  WHERE i.tenant_id = p_tenant_id
+    AND i.item_kind = 'prepped'
+    AND i.id = ANY(p_seed_item_ids);
+
+  BEGIN
+    -- Cleanup tables from prior failed runs in this session.
+    DROP TABLE IF EXISTS temp_item_costs;
+    DROP TABLE IF EXISTS temp_labor_costs;
+    DROP TABLE IF EXISTS temp_ingredient_edges;
+    DROP TABLE IF EXISTS temp_ingredient_counts;
+    DROP TABLE IF EXISTS temp_ct_foreign_needed;
+    DROP TABLE IF EXISTS temp_needed_local_prepped;
+
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tic);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tlc);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tie);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_ticnt);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_fn);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_need);
+
+    -- Main cost management table.
+    CREATE TEMP TABLE temp_item_costs (
+      item_id uuid PRIMARY KEY,
+      item_name text,
+      food_cost_per_gram numeric,
+      labor_cost_per_gram numeric
+    );
+
+    -- Labor: compute once per call (can be broader than seed scope, but correct).
+    CREATE TEMP TABLE temp_labor_costs AS
+    SELECT
+      rl.parent_item_id AS item_id,
+      SUM((rl.minutes / 60.0) * COALESCE(lr.hourly_wage, 0)) AS labor_cost_batch
+    FROM recipe_lines rl
+    LEFT JOIN labor_roles lr ON rl.labor_role = lr.name
+    WHERE rl.line_type = 'labor'
+      AND rl.tenant_id = p_tenant_id
+      AND lr.tenant_id = p_tenant_id
+    GROUP BY rl.parent_item_id;
+
+    CREATE INDEX ON temp_labor_costs(item_id);
+
+    -- Raw items: preserve existing behavior (compute all tenant raws).
+    INSERT INTO temp_item_costs (item_id, item_name, food_cost_per_gram, labor_cost_per_gram)
+    SELECT
+      i.id,
+      i.name,
+      CASE
+        WHEN rl.specific_child = 'lowest' OR rl.specific_child IS NULL THEN
+          (SELECT MIN(
+            CASE
+              WHEN vvp.purchase_unit = 'kg' THEN (vvp.current_price / (vvp.purchase_quantity * 1000))
+              WHEN vvp.purchase_unit = 'lb' THEN (vvp.current_price / (vvp.purchase_quantity * 453.592))
+              WHEN vvp.purchase_unit = 'oz' THEN (vvp.current_price / (vvp.purchase_quantity * 28.3495))
+              WHEN vvp.purchase_unit = 'g' THEN (vvp.current_price / vvp.purchase_quantity)
+              WHEN vvp.purchase_unit = 'each' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(i.each_grams, 0)))
+              WHEN vvp.purchase_unit = 'gallon' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
+              WHEN vvp.purchase_unit = 'liter' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
+              WHEN vvp.purchase_unit = 'floz' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
+              WHEN vvp.purchase_unit = 'ml' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
+              ELSE NULL
+            END
+          )
+          FROM virtual_vendor_products vvp
+          JOIN product_mappings pm ON vvp.id = pm.virtual_product_id
+          JOIN base_items bi ON pm.base_item_id = bi.id
+          WHERE pm.base_item_id = i.base_item_id
+            AND pm.tenant_id = p_tenant_id
+            AND vvp.tenant_id = p_tenant_id
+            AND bi.tenant_id = p_tenant_id
+            AND vvp.deprecated IS NULL
+            AND vvp.current_price > 0
+            AND vvp.purchase_quantity > 0)
+        ELSE
+          (SELECT
+            CASE
+              WHEN vvp.purchase_unit = 'kg' THEN (vvp.current_price / (vvp.purchase_quantity * 1000))
+              WHEN vvp.purchase_unit = 'lb' THEN (vvp.current_price / (vvp.purchase_quantity * 453.592))
+              WHEN vvp.purchase_unit = 'oz' THEN (vvp.current_price / (vvp.purchase_quantity * 28.3495))
+              WHEN vvp.purchase_unit = 'g' THEN (vvp.current_price / vvp.purchase_quantity)
+              WHEN vvp.purchase_unit = 'each' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(i.each_grams, 0)))
+              WHEN vvp.purchase_unit = 'gallon' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 3.78541))
+              WHEN vvp.purchase_unit = 'liter' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 1))
+              WHEN vvp.purchase_unit = 'floz' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.0295735))
+              WHEN vvp.purchase_unit = 'ml' THEN (vvp.current_price / (vvp.purchase_quantity * NULLIF(bi.specific_weight, 0) * 1000 * 0.001))
+              ELSE NULL
+            END
+          FROM virtual_vendor_products vvp
+          JOIN product_mappings pm ON vvp.id = pm.virtual_product_id
+          JOIN base_items bi ON pm.base_item_id = bi.id
+          WHERE vvp.id = rl.specific_child::uuid
+            AND pm.base_item_id = i.base_item_id
+            AND pm.tenant_id = p_tenant_id
+            AND vvp.tenant_id = p_tenant_id
+            AND bi.tenant_id = p_tenant_id
+            AND vvp.current_price > 0
+            AND vvp.purchase_quantity > 0)
+      END as food_cost_per_gram,
+      0::numeric as labor_cost_per_gram
+    FROM items i
+    LEFT JOIN recipe_lines rl ON i.id = rl.child_item_id AND rl.line_type = 'ingredient'
+    LEFT JOIN base_items bi ON i.base_item_id = bi.id
+    WHERE i.item_kind = 'raw'
+      AND i.tenant_id = p_tenant_id
+      AND (rl.tenant_id = p_tenant_id OR rl.tenant_id IS NULL)
+      AND (bi.tenant_id = p_tenant_id OR bi.tenant_id IS NULL)
+    GROUP BY i.id, i.name, i.each_grams, i.base_item_id, bi.specific_weight, rl.specific_child
+    ON CONFLICT (item_id) DO NOTHING;
+
+    -- Seed expansion (local prepped only): closure of local prepped dependencies.
+    CREATE TEMP TABLE temp_needed_local_prepped (
+      item_id uuid PRIMARY KEY
+    );
+
+    WITH RECURSIVE needed(item_id) AS (
+      SELECT DISTINCT unnest(v_seed_item_ids_norm) AS item_id
+      UNION
+      SELECT rl.child_item_id
+      FROM recipe_lines rl
+      INNER JOIN needed n ON rl.parent_item_id = n.item_id
+      INNER JOIN items ci ON ci.id = rl.child_item_id
+      WHERE rl.line_type = 'ingredient'
+        AND rl.tenant_id = p_tenant_id
+        AND ci.item_kind = 'prepped'
+        AND ci.tenant_id = p_tenant_id
+    )
+    INSERT INTO temp_needed_local_prepped(item_id)
+    SELECT DISTINCT item_id FROM needed
+    ON CONFLICT (item_id) DO NOTHING;
+
+    -- Ingredient edges restricted to the needed local prepped parents.
+    CREATE TEMP TABLE temp_ingredient_edges AS
+    SELECT
+      rl.parent_item_id,
+      rl.child_item_id,
+      rl.quantity,
+      rl.unit
+    FROM recipe_lines rl
+    WHERE rl.line_type = 'ingredient'
+      AND rl.tenant_id = p_tenant_id
+      AND rl.parent_item_id IN (SELECT item_id FROM temp_needed_local_prepped);
+
+    CREATE INDEX ON temp_ingredient_edges(parent_item_id);
+    CREATE INDEX ON temp_ingredient_edges(child_item_id);
+
+    CREATE TEMP TABLE temp_ingredient_counts AS
+    SELECT parent_item_id, COUNT(DISTINCT child_item_id) AS total_count
+    FROM temp_ingredient_edges
+    GROUP BY parent_item_id;
+
+    CREATE INDEX ON temp_ingredient_counts(parent_item_id);
+
+    -- temp_needed_local_prepped は以降の計算（temp_ingredient_edges / counts が確定した後）では不要。
+    -- 再帰呼び出し時の temp table 衝突を避けるためにここで破棄する。
+    DROP TABLE IF EXISTS temp_needed_local_prepped;
+
+    -- Cross-tenant: only foreign prepped that appear in the scoped ingredient edges.
+    CREATE TEMP TABLE temp_ct_foreign_needed (
+      child_item_id uuid PRIMARY KEY,
+      owner_tid uuid NOT NULL,
+      item_name text
+    );
+
+    INSERT INTO temp_ct_foreign_needed (child_item_id, owner_tid, item_name)
+    SELECT s.child_item_id, s.owner_tid, s.item_name
+    FROM (
+      SELECT DISTINCT ON (ci.id)
+        ci.id AS child_item_id,
+        ci.tenant_id AS owner_tid,
+        ci.name AS item_name
+      FROM temp_ingredient_edges e
+      INNER JOIN items ci ON ci.id = e.child_item_id
+      WHERE ci.tenant_id <> p_tenant_id
+        AND ci.item_kind = 'prepped'
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM cross_tenant_item_shares cts
+            INNER JOIN company_tenants ct_v
+              ON ct_v.company_id = cts.company_id
+             AND ct_v.tenant_id = p_tenant_id
+            WHERE cts.item_id = ci.id
+              AND cts.owner_tenant_id = ci.tenant_id
+              AND 'read' = ANY (cts.allowed_actions)
+              AND (
+                (cts.target_type = 'company' AND cts.target_id = cts.company_id::text)
+                OR
+                (cts.target_type = 'tenant' AND cts.target_id = p_tenant_id::text)
+              )
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM recipe_lines rl_gf
+            WHERE rl_gf.tenant_id = p_tenant_id
+              AND rl_gf.line_type = 'ingredient'
+              AND rl_gf.child_item_id = ci.id
+          )
+        )
+      ORDER BY ci.id
+    ) s
+    ON CONFLICT (child_item_id) DO NOTHING;
+
+    -- -------------------------------------------------------------------------
+    -- Recursive foreign prepped cost seeding
+    -- -------------------------------------------------------------------------
+    FOR r_owner IN
+      SELECT DISTINCT owner_tid FROM temp_ct_foreign_needed
+    LOOP
+      SELECT array_agg(child_item_id)
+      INTO v_owner_seeds
+      FROM temp_ct_foreign_needed
+      WHERE owner_tid = r_owner.owner_tid;
+
+      -- 安全: NULL/empty の場合はスキップ
+      IF v_owner_seeds IS NULL OR array_length(v_owner_seeds, 1) IS NULL THEN
+        CONTINUE;
+      END IF;
+
+      EXECUTE format('ALTER TABLE temp_item_costs RENAME TO %I', v_pause_tic);
+      EXECUTE format('ALTER TABLE temp_labor_costs RENAME TO %I', v_pause_tlc);
+      EXECUTE format('ALTER TABLE temp_ingredient_edges RENAME TO %I', v_pause_tie);
+      EXECUTE format('ALTER TABLE temp_ingredient_counts RENAME TO %I', v_pause_ticnt);
+      EXECUTE format('ALTER TABLE temp_ct_foreign_needed RENAME TO %I', v_pause_fn);
+
+      EXECUTE format($q$
+        INSERT INTO %I (item_id, item_name, food_cost_per_gram, labor_cost_per_gram)
+        SELECT
+          fr.out_item_id,
+          fr.out_item_name,
+          fr.out_food_cost_per_gram,
+          fr.out_labor_cost_per_gram
+        FROM public.calculate_item_costs_with_breakdown_scoped($1, $2, $3) fr
+        INNER JOIN %I n
+          ON n.child_item_id = fr.out_item_id
+         AND n.owner_tid = $4
+        ON CONFLICT (item_id) DO NOTHING
+      $q$, v_pause_tic, v_pause_fn)
+      USING r_owner.owner_tid, p_call_depth + 1, v_owner_seeds, r_owner.owner_tid;
+
+      EXECUTE format('ALTER TABLE %I RENAME TO temp_item_costs', v_pause_tic);
+      EXECUTE format('ALTER TABLE %I RENAME TO temp_labor_costs', v_pause_tlc);
+      EXECUTE format('ALTER TABLE %I RENAME TO temp_ingredient_edges', v_pause_tie);
+      EXECUTE format('ALTER TABLE %I RENAME TO temp_ingredient_counts', v_pause_ticnt);
+      EXECUTE format('ALTER TABLE %I RENAME TO temp_ct_foreign_needed', v_pause_fn);
+    END LOOP;
+
+    -- -------------------------------------------------------------------------
+    -- Local prepped cost calculation (only within the scoped edges/parents)
+    -- -------------------------------------------------------------------------
+    LOOP
+      v_iteration := v_iteration + 1;
+
+      INSERT INTO temp_item_costs (item_id, item_name, food_cost_per_gram, labor_cost_per_gram)
+      SELECT
+        parent.id,
+        parent.name,
+        SUM(
+          tc.food_cost_per_gram *
+          CASE
+            WHEN rl.unit = 'kg' THEN rl.quantity * 1000
+            WHEN rl.unit = 'lb' THEN rl.quantity * 453.592
+            WHEN rl.unit = 'oz' THEN rl.quantity * 28.3495
+            WHEN rl.unit = 'g' THEN rl.quantity
+            WHEN rl.unit = 'liter' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 1000
+            WHEN rl.unit = 'floz' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 29.5735
+            WHEN rl.unit = 'each' THEN rl.quantity * COALESCE(child_items.each_grams, 0)
+            ELSE 0
+          END
+        ) / NULLIF(
+          CASE
+            WHEN parent.proceed_yield_unit = 'kg' THEN parent.proceed_yield_amount * 1000
+            WHEN parent.proceed_yield_unit = 'g' THEN parent.proceed_yield_amount
+            WHEN parent.proceed_yield_unit = 'each' THEN parent.proceed_yield_amount * COALESCE(parent.each_grams, 1)
+            ELSE 1
+          END, 0
+        ) AS food_cost_per_gram,
+        SUM(
+          (tc.labor_cost_per_gram + COALESCE(
+            tlc_child.labor_cost_batch / NULLIF(
+              CASE
+                WHEN child_items.proceed_yield_unit = 'kg' THEN child_items.proceed_yield_amount * 1000
+                WHEN child_items.proceed_yield_unit = 'g' THEN child_items.proceed_yield_amount
+                WHEN child_items.proceed_yield_unit = 'each' THEN child_items.proceed_yield_amount * COALESCE(child_items.each_grams, 1)
+                ELSE 1
+              END, 0
+            ), 0
+          )) *
+          CASE
+            WHEN rl.unit = 'kg' THEN rl.quantity * 1000
+            WHEN rl.unit = 'lb' THEN rl.quantity * 453.592
+            WHEN rl.unit = 'oz' THEN rl.quantity * 28.3495
+            WHEN rl.unit = 'g' THEN rl.quantity
+            WHEN rl.unit = 'liter' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 1000
+            WHEN rl.unit = 'floz' THEN rl.quantity * NULLIF(bi.specific_weight, 0) * 29.5735
+            WHEN rl.unit = 'each' THEN rl.quantity * COALESCE(child_items.each_grams, 0)
+            ELSE 0
+          END
+        ) / NULLIF(
+          CASE
+            WHEN parent.proceed_yield_unit = 'kg' THEN parent.proceed_yield_amount * 1000
+            WHEN parent.proceed_yield_unit = 'g' THEN parent.proceed_yield_amount
+            WHEN parent.proceed_yield_unit = 'each' THEN parent.proceed_yield_amount * COALESCE(parent.each_grams, 1)
+            ELSE 1
+          END, 0
+        ) AS labor_cost_per_gram
+      FROM items parent
+      INNER JOIN temp_ingredient_edges rl ON parent.id = rl.parent_item_id
+      INNER JOIN temp_item_costs tc ON rl.child_item_id = tc.item_id
+      LEFT JOIN items child_items ON rl.child_item_id = child_items.id
+      LEFT JOIN base_items bi ON child_items.base_item_id = bi.id
+      LEFT JOIN temp_labor_costs tlc_child ON child_items.id = tlc_child.item_id
+      WHERE parent.item_kind = 'prepped'
+        AND parent.tenant_id = p_tenant_id
+        AND (
+          child_items.tenant_id = p_tenant_id
+          OR EXISTS (
+            SELECT 1 FROM temp_ct_foreign_needed n WHERE n.child_item_id = child_items.id
+          )
+        )
+        AND (
+          bi.tenant_id = p_tenant_id
+          OR bi.tenant_id IS NULL
+          OR EXISTS (
+            SELECT 1 FROM temp_ct_foreign_needed n2 WHERE n2.child_item_id = child_items.id
+          )
+        )
+        AND NOT EXISTS (SELECT 1 FROM temp_item_costs t WHERE t.item_id = parent.id)
+      GROUP BY parent.id, parent.name, parent.proceed_yield_amount, parent.proceed_yield_unit, parent.each_grams
+      HAVING COUNT(DISTINCT rl.child_item_id) = (
+        SELECT total_count FROM temp_ingredient_counts WHERE parent_item_id = parent.id
+      )
+      ON CONFLICT (item_id) DO NOTHING;
+
+      GET DIAGNOSTICS v_rows_inserted = ROW_COUNT;
+      EXIT WHEN v_rows_inserted = 0 OR v_iteration > 50;
+    END LOOP;
+
+    -- -------------------------------------------------------------------------
+    -- Return (scoped local items + scoped foreign items needed by this scope)
+    -- -------------------------------------------------------------------------
+    RETURN QUERY
+    SELECT *
+    FROM (
+      SELECT
+        tc.item_id AS out_item_id,
+        tc.item_name AS out_item_name,
+        (tc.food_cost_per_gram + COALESCE(tc.labor_cost_per_gram, 0) + COALESCE(
+          lc.labor_cost_batch / NULLIF(
+            CASE
+              WHEN i.proceed_yield_unit = 'kg' THEN i.proceed_yield_amount * 1000
+              WHEN i.proceed_yield_unit = 'g' THEN i.proceed_yield_amount
+              WHEN i.proceed_yield_unit = 'each' THEN i.proceed_yield_amount * COALESCE(i.each_grams, 1)
+              ELSE 1
+            END, 0
+          ), 0
+        ))::numeric AS out_total_cost_per_gram,
+        tc.food_cost_per_gram::numeric AS out_food_cost_per_gram,
+        (COALESCE(tc.labor_cost_per_gram, 0) + COALESCE(
+          lc.labor_cost_batch / NULLIF(
+            CASE
+              WHEN i.proceed_yield_unit = 'kg' THEN i.proceed_yield_amount * 1000
+              WHEN i.proceed_yield_unit = 'g' THEN i.proceed_yield_amount
+              WHEN i.proceed_yield_unit = 'each' THEN i.proceed_yield_amount * COALESCE(i.each_grams, 1)
+              ELSE 1
+            END, 0
+          ), 0
+        ))::numeric AS out_labor_cost_per_gram
+      FROM temp_item_costs tc
+      LEFT JOIN items i ON tc.item_id = i.id
+      LEFT JOIN temp_labor_costs lc ON tc.item_id = lc.item_id
+      WHERE tc.food_cost_per_gram IS NOT NULL
+        AND i.tenant_id = p_tenant_id
+
+      UNION ALL
+
+      SELECT
+        tc.item_id AS out_item_id,
+        tc.item_name AS out_item_name,
+        (tc.food_cost_per_gram + COALESCE(tc.labor_cost_per_gram, 0) + COALESCE(
+          lc.labor_cost_batch / NULLIF(
+            CASE
+              WHEN i.proceed_yield_unit = 'kg' THEN i.proceed_yield_amount * 1000
+              WHEN i.proceed_yield_unit = 'g' THEN i.proceed_yield_amount
+              WHEN i.proceed_yield_unit = 'each' THEN i.proceed_yield_amount * COALESCE(i.each_grams, 1)
+              ELSE 1
+            END, 0
+          ), 0
+        ))::numeric AS out_total_cost_per_gram,
+        tc.food_cost_per_gram::numeric AS out_food_cost_per_gram,
+        (COALESCE(tc.labor_cost_per_gram, 0) + COALESCE(
+          lc.labor_cost_batch / NULLIF(
+            CASE
+              WHEN i.proceed_yield_unit = 'kg' THEN i.proceed_yield_amount * 1000
+              WHEN i.proceed_yield_unit = 'g' THEN i.proceed_yield_amount
+              WHEN i.proceed_yield_unit = 'each' THEN i.proceed_yield_amount * COALESCE(i.each_grams, 1)
+              ELSE 1
+            END, 0
+          ), 0
+        ))::numeric AS out_labor_cost_per_gram
+      FROM temp_item_costs tc
+      INNER JOIN temp_ct_foreign_needed fn ON fn.child_item_id = tc.item_id
+      LEFT JOIN items i ON i.id = tc.item_id
+      LEFT JOIN temp_labor_costs lc ON lc.item_id = tc.item_id
+      WHERE tc.food_cost_per_gram IS NOT NULL
+    ) AS combined
+    ORDER BY combined.out_item_name;
+
+    -- Cleanup
+    DROP TABLE IF EXISTS temp_item_costs;
+    DROP TABLE IF EXISTS temp_labor_costs;
+    DROP TABLE IF EXISTS temp_ingredient_edges;
+    DROP TABLE IF EXISTS temp_ingredient_counts;
+    DROP TABLE IF EXISTS temp_ct_foreign_needed;
+
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tic);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tlc);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tie);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_ticnt);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_fn);
+    EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_need);
+
+  EXCEPTION
+    WHEN OTHERS THEN
+      -- Ensure outer temp tables don't leak across failed runs.
+      DROP TABLE IF EXISTS temp_item_costs;
+      DROP TABLE IF EXISTS temp_labor_costs;
+      DROP TABLE IF EXISTS temp_ingredient_edges;
+      DROP TABLE IF EXISTS temp_ingredient_counts;
+      DROP TABLE IF EXISTS temp_ct_foreign_needed;
+      DROP TABLE IF EXISTS temp_needed_local_prepped;
+      EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tic);
+      EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tlc);
+      EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_tie);
+      EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_ticnt);
+      EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_fn);
+      EXECUTE format('DROP TABLE IF EXISTS %I', v_pause_need);
+      RAISE;
+  END;
+END;
+$_$;
+
+
+ALTER FUNCTION "public"."calculate_item_costs_with_breakdown_scoped"("p_tenant_id" "uuid", "p_call_depth" integer, "p_seed_item_ids" "uuid"[]) OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."calculate_item_costs_with_breakdown_scoped"("p_tenant_id" "uuid", "p_call_depth" integer, "p_seed_item_ids" "uuid"[]) IS 'Phase2 scoped breakdown + grandfather: foreign prepped allowed when read share OR local recipe line references child (Hide 後の既存行).';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."check_before_signup"("event" "jsonb") RETURNS "jsonb"
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -1081,6 +1347,47 @@ $$;
 ALTER FUNCTION "public"."handle_new_user"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."prevent_price_events_update_delete"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+BEGIN
+  RAISE EXCEPTION 'price_events is append-only; UPDATE/DELETE is not allowed';
+END;
+$$;
+
+
+ALTER FUNCTION "public"."prevent_price_events_update_delete"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."set_updated_at_cross_tenant_item_shares"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."set_updated_at_cross_tenant_item_shares"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."sync_virtual_vendor_current_price_from_event"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+BEGIN
+  UPDATE public.virtual_vendor_products
+     SET current_price = NEW.price,
+        updated_at = NEW.created_at
+   WHERE id = NEW.virtual_vendor_product_id;
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."sync_virtual_vendor_current_price_from_event"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."update_proceed_validation_settings_updated_at"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -1105,6 +1412,26 @@ $$;
 
 
 ALTER FUNCTION "public"."update_recipe_lines_updated_at"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."user_jurisdictions_company_match"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.jurisdictions j
+    WHERE j.id = NEW.jurisdiction_id
+      AND j.company_id = NEW.company_id
+  ) THEN
+    RAISE EXCEPTION 'user_jurisdictions: jurisdiction_id does not belong to company_id';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."user_jurisdictions_company_match"() OWNER TO "postgres";
 
 SET default_tablespace = '';
 
@@ -1301,6 +1628,32 @@ COMMENT ON TABLE "public"."company_tenants" IS '会社に属するテナント�
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."cross_tenant_item_shares" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "company_id" "uuid" NOT NULL,
+    "item_id" "uuid" NOT NULL,
+    "owner_tenant_id" "uuid" NOT NULL,
+    "target_type" "text" NOT NULL,
+    "target_id" "text" NOT NULL,
+    "created_by" "uuid" NOT NULL,
+    "allowed_actions" "text"[] DEFAULT ARRAY['read'::"text"] NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "cross_tenant_item_shares_target_type_check" CHECK (("target_type" = ANY (ARRAY['company'::"text", 'tenant'::"text"])))
+);
+
+
+ALTER TABLE "public"."cross_tenant_item_shares" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."cross_tenant_item_shares" IS '同一 company 内テナント間での prepped item 公開設定。target_type=company: 会社全体公開、target_type=tenant: 特定テナントのみ。';
+
+
+
+COMMENT ON COLUMN "public"."cross_tenant_item_shares"."allowed_actions" IS 'read のみ許可。空配列は明示的な hide 状態（レコードなし = デフォルト hide）。';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."document_metadata" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "real_data_id" "uuid" NOT NULL,
@@ -1331,6 +1684,28 @@ COMMENT ON COLUMN "public"."document_metadata"."content_type" IS 'MIME type（�
 
 
 COMMENT ON COLUMN "public"."document_metadata"."size_bytes" IS 'ファイルサイズ（バイト）';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."document_metadata_user_requirements" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "mapping_user_requirement_id" "uuid" NOT NULL,
+    "value" "text" NOT NULL,
+    "file_name" "text" NOT NULL,
+    "content_type" "text",
+    "size_bytes" bigint,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."document_metadata_user_requirements" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."document_metadata_user_requirements" IS '従業員要件の Document。value は R2 オブジェクトキー（例: employee/{mapping_id}/{uuid}.pdf）。';
+
+
+
+COMMENT ON COLUMN "public"."document_metadata_user_requirements"."mapping_user_requirement_id" IS 'mapping_user_requirements.id（user_requirements マスタではない）';
 
 
 
@@ -1365,7 +1740,7 @@ CREATE TABLE IF NOT EXISTS "public"."invitations" (
     "expires_at" timestamp with time zone NOT NULL,
     "email_id" "text",
     CONSTRAINT "invitations_email_status_check" CHECK (("email_status" = ANY (ARRAY['delivered'::"text", 'failed'::"text"]))),
-    CONSTRAINT "invitations_role_check" CHECK (("role" = ANY (ARRAY['manager'::"text", 'staff'::"text"]))),
+    CONSTRAINT "invitations_role_check" CHECK (("role" = ANY (ARRAY['manager'::"text", 'staff'::"text", 'director'::"text"]))),
     CONSTRAINT "invitations_status_check" CHECK (("status" = ANY (ARRAY['pending'::"text", 'accepted'::"text", 'expired'::"text", 'canceled'::"text"])))
 );
 
@@ -1402,6 +1777,27 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
 
 
 ALTER TABLE "public"."items" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."jurisdictions" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "company_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "created_by" "uuid",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."jurisdictions" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."jurisdictions" IS 'Employee requirements: 管轄ラベル（会社スコープ）';
+
+
+
+COMMENT ON COLUMN "public"."jurisdictions"."company_id" IS 'ヘッダー company プルダウンと一致';
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."labor_roles" (
@@ -1443,6 +1839,23 @@ COMMENT ON COLUMN "public"."mapping_user_requirements"."specific_date" IS '期�
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."price_events" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "virtual_vendor_product_id" "uuid" NOT NULL,
+    "price" numeric NOT NULL,
+    "source_type" "text" NOT NULL,
+    "invoice_id" "uuid",
+    "user_id" "uuid" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "price_events_price_check" CHECK (("price" > (0)::numeric)),
+    CONSTRAINT "price_events_source_type_check" CHECK (("source_type" = ANY (ARRAY['manual'::"text", 'invoice'::"text"])))
+);
+
+
+ALTER TABLE "public"."price_events" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."proceed_validation_settings" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" NOT NULL,
@@ -1473,7 +1886,7 @@ CREATE TABLE IF NOT EXISTS "public"."profiles" (
     "tenant_id" "uuid" NOT NULL,
     "role" "text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"(),
-    CONSTRAINT "profiles_role_check" CHECK (("role" = ANY (ARRAY['admin'::"text", 'manager'::"text", 'staff'::"text"])))
+    CONSTRAINT "profiles_role_check" CHECK (("role" = ANY (ARRAY['admin'::"text", 'manager'::"text", 'staff'::"text", 'director'::"text"])))
 );
 
 
@@ -1607,6 +2020,21 @@ CREATE TABLE IF NOT EXISTS "public"."unit_conversions" (
 ALTER TABLE "public"."unit_conversions" OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."user_jurisdictions" (
+    "company_id" "uuid" NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "jurisdiction_id" "uuid" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."user_jurisdictions" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."user_jurisdictions" IS '従業員（profiles 利用者）に付与した管轄';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."user_requirement_assignments" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" NOT NULL,
@@ -1643,14 +2071,16 @@ CREATE TABLE IF NOT EXISTS "public"."user_requirements" (
     "created_by" "uuid",
     "first_due_date" integer,
     "first_due_on_date" "date",
-    "validity_period_unit" "text"
+    "validity_period_unit" "text",
+    "company_id" "uuid" NOT NULL,
+    "jurisdiction_id" "uuid" NOT NULL
 );
 
 
 ALTER TABLE "public"."user_requirements" OWNER TO "postgres";
 
 
-COMMENT ON TABLE "public"."user_requirements" IS '従業員向け要件の定義（例: Food Handler, 健康診断）。テナントごとに管理';
+COMMENT ON TABLE "public"."user_requirements" IS '従業員向け要件（会社＋管轄でスコープ）';
 
 
 
@@ -1679,6 +2109,14 @@ COMMENT ON COLUMN "public"."user_requirements"."first_due_on_date" IS '初回期
 
 
 COMMENT ON COLUMN "public"."user_requirements"."validity_period_unit" IS '有効期間の単位: years, months, days。NULL は年数として扱う（後方互換）';
+
+
+
+COMMENT ON COLUMN "public"."user_requirements"."company_id" IS '要件が属する会社（選択ヘッダーと一致）';
+
+
+
+COMMENT ON COLUMN "public"."user_requirements"."jurisdiction_id" IS 'この要件が適用される管轄';
 
 
 
@@ -1727,13 +2165,12 @@ CREATE TABLE IF NOT EXISTS "public"."virtual_vendor_products" (
     "brand_name" "text",
     "purchase_unit" "text" NOT NULL,
     "purchase_quantity" numeric NOT NULL,
-    "purchase_cost" numeric NOT NULL,
+    "current_price" numeric NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"(),
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "deprecated" timestamp with time zone,
-    "user_id" "uuid",
     "tenant_id" "uuid" NOT NULL,
-    CONSTRAINT "vendor_products_purchase_cost_check" CHECK (("purchase_cost" > (0)::numeric)),
+    CONSTRAINT "vendor_products_current_price_check" CHECK (("current_price" > (0)::numeric)),
     CONSTRAINT "vendor_products_purchase_quantity_check" CHECK (("purchase_quantity" > (0)::numeric))
 );
 
@@ -1801,6 +2238,16 @@ ALTER TABLE ONLY "public"."company_tenants"
 
 
 
+ALTER TABLE ONLY "public"."cross_tenant_item_shares"
+    ADD CONSTRAINT "cross_tenant_item_shares_item_target_unique" UNIQUE ("item_id", "target_type", "target_id");
+
+
+
+ALTER TABLE ONLY "public"."cross_tenant_item_shares"
+    ADD CONSTRAINT "cross_tenant_item_shares_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."document_metadata"
     ADD CONSTRAINT "document_metadata_pkey" PRIMARY KEY ("id");
 
@@ -1808,6 +2255,11 @@ ALTER TABLE ONLY "public"."document_metadata"
 
 ALTER TABLE ONLY "public"."document_metadata"
     ADD CONSTRAINT "document_metadata_real_data_id_key" UNIQUE ("real_data_id");
+
+
+
+ALTER TABLE ONLY "public"."document_metadata_user_requirements"
+    ADD CONSTRAINT "document_metadata_user_requirements_pkey" PRIMARY KEY ("id");
 
 
 
@@ -1831,6 +2283,11 @@ ALTER TABLE ONLY "public"."items"
 
 
 
+ALTER TABLE ONLY "public"."jurisdictions"
+    ADD CONSTRAINT "jurisdictions_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."labor_roles"
     ADD CONSTRAINT "labor_roles_pkey" PRIMARY KEY ("id");
 
@@ -1843,6 +2300,11 @@ ALTER TABLE ONLY "public"."mapping_user_requirements"
 
 ALTER TABLE ONLY "public"."unit_conversions"
     ADD CONSTRAINT "pk_unit_conversions" PRIMARY KEY ("from_unit", "to_unit");
+
+
+
+ALTER TABLE ONLY "public"."price_events"
+    ADD CONSTRAINT "price_events_pkey" PRIMARY KEY ("id");
 
 
 
@@ -1908,6 +2370,11 @@ ALTER TABLE ONLY "public"."tenant_requirements"
 
 ALTER TABLE ONLY "public"."tenants"
     ADD CONSTRAINT "tenants_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."user_jurisdictions"
+    ADD CONSTRAINT "user_jurisdictions_pkey" PRIMARY KEY ("company_id", "user_id", "jurisdiction_id");
 
 
 
@@ -2032,6 +2499,26 @@ CREATE INDEX "idx_company_tenants_tenant_id" ON "public"."company_tenants" USING
 
 
 
+CREATE INDEX "idx_cross_tenant_item_shares_company_id" ON "public"."cross_tenant_item_shares" USING "btree" ("company_id");
+
+
+
+CREATE INDEX "idx_cross_tenant_item_shares_item_id" ON "public"."cross_tenant_item_shares" USING "btree" ("item_id");
+
+
+
+CREATE INDEX "idx_cross_tenant_item_shares_owner_tenant" ON "public"."cross_tenant_item_shares" USING "btree" ("owner_tenant_id");
+
+
+
+CREATE INDEX "idx_cross_tenant_item_shares_target" ON "public"."cross_tenant_item_shares" USING "btree" ("target_type", "target_id");
+
+
+
+CREATE INDEX "idx_document_metadata_user_requirements_mapping" ON "public"."document_metadata_user_requirements" USING "btree" ("mapping_user_requirement_id");
+
+
+
 CREATE INDEX "idx_history_logs_changed_by" ON "public"."history_logs" USING "btree" ("changed_by");
 
 
@@ -2128,6 +2615,10 @@ CREATE INDEX "idx_items_user_id" ON "public"."items" USING "btree" ("user_id");
 
 
 
+CREATE UNIQUE INDEX "idx_jurisdictions_company_lower_name" ON "public"."jurisdictions" USING "btree" ("company_id", "lower"("btrim"("name")));
+
+
+
 CREATE UNIQUE INDEX "idx_labor_roles_name_user_id_unique" ON "public"."labor_roles" USING "btree" ("name", "user_id");
 
 
@@ -2149,6 +2640,22 @@ CREATE INDEX "idx_mapping_user_requirements_user_id" ON "public"."mapping_user_r
 
 
 CREATE INDEX "idx_mapping_user_requirements_user_requirement_id" ON "public"."mapping_user_requirements" USING "btree" ("user_requirement_id");
+
+
+
+CREATE INDEX "idx_price_events_invoice_id" ON "public"."price_events" USING "btree" ("invoice_id") WHERE ("invoice_id" IS NOT NULL);
+
+
+
+CREATE INDEX "idx_price_events_source_type" ON "public"."price_events" USING "btree" ("source_type");
+
+
+
+CREATE INDEX "idx_price_events_tenant_id" ON "public"."price_events" USING "btree" ("tenant_id");
+
+
+
+CREATE INDEX "idx_price_events_virtual_vendor_product_id_created_at" ON "public"."price_events" USING "btree" ("virtual_vendor_product_id", "created_at" DESC);
 
 
 
@@ -2252,6 +2759,14 @@ CREATE INDEX "idx_tenants_type" ON "public"."tenants" USING "btree" ("type");
 
 
 
+CREATE INDEX "idx_user_jurisdictions_jurisdiction_id" ON "public"."user_jurisdictions" USING "btree" ("jurisdiction_id");
+
+
+
+CREATE INDEX "idx_user_jurisdictions_user_id" ON "public"."user_jurisdictions" USING "btree" ("user_id");
+
+
+
 CREATE INDEX "idx_user_requirement_assignments_user_id" ON "public"."user_requirement_assignments" USING "btree" ("user_id");
 
 
@@ -2264,7 +2779,15 @@ CREATE INDEX "idx_user_requirement_assignments_user_requirement_id" ON "public".
 
 
 
+CREATE INDEX "idx_user_requirements_company_id" ON "public"."user_requirements" USING "btree" ("company_id");
+
+
+
 CREATE INDEX "idx_user_requirements_created_by" ON "public"."user_requirements" USING "btree" ("created_by");
+
+
+
+CREATE INDEX "idx_user_requirements_jurisdiction_id" ON "public"."user_requirements" USING "btree" ("jurisdiction_id");
 
 
 
@@ -2273,10 +2796,6 @@ CREATE INDEX "idx_users_id" ON "public"."users" USING "btree" ("id");
 
 
 CREATE INDEX "idx_vendor_products_deprecated" ON "public"."virtual_vendor_products" USING "btree" ("deprecated");
-
-
-
-CREATE INDEX "idx_vendor_products_user_id" ON "public"."virtual_vendor_products" USING "btree" ("user_id");
 
 
 
@@ -2312,11 +2831,31 @@ CREATE OR REPLACE TRIGGER "after_profiles_insert_assign_requirements" AFTER INSE
 
 
 
+CREATE OR REPLACE TRIGGER "trg_cross_tenant_item_shares_updated_at" BEFORE UPDATE ON "public"."cross_tenant_item_shares" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at_cross_tenant_item_shares"();
+
+
+
+CREATE OR REPLACE TRIGGER "trg_prevent_price_events_delete" BEFORE DELETE ON "public"."price_events" FOR EACH ROW EXECUTE FUNCTION "public"."prevent_price_events_update_delete"();
+
+
+
+CREATE OR REPLACE TRIGGER "trg_prevent_price_events_update" BEFORE UPDATE ON "public"."price_events" FOR EACH ROW EXECUTE FUNCTION "public"."prevent_price_events_update_delete"();
+
+
+
+CREATE OR REPLACE TRIGGER "trg_sync_virtual_vendor_current_price" AFTER INSERT ON "public"."price_events" FOR EACH ROW EXECUTE FUNCTION "public"."sync_virtual_vendor_current_price_from_event"();
+
+
+
 CREATE OR REPLACE TRIGGER "trigger_update_proceed_validation_settings_updated_at" BEFORE UPDATE ON "public"."proceed_validation_settings" FOR EACH ROW EXECUTE FUNCTION "public"."update_proceed_validation_settings_updated_at"();
 
 
 
 CREATE OR REPLACE TRIGGER "trigger_update_recipe_lines_updated_at" BEFORE UPDATE ON "public"."recipe_lines" FOR EACH ROW EXECUTE FUNCTION "public"."update_recipe_lines_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "user_jurisdictions_company_match_biub" BEFORE INSERT OR UPDATE ON "public"."user_jurisdictions" FOR EACH ROW EXECUTE FUNCTION "public"."user_jurisdictions_company_match"();
 
 
 
@@ -2380,8 +2919,33 @@ ALTER TABLE ONLY "public"."company_tenants"
 
 
 
+ALTER TABLE ONLY "public"."cross_tenant_item_shares"
+    ADD CONSTRAINT "cross_tenant_item_shares_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."cross_tenant_item_shares"
+    ADD CONSTRAINT "cross_tenant_item_shares_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."cross_tenant_item_shares"
+    ADD CONSTRAINT "cross_tenant_item_shares_item_id_fkey" FOREIGN KEY ("item_id") REFERENCES "public"."items"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."cross_tenant_item_shares"
+    ADD CONSTRAINT "cross_tenant_item_shares_owner_tenant_id_fkey" FOREIGN KEY ("owner_tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."document_metadata"
     ADD CONSTRAINT "document_metadata_real_data_id_fkey" FOREIGN KEY ("real_data_id") REFERENCES "public"."tenant_requirement_real_data"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."document_metadata_user_requirements"
+    ADD CONSTRAINT "document_metadata_user_require_mapping_user_requirement_id_fkey" FOREIGN KEY ("mapping_user_requirement_id") REFERENCES "public"."mapping_user_requirements"("id") ON DELETE CASCADE;
 
 
 
@@ -2425,6 +2989,16 @@ ALTER TABLE ONLY "public"."items"
 
 
 
+ALTER TABLE ONLY "public"."jurisdictions"
+    ADD CONSTRAINT "jurisdictions_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."jurisdictions"
+    ADD CONSTRAINT "jurisdictions_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
+
+
+
 ALTER TABLE ONLY "public"."labor_roles"
     ADD CONSTRAINT "labor_roles_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
 
@@ -2442,6 +3016,21 @@ ALTER TABLE ONLY "public"."mapping_user_requirements"
 
 ALTER TABLE ONLY "public"."mapping_user_requirements"
     ADD CONSTRAINT "mapping_user_requirements_user_requirement_id_fkey" FOREIGN KEY ("user_requirement_id") REFERENCES "public"."user_requirements"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."price_events"
+    ADD CONSTRAINT "price_events_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."price_events"
+    ADD CONSTRAINT "price_events_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."price_events"
+    ADD CONSTRAINT "price_events_virtual_vendor_product_id_fkey" FOREIGN KEY ("virtual_vendor_product_id") REFERENCES "public"."virtual_vendor_products"("id") ON DELETE CASCADE;
 
 
 
@@ -2515,6 +3104,21 @@ ALTER TABLE ONLY "public"."tenant_requirements"
 
 
 
+ALTER TABLE ONLY "public"."user_jurisdictions"
+    ADD CONSTRAINT "user_jurisdictions_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."user_jurisdictions"
+    ADD CONSTRAINT "user_jurisdictions_jurisdiction_id_fkey" FOREIGN KEY ("jurisdiction_id") REFERENCES "public"."jurisdictions"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."user_jurisdictions"
+    ADD CONSTRAINT "user_jurisdictions_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."user_requirement_assignments"
     ADD CONSTRAINT "user_requirement_assignments_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
@@ -2526,7 +3130,17 @@ ALTER TABLE ONLY "public"."user_requirement_assignments"
 
 
 ALTER TABLE ONLY "public"."user_requirements"
+    ADD CONSTRAINT "user_requirements_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."user_requirements"
     ADD CONSTRAINT "user_requirements_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."user_requirements"
+    ADD CONSTRAINT "user_requirements_jurisdiction_id_fkey" FOREIGN KEY ("jurisdiction_id") REFERENCES "public"."jurisdictions"("id") ON DELETE RESTRICT;
 
 
 
@@ -2537,11 +3151,6 @@ ALTER TABLE ONLY "public"."users"
 
 ALTER TABLE ONLY "public"."virtual_vendor_products"
     ADD CONSTRAINT "vendor_products_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
-
-
-
-ALTER TABLE ONLY "public"."virtual_vendor_products"
-    ADD CONSTRAINT "vendor_products_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE;
 
 
 
@@ -2599,6 +3208,42 @@ CREATE POLICY "Users can view their own proceed_validation_settings" ON "public"
 ALTER TABLE "public"."allowlist" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."cross_tenant_item_shares" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "cross_tenant_item_shares_delete" ON "public"."cross_tenant_item_shares" FOR DELETE USING ((("owner_tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE (("p"."user_id" = "auth"."uid"()) AND ("p"."role" = ANY (ARRAY['admin'::"text", 'director'::"text"]))))) OR ("company_id" IN ( SELECT "cm"."company_id"
+   FROM "public"."company_members" "cm"
+  WHERE (("cm"."user_id" = "auth"."uid"()) AND ("cm"."role" = ANY (ARRAY['company_admin'::"public"."company_member_role", 'company_director'::"public"."company_member_role"])))))));
+
+
+
+CREATE POLICY "cross_tenant_item_shares_insert" ON "public"."cross_tenant_item_shares" FOR INSERT WITH CHECK ((("owner_tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE (("p"."user_id" = "auth"."uid"()) AND ("p"."role" = ANY (ARRAY['admin'::"text", 'director'::"text"]))))) OR ("company_id" IN ( SELECT "cm"."company_id"
+   FROM "public"."company_members" "cm"
+  WHERE (("cm"."user_id" = "auth"."uid"()) AND ("cm"."role" = ANY (ARRAY['company_admin'::"public"."company_member_role", 'company_director'::"public"."company_member_role"])))))));
+
+
+
+CREATE POLICY "cross_tenant_item_shares_select" ON "public"."cross_tenant_item_shares" FOR SELECT USING ((("company_id" IN ( SELECT "ct"."company_id"
+   FROM ("public"."company_tenants" "ct"
+     JOIN "public"."profiles" "p" ON (("p"."tenant_id" = "ct"."tenant_id")))
+  WHERE ("p"."user_id" = "auth"."uid"()))) OR ("company_id" IN ( SELECT "cm"."company_id"
+   FROM "public"."company_members" "cm"
+  WHERE ("cm"."user_id" = "auth"."uid"())))));
+
+
+
+CREATE POLICY "cross_tenant_item_shares_update" ON "public"."cross_tenant_item_shares" FOR UPDATE USING ((("owner_tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE (("p"."user_id" = "auth"."uid"()) AND ("p"."role" = ANY (ARRAY['admin'::"text", 'director'::"text"]))))) OR ("company_id" IN ( SELECT "cm"."company_id"
+   FROM "public"."company_members" "cm"
+  WHERE (("cm"."user_id" = "auth"."uid"()) AND ("cm"."role" = ANY (ARRAY['company_admin'::"public"."company_member_role", 'company_director'::"public"."company_member_role"])))))));
+
+
+
 ALTER TABLE "public"."proceed_validation_settings" ENABLE ROW LEVEL SECURITY;
 
 
@@ -2628,15 +3273,21 @@ GRANT ALL ON FUNCTION "public"."calculate_item_costs"("p_tenant_id" "uuid", "p_i
 
 
 
-GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid") TO "anon";
-GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid") TO "authenticated";
-GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid") TO "service_role";
+GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid", "p_call_depth" integer) TO "anon";
+GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid", "p_call_depth" integer) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown"("p_tenant_id" "uuid", "p_call_depth" integer) TO "service_role";
 
 
 
 GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown_old"() TO "anon";
 GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown_old"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown_old"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown_scoped"("p_tenant_id" "uuid", "p_call_depth" integer, "p_seed_item_ids" "uuid"[]) TO "anon";
+GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown_scoped"("p_tenant_id" "uuid", "p_call_depth" integer, "p_seed_item_ids" "uuid"[]) TO "authenticated";
+GRANT ALL ON FUNCTION "public"."calculate_item_costs_with_breakdown_scoped"("p_tenant_id" "uuid", "p_call_depth" integer, "p_seed_item_ids" "uuid"[]) TO "service_role";
 
 
 
@@ -2670,6 +3321,24 @@ GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "service_role";
 
 
 
+GRANT ALL ON FUNCTION "public"."prevent_price_events_update_delete"() TO "anon";
+GRANT ALL ON FUNCTION "public"."prevent_price_events_update_delete"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."prevent_price_events_update_delete"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."set_updated_at_cross_tenant_item_shares"() TO "anon";
+GRANT ALL ON FUNCTION "public"."set_updated_at_cross_tenant_item_shares"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."set_updated_at_cross_tenant_item_shares"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."sync_virtual_vendor_current_price_from_event"() TO "anon";
+GRANT ALL ON FUNCTION "public"."sync_virtual_vendor_current_price_from_event"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."sync_virtual_vendor_current_price_from_event"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."update_proceed_validation_settings_updated_at"() TO "anon";
 GRANT ALL ON FUNCTION "public"."update_proceed_validation_settings_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_proceed_validation_settings_updated_at"() TO "service_role";
@@ -2679,6 +3348,12 @@ GRANT ALL ON FUNCTION "public"."update_proceed_validation_settings_updated_at"()
 GRANT ALL ON FUNCTION "public"."update_recipe_lines_updated_at"() TO "anon";
 GRANT ALL ON FUNCTION "public"."update_recipe_lines_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."update_recipe_lines_updated_at"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."user_jurisdictions_company_match"() TO "anon";
+GRANT ALL ON FUNCTION "public"."user_jurisdictions_company_match"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."user_jurisdictions_company_match"() TO "service_role";
 
 
 
@@ -2742,9 +3417,21 @@ GRANT ALL ON TABLE "public"."company_tenants" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "anon";
+GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "authenticated";
+GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."document_metadata" TO "anon";
 GRANT ALL ON TABLE "public"."document_metadata" TO "authenticated";
 GRANT ALL ON TABLE "public"."document_metadata" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."document_metadata_user_requirements" TO "anon";
+GRANT ALL ON TABLE "public"."document_metadata_user_requirements" TO "authenticated";
+GRANT ALL ON TABLE "public"."document_metadata_user_requirements" TO "service_role";
 
 
 
@@ -2766,6 +3453,12 @@ GRANT ALL ON TABLE "public"."items" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."jurisdictions" TO "anon";
+GRANT ALL ON TABLE "public"."jurisdictions" TO "authenticated";
+GRANT ALL ON TABLE "public"."jurisdictions" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."labor_roles" TO "anon";
 GRANT ALL ON TABLE "public"."labor_roles" TO "authenticated";
 GRANT ALL ON TABLE "public"."labor_roles" TO "service_role";
@@ -2775,6 +3468,12 @@ GRANT ALL ON TABLE "public"."labor_roles" TO "service_role";
 GRANT ALL ON TABLE "public"."mapping_user_requirements" TO "anon";
 GRANT ALL ON TABLE "public"."mapping_user_requirements" TO "authenticated";
 GRANT ALL ON TABLE "public"."mapping_user_requirements" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."price_events" TO "anon";
+GRANT ALL ON TABLE "public"."price_events" TO "authenticated";
+GRANT ALL ON TABLE "public"."price_events" TO "service_role";
 
 
 
@@ -2835,6 +3534,12 @@ GRANT ALL ON TABLE "public"."tenants" TO "service_role";
 GRANT ALL ON TABLE "public"."unit_conversions" TO "anon";
 GRANT ALL ON TABLE "public"."unit_conversions" TO "authenticated";
 GRANT ALL ON TABLE "public"."unit_conversions" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."user_jurisdictions" TO "anon";
+GRANT ALL ON TABLE "public"."user_jurisdictions" TO "authenticated";
+GRANT ALL ON TABLE "public"."user_jurisdictions" TO "service_role";
 
 
 

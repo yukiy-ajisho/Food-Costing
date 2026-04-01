@@ -1,39 +1,79 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { RecipeLine, Item } from "../types/database";
-import { checkCycle } from "../services/cycle-detection";
-import { authorizeUnified, UnifiedTenantAction } from "../authz/unified/authorize";
+import { checkCycleCrossTenant } from "../services/cycle-detection-cross-tenant";
+import {
+  authorizeUnified,
+  UnifiedTenantAction,
+} from "../authz/unified/authorize";
 import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
   getUnifiedRecipeLineResource,
   getUnifiedTenantResource,
 } from "../middleware/unified-resource-helpers";
 
+async function tenantsShareCompany(
+  tenantIdA: string,
+  tenantIdB: string,
+): Promise<boolean> {
+  if (tenantIdA === tenantIdB) return true;
+  const { data: rowsA } = await supabase
+    .from("company_tenants")
+    .select("company_id")
+    .eq("tenant_id", tenantIdA);
+  const { data: rowsB } = await supabase
+    .from("company_tenants")
+    .select("company_id")
+    .eq("tenant_id", tenantIdB);
+  const companiesA = new Set(rowsA?.map((r) => r.company_id) ?? []);
+  return (rowsB ?? []).some((r) => companiesA.has(r.company_id));
+}
+
 /**
  * Recipe Lineのバリデーション: deprecatedな材料やvendor_productを使おうとしていないかチェック
  */
 async function validateRecipeLineNotDeprecated(
   line: Partial<RecipeLine>,
-  tenantIds: string[]
+  tenantIds: string[],
+  viewerTenantId: string,
 ): Promise<{ valid: boolean; error?: string }> {
   // ingredientのみチェック（laborはチェック不要）
   if (line.line_type !== "ingredient" || !line.child_item_id) {
     return { valid: true };
   }
 
-  // child_itemがdeprecatedかチェック
   const { data: childItem, error: itemError } = await supabase
     .from("items")
     .select("*")
     .eq("id", line.child_item_id)
-    .in("tenant_id", tenantIds)
-    .single();
+    .maybeSingle();
 
   if (itemError || !childItem) {
     return {
       valid: false,
       error: `Ingredient item not found: ${line.child_item_id}`,
     };
+  }
+
+  const childInUserTenants = tenantIds.includes(childItem.tenant_id);
+
+  if (!childInUserTenants) {
+    if (childItem.item_kind !== "prepped") {
+      return {
+        valid: false,
+        error: `Ingredient item not found: ${line.child_item_id}`,
+      };
+    }
+    const sameCompany = await tenantsShareCompany(
+      viewerTenantId,
+      childItem.tenant_id,
+    );
+    if (!sameCompany) {
+      return {
+        valid: false,
+        error: `Ingredient item not found: ${line.child_item_id}`,
+      };
+    }
   }
 
   if (childItem.deprecated) {
@@ -55,7 +95,7 @@ async function validateRecipeLineNotDeprecated(
         .select("*")
         .eq("virtual_product_id", line.specific_child)
         .eq("base_item_id", childItem.base_item_id)
-        .in("tenant_id", tenantIds)
+        .eq("tenant_id", childItem.tenant_id)
         .single();
 
       if (mappingError || !mapping) {
@@ -69,7 +109,7 @@ async function validateRecipeLineNotDeprecated(
         .from("virtual_vendor_products")
         .select("*")
         .eq("id", line.specific_child)
-        .in("tenant_id", tenantIds)
+        .eq("tenant_id", childItem.tenant_id)
         .single();
 
       if (vpError || !vendorProduct) {
@@ -93,11 +133,95 @@ async function validateRecipeLineNotDeprecated(
 }
 
 /**
+ * 新規/変更される cross-tenant ingredient が read 共有されているかを検証する。
+ * 既存参照の grandfather を許可するため、このチェックは「新規追加・child変更時」にのみ使う。
+ */
+async function validateCrossTenantIngredientShare(
+  line: Partial<RecipeLine>,
+  viewerTenantId: string,
+): Promise<{ valid: boolean; error?: string }> {
+  if (line.line_type !== "ingredient" || !line.child_item_id) {
+    return { valid: true };
+  }
+
+  const { data: childItem, error: childItemError } = await supabase
+    .from("items")
+    .select("id, name, tenant_id, item_kind")
+    .eq("id", line.child_item_id)
+    .maybeSingle();
+
+  if (childItemError || !childItem) {
+    return {
+      valid: false,
+      error: `Ingredient item not found: ${line.child_item_id}`,
+    };
+  }
+
+  if (childItem.tenant_id === viewerTenantId) {
+    return { valid: true };
+  }
+
+  if (childItem.item_kind !== "prepped") {
+    return {
+      valid: false,
+      error: `Cannot use ingredient "${childItem.name || childItem.id}": it belongs to another tenant but is not a prepped item. Only shared prepped items may be used across tenants.`,
+    };
+  }
+
+  const { data: viewerTenant, error: viewerTenantError } = await supabase
+    .from("company_tenants")
+    .select("company_id")
+    .eq("tenant_id", viewerTenantId)
+    .maybeSingle();
+
+  if (viewerTenantError || !viewerTenant) {
+    return {
+      valid: false,
+      error:
+        "Current tenant is not linked to a company; cross-tenant share cannot be verified.",
+    };
+  }
+
+  const { data: shares, error: shareError } = await supabase
+    .from("cross_tenant_item_shares")
+    .select("target_type, target_id, allowed_actions, company_id")
+    .eq("item_id", childItem.id)
+    .eq("owner_tenant_id", childItem.tenant_id)
+    .eq("company_id", viewerTenant.company_id)
+    .contains("allowed_actions", ["read"]);
+
+  if (shareError) {
+    return {
+      valid: false,
+      error: `Failed to verify cross-tenant share: ${shareError.message}`,
+    };
+  }
+
+  const allowed = (shares ?? []).some((s) => {
+    const companyIdText = String(s.company_id);
+    const matchesCompany =
+      s.target_type === "company" && s.target_id === companyIdText;
+    const matchesTenant =
+      s.target_type === "tenant" && s.target_id === viewerTenantId;
+    return matchesCompany || matchesTenant;
+  });
+
+  if (!allowed) {
+    return {
+      valid: false,
+      error: `Cannot use ingredient "${childItem.name || childItem.id}": this prepped item is not shared for read access to your tenant (or the share does not match costing rules). Remove it or ask the owner tenant to publish it.`,
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
  * Labor Roleのバリデーション: labor_roleが存在するかチェック
  */
 async function validateLaborRoleExists(
   laborRole: string | null | undefined,
-  tenantIds: string[]
+  tenantIds: string[],
 ): Promise<{ valid: boolean; error?: string }> {
   // labor_roleが指定されていない場合はスキップ
   if (!laborRole) {
@@ -132,11 +256,13 @@ router.post(
   "/",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.create_recipe,
-    getUnifiedTenantResource
+    getUnifiedTenantResource,
   ),
   async (req, res) => {
     try {
       const line: Partial<RecipeLine> = req.body;
+      const selectedTenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
 
       // バリデーション
       if (!line.parent_item_id || !line.line_type) {
@@ -151,6 +277,13 @@ router.post(
             error: "ingredient line requires child_item_id, quantity, and unit",
           });
         }
+        const shareValidation = await validateCrossTenantIngredientShare(
+          line,
+          selectedTenantId,
+        );
+        if (!shareValidation.valid) {
+          return res.status(400).json({ error: shareValidation.error });
+        }
       } else if (line.line_type === "labor") {
         if (!line.minutes || line.minutes <= 0) {
           return res.status(400).json({
@@ -161,7 +294,7 @@ router.post(
         if (line.labor_role) {
           const laborRoleValidation = await validateLaborRoleExists(
             line.labor_role,
-            req.user!.tenant_ids
+            req.user!.tenant_ids,
           );
           if (!laborRoleValidation.valid) {
             return res.status(400).json({ error: laborRoleValidation.error });
@@ -216,14 +349,19 @@ router.post(
         recipeLinesMap.set(line.parent_item_id!, existing);
 
         // 循環参照をチェック（既存データも含めてチェック）
+        const viewerTenantId =
+          req.user!.selected_tenant_id || req.user!.tenant_ids[0];
         try {
-          await checkCycle(
+          await checkCycleCrossTenant(
             line.parent_item_id!,
-            req.user!.tenant_ids, // Phase 2で改善予定
+            viewerTenantId,
             new Set(),
             itemsMap,
             recipeLinesMap,
-            []
+            new Map(),
+            new Map(),
+            [],
+            false,
           );
         } catch (cycleError: unknown) {
           const message =
@@ -239,15 +377,14 @@ router.post(
       // Deprecatedバリデーション
       const validation = await validateRecipeLineNotDeprecated(
         line,
-        req.user!.tenant_ids
+        req.user!.tenant_ids,
+        selectedTenantId,
       );
       if (!validation.valid) {
         return res.status(400).json({ error: validation.error });
       }
 
       // tenant_idとuser_idを自動設定（選択されたテナントID、または最初のテナント）
-      const selectedTenantId =
-        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
       const lineWithTenantId = {
         ...line,
         tenant_id: selectedTenantId,
@@ -270,7 +407,7 @@ router.post(
           await import("../services/deprecation");
         await autoUndeprecateAfterRecipeLineUpdate(
           line.parent_item_id,
-          req.user!.tenant_ids
+          req.user!.tenant_ids,
         );
       }
 
@@ -279,7 +416,7 @@ router.post(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -290,7 +427,7 @@ router.put(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.update_recipe,
-    getUnifiedRecipeLineResource
+    getUnifiedRecipeLineResource,
   ),
   async (req, res) => {
     try {
@@ -310,11 +447,28 @@ router.put(
       }
 
       // 循環参照チェック（ingredient lineの場合、child_item_idが変更される場合）
+      const effectivePutLineType =
+        line.line_type ?? existingLine.line_type ?? null;
       if (
-        line.line_type === "ingredient" &&
+        effectivePutLineType === "ingredient" &&
         line.child_item_id &&
         line.child_item_id !== existingLine.child_item_id
       ) {
+        const selectedTenantIdForUpdate =
+          req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+        const mergedLineForShare: Partial<RecipeLine> = {
+          ...existingLine,
+          ...line,
+          line_type: "ingredient",
+        };
+        const shareValidation = await validateCrossTenantIngredientShare(
+          mergedLineForShare,
+          selectedTenantIdForUpdate,
+        );
+        if (!shareValidation.valid) {
+          return res.status(400).json({ error: shareValidation.error });
+        }
+
         // Itemsを取得（すべてのアイテムを取得して、既存データとの整合性を確保）
         const { data: allItems } = await supabase
           .from("items")
@@ -349,14 +503,19 @@ router.put(
         });
 
         // 循環参照をチェック（既存データも含めてチェック）
+        const viewerTenantIdPut =
+          req.user!.selected_tenant_id || req.user!.tenant_ids[0];
         try {
-          await checkCycle(
+          await checkCycleCrossTenant(
             existingLine.parent_item_id,
-            req.user!.tenant_ids, // Phase 2で改善予定
+            viewerTenantIdPut,
             new Set(),
             itemsMap,
             recipeLinesMap,
-            []
+            new Map(),
+            new Map(),
+            [],
+            false,
           );
         } catch (cycleError: unknown) {
           const message =
@@ -376,7 +535,7 @@ router.put(
       ) {
         const laborRoleValidation = await validateLaborRoleExists(
           line.labor_role,
-          req.user!.tenant_ids
+          req.user!.tenant_ids,
         );
         if (!laborRoleValidation.valid) {
           return res.status(400).json({ error: laborRoleValidation.error });
@@ -413,7 +572,7 @@ router.put(
           await import("../services/deprecation");
         await autoUndeprecateAfterRecipeLineUpdate(
           existingLine.parent_item_id,
-          req.user!.tenant_ids
+          req.user!.tenant_ids,
         );
       }
 
@@ -422,7 +581,7 @@ router.put(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -433,7 +592,7 @@ router.delete(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.delete_recipe,
-    getUnifiedRecipeLineResource
+    getUnifiedRecipeLineResource,
   ),
   async (req, res) => {
     try {
@@ -452,7 +611,7 @@ router.delete(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -493,7 +652,7 @@ router.post("/batch", async (req, res) => {
         UnifiedTenantAction.create_recipe,
         tenantResource,
         undefined,
-        { tenantId: selectedTenantIdForAuth, tenantRole: selectedTenantRole }
+        { tenantId: selectedTenantIdForAuth, tenantRole: selectedTenantRole },
       );
 
       if (!allowed) {
@@ -506,12 +665,11 @@ router.post("/batch", async (req, res) => {
     const batchUpdateIdsArr = updates
       .map((u: { id?: string }) => u.id)
       .filter((id: string | undefined): id is string => Boolean(id));
-    const batchDeleteIdsArr = deletes.filter((id: any): id is string => Boolean(id));
+    const batchDeleteIdsArr = deletes.filter((id: any): id is string =>
+      Boolean(id),
+    );
 
-    const targetRecipeLineIds = [
-      ...batchUpdateIdsArr,
-      ...batchDeleteIdsArr,
-    ];
+    const targetRecipeLineIds = [...batchUpdateIdsArr, ...batchDeleteIdsArr];
     if (targetRecipeLineIds.length > 0) {
       const { data: recipeLines, error: recipeLinesError } = await supabase
         .from("recipe_lines")
@@ -546,7 +704,7 @@ router.post("/batch", async (req, res) => {
           UnifiedTenantAction.update_recipe,
           resource,
           undefined,
-          { tenantId, tenantRole }
+          { tenantId, tenantRole },
         );
 
         if (!allowed) {
@@ -575,7 +733,7 @@ router.post("/batch", async (req, res) => {
           UnifiedTenantAction.delete_recipe,
           resource,
           undefined,
-          { tenantId, tenantRole }
+          { tenantId, tenantRole },
         );
 
         if (!allowed) {
@@ -678,6 +836,15 @@ router.post("/batch", async (req, res) => {
 
     // バリデーション（各レシピライン）
     for (const create of creates) {
+      if (
+        create.tenant_id != null &&
+        create.tenant_id !== selectedTenantIdForAuth
+      ) {
+        return res.status(400).json({
+          error:
+            "Recipe line tenant_id must match the selected tenant for this batch save.",
+        });
+      }
       if (!create.parent_item_id || !create.line_type) {
         return res.status(400).json({
           error: "parent_item_id and line_type are required for all creates",
@@ -689,10 +856,18 @@ router.post("/batch", async (req, res) => {
             error: "ingredient line requires child_item_id, quantity, and unit",
           });
         }
+        const shareValidation = await validateCrossTenantIngredientShare(
+          create,
+          selectedTenantIdForAuth,
+        );
+        if (!shareValidation.valid) {
+          return res.status(400).json({ error: shareValidation.error });
+        }
         // Deprecatedバリデーション
         const validation = await validateRecipeLineNotDeprecated(
           create,
-          req.user!.tenant_ids
+          req.user!.tenant_ids,
+          selectedTenantIdForAuth,
         );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
@@ -707,7 +882,7 @@ router.post("/batch", async (req, res) => {
         if (create.labor_role) {
           const laborRoleValidation = await validateLaborRoleExists(
             create.labor_role,
-            req.user!.tenant_ids
+            req.user!.tenant_ids,
           );
           if (!laborRoleValidation.valid) {
             return res.status(400).json({ error: laborRoleValidation.error });
@@ -717,31 +892,58 @@ router.post("/batch", async (req, res) => {
     }
 
     for (const update of updates) {
-      if (update.line_type === "ingredient") {
-        if (!update.child_item_id || !update.quantity || !update.unit) {
+      const existingLine = allRecipeLines?.find((rl) => rl.id === update.id);
+      const effectiveLineType =
+        update.line_type ?? existingLine?.line_type ?? null;
+
+      if (effectiveLineType === "ingredient") {
+        const mergedIngredient = {
+          ...existingLine,
+          ...update,
+          line_type: "ingredient" as const,
+        };
+        if (
+          !mergedIngredient.child_item_id ||
+          !mergedIngredient.quantity ||
+          !mergedIngredient.unit
+        ) {
           return res.status(400).json({
             error: "ingredient line requires child_item_id, quantity, and unit",
           });
         }
+        const childChanged =
+          !!existingLine &&
+          mergedIngredient.child_item_id !== existingLine.child_item_id;
+        if (childChanged) {
+          const shareValidation = await validateCrossTenantIngredientShare(
+            mergedIngredient,
+            selectedTenantIdForAuth,
+          );
+          if (!shareValidation.valid) {
+            return res.status(400).json({ error: shareValidation.error });
+          }
+        }
         // Deprecatedバリデーション
         const validation = await validateRecipeLineNotDeprecated(
-          update,
-          req.user!.tenant_ids
+          mergedIngredient,
+          req.user!.tenant_ids,
+          selectedTenantIdForAuth,
         );
         if (!validation.valid) {
           return res.status(400).json({ error: validation.error });
         }
-      } else if (update.line_type === "labor") {
-        if (!update.minutes || update.minutes <= 0) {
+      } else if (effectiveLineType === "labor") {
+        const mergedLabor = { ...existingLine, ...update };
+        if (!mergedLabor.minutes || mergedLabor.minutes <= 0) {
           return res.status(400).json({
             error: "labor line requires minutes > 0",
           });
         }
         // labor_roleの存在チェック
-        if (update.labor_role) {
+        if (mergedLabor.labor_role) {
           const laborRoleValidation = await validateLaborRoleExists(
-            update.labor_role,
-            req.user!.tenant_ids
+            mergedLabor.labor_role,
+            req.user!.tenant_ids,
           );
           if (!laborRoleValidation.valid) {
             return res.status(400).json({ error: laborRoleValidation.error });
@@ -768,31 +970,34 @@ router.post("/batch", async (req, res) => {
     // 各影響を受ける親アイテムについて循環参照をチェック
     console.log(
       `[CYCLE DETECTION] Starting cycle detection for ${affectedParentIds.size} affected parent items:`,
-      Array.from(affectedParentIds)
+      Array.from(affectedParentIds),
     );
     for (const parentId of affectedParentIds) {
       const parentItem = itemsMap.get(parentId);
       const parentItemName = parentItem?.name || parentId;
       console.log(
-        `[CYCLE DETECTION] Checking parent item: ${parentItemName} (${parentId})`
+        `[CYCLE DETECTION] Checking parent item: ${parentItemName} (${parentId})`,
       );
       try {
-        await checkCycle(
+        await checkCycleCrossTenant(
           parentId,
-          req.user!.tenant_ids, // Phase 2で改善予定
+          selectedTenantIdForAuth,
           new Set(),
           itemsMap,
           updatedRecipeLinesMap,
-          []
+          new Map(),
+          new Map(),
+          [],
+          false,
         );
         console.log(
-          `[CYCLE DETECTION] ✅ No cycle detected for parent item: ${parentItemName} (${parentId})`
+          `[CYCLE DETECTION] ✅ No cycle detected for parent item: ${parentItemName} (${parentId})`,
         );
       } catch (cycleError: unknown) {
         const message =
           cycleError instanceof Error ? cycleError.message : String(cycleError);
         console.error(
-          `[CYCLE DETECTION] ❌ Cycle detected for parent item: ${parentItemName} (${parentId}): ${message}`
+          `[CYCLE DETECTION] ❌ Cycle detected for parent item: ${parentItemName} (${parentId}): ${message}`,
         );
         return res.status(400).json({
           error: message,
@@ -800,7 +1005,7 @@ router.post("/batch", async (req, res) => {
       }
     }
     console.log(
-      `[CYCLE DETECTION] ✅ All ${affectedParentIds.size} parent items passed cycle detection`
+      `[CYCLE DETECTION] ✅ All ${affectedParentIds.size} parent items passed cycle detection`,
     );
 
     // データベース操作を実行（削除 → 更新 → 作成の順序）
@@ -873,7 +1078,7 @@ router.post("/batch", async (req, res) => {
           ...create,
           tenant_id: selectedTenantId,
           user_id: req.user!.id, // 作成者を記録
-        })
+        }),
       );
       const { data: createdData, error: createError } = await supabase
         .from("recipe_lines")
@@ -932,7 +1137,7 @@ router.post("/batch", async (req, res) => {
     for (const parentId of affectedParentIds) {
       await autoUndeprecateAfterRecipeLineUpdate(
         parentId,
-        req.user!.tenant_ids
+        req.user!.tenant_ids,
       );
     }
 

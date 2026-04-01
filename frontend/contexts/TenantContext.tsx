@@ -38,13 +38,10 @@ export function TenantProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { selectedCompanyId, loading: companyLoading } = useCompany();
 
+  // 常に null で初期化（SSR とクライア初回ペイントを一致させハイドレーションずれを防ぐ）。
+  // localStorage は tenants 取得後の Effect 内で復元する。
   const [selectedTenantId, setSelectedTenantIdState] = useState<string | null>(
-    () => {
-      if (typeof window !== "undefined") {
-        return localStorage.getItem("selectedTenantId");
-      }
-      return null;
-    }
+    null,
   );
   const [allTenants, setAllTenants] = useState<Tenant[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,21 +92,36 @@ export function TenantProvider({ children }: { children: ReactNode }) {
     return allTenants.filter((t) => t.company_id === selectedCompanyId);
   }, [allTenants, selectedCompanyId]);
 
-  // 会社が変わったとき、または tenants が変わったとき → selectedTenantId を検証・リセット
+  // 会社 / テナント一覧に合わせて selectedTenantId を検証。localStorage の復元もここで行う。
   useEffect(() => {
-    // CompanyContext がまだ読み込み中なら待つ
     if (companyLoading) return;
     if (tenants.length === 0) return;
 
-    const existsInFiltered = tenants.some((t) => t.id === selectedTenantId);
-    if (!existsInFiltered) {
-      const firstId = tenants[0].id;
-      setSelectedTenantIdState(firstId);
-      try {
-        localStorage.setItem("selectedTenantId", firstId);
-      } catch {
-        // プライベートモード等
-      }
+    const existsInFiltered = (id: string | null | undefined) =>
+      id != null && tenants.some((t) => t.id === id);
+
+    if (existsInFiltered(selectedTenantId)) {
+      return;
+    }
+
+    let storedId: string | null = null;
+    try {
+      storedId = localStorage.getItem("selectedTenantId");
+    } catch {
+      // プライベートモード等
+    }
+
+    if (storedId && existsInFiltered(storedId)) {
+      setSelectedTenantIdState(storedId);
+      return;
+    }
+
+    const firstId = tenants[0]!.id;
+    setSelectedTenantIdState(firstId);
+    try {
+      localStorage.setItem("selectedTenantId", firstId);
+    } catch {
+      // プライベートモード等
     }
   }, [tenants, companyLoading, selectedTenantId]);
 

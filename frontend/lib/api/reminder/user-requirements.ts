@@ -9,6 +9,8 @@ import { apiRequest } from "@/lib/api";
 interface UserRequirementRow {
   id: string;
   title: string;
+  company_id: string;
+  jurisdiction_id: string;
   validity_period: number | null;
   validity_period_unit: string | null; // 'years' | 'months' | 'days'
   first_due_date: number | null;
@@ -24,6 +26,8 @@ interface UserRequirementRow {
 export interface UserRequirement {
   id: string;
   title: string;
+  companyId: string;
+  jurisdictionId: string;
   auto: boolean;
   expiryRule: string;
   validityPeriod: number | null;
@@ -37,6 +41,8 @@ function rowToRequirement(row: UserRequirementRow): UserRequirement {
   return {
     id: row.id,
     title: row.title,
+    companyId: row.company_id,
+    jurisdictionId: row.jurisdiction_id,
     auto: Boolean(row.expiry_rule),
     expiryRule: row.expiry_rule ?? "",
     validityPeriod: row.validity_period,
@@ -47,7 +53,7 @@ function rowToRequirement(row: UserRequirementRow): UserRequirement {
   };
 }
 
-/** 作成・更新時に送るペイロード（キャメルケースで受け取り、スネークケースに変換して送る） */
+/** 作成・更新時に送るペイロード（スネークケースで API に送る） */
 export interface UserRequirementPayload {
   title: string;
   validity_period?: number | null;
@@ -59,23 +65,34 @@ export interface UserRequirementPayload {
 }
 
 export const userRequirementsAPI = {
-  getAll: () =>
-    apiRequest<UserRequirementRow[]>("/user-requirements").then((rows) =>
-      rows.map(rowToRequirement)
-    ),
+  getAll: (companyId: string) =>
+    apiRequest<UserRequirementRow[]>(
+      `/user-requirements?company_id=${encodeURIComponent(companyId)}`,
+    ).then((rows) => rows.map(rowToRequirement)),
 
   getById: (id: string) =>
     apiRequest<UserRequirementRow>(`/user-requirements/${id}`).then(
-      rowToRequirement
+      rowToRequirement,
     ),
 
-  create: (payload: UserRequirementPayload) =>
+  create: (
+    companyId: string,
+    jurisdictionId: string,
+    payload: UserRequirementPayload,
+  ) =>
     apiRequest<UserRequirementRow>("/user-requirements", {
       method: "POST",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        ...payload,
+        company_id: companyId,
+        jurisdiction_id: jurisdictionId,
+      }),
     }).then(rowToRequirement),
 
-  update: (id: string, payload: UserRequirementPayload) =>
+  update: (
+    id: string,
+    payload: UserRequirementPayload & { jurisdiction_id?: string },
+  ) =>
     apiRequest<UserRequirementRow>(`/user-requirements/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload),

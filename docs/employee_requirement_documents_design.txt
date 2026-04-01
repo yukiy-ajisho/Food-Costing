@@ -1,0 +1,189 @@
+================================================================================
+Employee Requirements — Document 機能 設計メモ
+================================================================================
+作成目的: データベース案と UI 案を会話で合意した内容を、実装前の参照用に
+         1 ファイルにまとめる。
+注意: 本ファイルは設計メモであり、未実装の仕様を記述する。
+
+--------------------------------------------------------------------------------
+1. 背景・現状
+--------------------------------------------------------------------------------
+
+1.1 アプリ内の要件機能の違い
+  - Tenant requirements / Company requirements には Document アップロード等が
+    あり、データベースも tenant_requirement_real_data + document_metadata、
+    company_requirement_real_data + company_document_metadata のように
+    ほぼ同型で揃っている。
+  - Employee requirements（user requirements）には現時点で Document 機能は
+    ない。
+  - Employee 側は「実データ」が EAV の real_data テーブルではなく、
+    mapping_user_requirements に issued_date / specific_date を持つ行として
+    表現されている（履歴は INSERT の積み上げ）。
+
+1.2 本設計のスコープ
+  - Employee requirement にドキュメントを紐づけるための DB 案。
+  - Current Status 画面を中心とした UI/UX 案。
+  - 実装コード・マイグレーションは本メモの範囲外（別タスク）。
+
+
+--------------------------------------------------------------------------------
+2. データベース設計（合意）
+--------------------------------------------------------------------------------
+
+2.1 中核の考え方
+  - 「1 回分の実データ」は mapping_user_requirements の 1 行として表される。
+  - Tenant/Company では Document が
+      * requirement_real_data の 1 行（value にストレージパス等）
+      * document_metadata（real_data_id に 1:1、file_name, content_type, size_bytes）
+    の 2 段だったが、User requirements 用にはこれを 1 テーブルに統合する。
+  - すなわち「real_data の Document 行」と「document_metadata」を、
+    mapping をキーにした 1 テーブルにまとめる。
+
+2.2 テーブル physical 名: document_metadata_user_requirements
+  ※ テーブル名は user_requirements（要件マスタ）と字面が似るが、FK は
+    mapping_user_requirements.id を指す。実装時は COMMENT や ER 図で誤解を防ぐ。
+
+  想定カラム（残りは実装時に命名規則に合わせて確定）:
+    - id                    UUID PK
+    - mapping_user_requirement_id  UUID NOT NULL FK → mapping_user_requirements(id)
+          ※ カラム名は user_requirement_id としないこと。
+            user_requirements は「要件定義マスタ」のテーブル名であり、
+            参照先はあくまで mapping の主キーであるため、
+            mapping_user_requirement_id または mapping_id などが望ましい。
+    - value                 TEXT（ストレージ上のパスやオブジェクトキー。tenant の
+                            real_data.value に相当）
+    - file_name             TEXT NOT NULL
+    - content_type          TEXT（MIME）
+    - size_bytes            BIGINT
+    - created_at            TIMESTAMPTZ
+
+2.3 1 mapping 行に複数ドキュメント
+  - mapping_user_requirement_id に UNIQUE を付けない限り、同一 mapping 行に
+    複数行をぶら下げられる。
+  - 例: 同一更新回に「証明書 PDF」と「領収 JPG」を添付する、など。
+  - 1 回分あたり 1 ファイルに厳密に制限したい場合は、当該 FK に UNIQUE を
+    検討する（会話では複数添付を許容する方向）。
+
+2.4 mapping 行ができるタイミング（アプリ利用者視点との整合）
+  - Current Status で Issued Date / Specific Date を入力し Save したときに
+    mapping_user_requirements に新規 INSERT される（入力だけでは行はできない）。
+  - Auto 要件では Save 時に specific_date が送られない場合があるが、
+    issued 等に応じて期限は画面ロジックで計算される。
+  - ドキュメントは「存在する mapping 行」の id を参照するため、
+    理論上は「Save 前の下書きセル」にはまだ FK を張れない。
+    実装時は「Save してからアップロード」フローにするか、
+    先に mapping を作る導線をどうするかを詰める必要がある（本メモ時点では
+    UI 側で Upload ボタンはセルに常に置く合意のみ）。
+
+2.5 ストレージ：バケット・パス・RLS（合意）
+  - バケットはライセンス系ドキュメントと共用し、トップレベルで種別を分ける。
+    バケット名の例: requirement-documents
+  - オブジェクトキー（パス）のイメージ:
+        tenant/  {tenant_id} / {requirement_id} / {group_key} / <ファイル>
+        company/ {company_id} / ...（既存の company 側規約に従う）
+        employee/ {mapping_user_requirement_id} / <ファイル>
+    employee 配下は mapping_user_requirements.id を区切りとする。
+    同一 mapping に複数ファイルを付ける場合は、ファイル名衝突を避けるため
+    メタデータ行の id や UUID をキーに含めるなど、既存 tenant/company と同様の
+    実装パターンに合わせる。
+  - RLS・署名付き URL・クライアントからのアップロード手順は、既にライセンス用
+    ドキュメント（tenant/company）で定まっているバケット・パス・ポリシーの
+    決まりに **employee も寄せる**（別バケットに分けない方針）。
+    実装時は既存マイグレーション・バックエンド・フロントの Document 処理を
+    参照し、employee 用は `employee/` 接頭辞と mapping id のみ追加で足りるか確認する。
+
+
+--------------------------------------------------------------------------------
+3. UI 設計（合意）
+--------------------------------------------------------------------------------
+
+3.1 配置: Current Status のテーブルセル
+  - people × requirements の各セルに、アップロード（または詳細へ進む）用の
+    ボタン等を置く。
+
+3.2 Assignment が Remove（Not assigned）でもボタンは残す
+  - 要件の適用を外した後でも、過去にその人×その要件でドキュメントを
+    付けていた可能性がある。
+  - 監査・確認のため「もう対象外だが当時の証跡を見たい」ニーズがある。
+  - そのため is_currently_assigned の状態にかかわらず、ボタンは表示し
+    クリック可能でよい（閲覧・必要なら追加の入口を塞がない）。
+
+3.3 モーダル（Tenant 要件の詳細モーダルを参考にしたが、機能は絞る）
+  - 開き方: 上記セルのボタンから開く。
+  - Tenant 詳細モーダルと似たレイアウト（左サイドバー + メイン）を想定するが、
+    Employee 向けは次のとおり差別化する。
+
+  含めるもの:
+    - 要件名（requirement のタイトル）※テナント名ではない（当初の誤記を修正）。
+    - 従業員名（そのセルが指す人）。
+    - 左サイドバー: 「期」の一覧から 1 つを選ぶ（定義は後述 3.5）。
+    - メイン: 選択したグループに紐づく、これまでアップロードしたドキュメントの
+      一覧表示。
+    - 「Upload document」ボタン（Tenant 側と同様の位置づけで維持）。
+
+  含めないもの:
+    - Edit ボタン（要件定義の編集はこのモーダルでは行わない。
+      User 要件はここでマスタ編集の必要がないため）。
+
+3.4 ドキュメントのみにフォーカス
+  - Tenant 等では詳細モーダル内で実データの編集も必要だが、Employee では
+    不要。本モーダルはドキュメントの閲覧・アップロードが主目的。
+
+3.5 モーダル左サイドバー：グループ（期）の意味
+  - グリッドの 1 セルは「特定の user_id × user_requirement_id」を表す。
+  - ユーザーが Upload（または詳細オープン）を押したら、その組み合わせに一致する
+    mapping_user_requirements の行をすべて取得する。
+  - Tenant の詳細モーダルで Bill date などが「期」の区切りになるのに対し、
+    Employee では「履歴の 1 行＝ 1 期＝左サイドの 1 グループ」とする。
+    行の主キー id が異なれば別グループである（日付が偶然同じでも別履歴なら別）。
+  - 例: 同一人物・同一要件でも、次の 2 行はグループ 1 とグループ 2 として並ぶ。
+        issued_date = 2025-10-21, specific_date = NULL
+        issued_date = NULL,     specific_date = 2025-04-20
+  - 各グループの見出しラベルは、実装で優先ルールを決める（例: issued を先に表示、
+    無ければ specific、両方あればどちらを主見出しにするか、など）。
+    現行アプリでは同一行に issued と specific が両方入り得るため、
+    「どちらか一方だけが立つ行」に限定した前提は置かない。
+  - issued / specific の両方が NULL の行が INSERT される可能性は低いが、
+    バグや将来仕様でゼロとは言い切れない。日付が無い行はラベルを「—」にする、
+    あるいは created_at で区別するなど、フォールバックを実装で決める。
+  - 当該 user_id × user_requirement_id に mapping 行が 1 件も無いときは、
+    モーダル本文は「No data」に近い空表示でよい（合意済み）。
+
+
+--------------------------------------------------------------------------------
+4. 用語対応（画面 ↔ DB）
+--------------------------------------------------------------------------------
+
+  - 画面上の Issued Date → mapping_user_requirements.issued_date
+  - 画面上の Specific Date（手動期限）→ mapping_user_requirements.specific_date
+    （UI 内部では deadline として保持している箇所あり）
+  - ドキュメントの実体パス等 → document_metadata_user_requirements.value
+  - ファイル名・MIME・サイズ → 同テーブルの file_name, content_type, size_bytes
+
+
+--------------------------------------------------------------------------------
+5. 実装時の検討リスト（未決・フォローアップ）
+--------------------------------------------------------------------------------
+
+  - document_metadata_user_requirements のインデックス、ON DELETE（mapping 削除時の
+    カスケード等）。
+  - ストレージは 2.5 のとおり requirement-documents 共用・パス接頭辞で区分・
+    RLS/署名付き URL は既存ライセンス用に寄せる。細部は既存実装との突き合わせ。
+  - mapping が無いセルでのモーダルは「No data」表示でよい（3.5 参照）。
+  - サイドバー見出しの優先順位（issued と specific が両方ある行でどちらを主とするか）
+    の細則のみ、実装前に短く決める。
+  - API エンドポイント設計（一覧・作成・削除・プレビュー URL）。
+
+
+--------------------------------------------------------------------------------
+6. 変更履歴（手動で追記）
+--------------------------------------------------------------------------------
+
+  - （初版）会話ベースの合意内容を文書化。
+  - 物理テーブル名を document_metadata_user_requirements に決定。
+  - 3.5 を追加: モーダル左サイドの「グループ＝ mapping 1 行」、ラベル・フォールバック、
+    mapping 無し時は No data。
+  - 2.5 を追加: バケット requirement-documents、tenant/company/employee のパス例、
+    既存ライセンス用のバケット・パス・RLS に employee も寄せる方針を明文化。
+
+================================================================================

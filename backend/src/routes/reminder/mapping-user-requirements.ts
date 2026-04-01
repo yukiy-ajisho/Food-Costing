@@ -3,13 +3,67 @@ import { supabase } from "../../config/supabase";
 import { MappingUserRequirement } from "../../types/database";
 import { hasAnyCompanyAccess } from "./authorization-helpers";
 import {
-  getAuthorizedCompanyAdminDirectorCreatorUserIds,
-  getCompanyAdminDirectorCompanyIdsForUser,
+  getAuthorizedCompanyIds,
   getCompanyIdsForUserViaProfiles,
-  isUserRequirementAccessibleByCompany,
 } from "./authorization-helpers";
 
 const router = Router();
+
+/**
+ * GET /mapping-user-requirements/history
+ * Query: user_id, user_requirement_id（必須）
+ * 当該ペアの mapping 行を created_at 降順で全件返す（履歴・ドキュメントモーダル用）。
+ */
+router.get("/history", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const allowed = await hasAnyCompanyAccess(userId);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const uid = (req.query.user_id as string | undefined)?.trim();
+    const rid = (req.query.user_requirement_id as string | undefined)?.trim();
+    if (!uid || !rid) {
+      return res.status(400).json({
+        error: "user_id and user_requirement_id are required",
+      });
+    }
+
+    const authorizedCompanyIds = await getAuthorizedCompanyIds(userId);
+    if (authorizedCompanyIds.length === 0) {
+      return res.json([]);
+    }
+
+    const { data: rows, error } = await supabase
+      .from("mapping_user_requirements")
+      .select(
+        "id, user_id, user_requirement_id, issued_date, specific_date, created_at, updated_at, user_requirements!inner(company_id)",
+      )
+      .eq("user_id", uid)
+      .eq("user_requirement_id", rid)
+      .in("user_requirements.company_id", authorizedCompanyIds)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    const out: MappingUserRequirement[] = (rows ?? []).map((row) => ({
+      id: row.id,
+      user_id: row.user_id,
+      user_requirement_id: row.user_requirement_id,
+      issued_date: row.issued_date ?? null,
+      specific_date: row.specific_date ?? null,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    }));
+
+    res.json(out);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
 
 /**
  * GET /mapping-user-requirements
@@ -27,18 +81,17 @@ router.get("/", async (req, res) => {
     const userIds = req.query.user_ids as string | undefined;
     const requirementIds = req.query.user_requirement_ids as string | undefined;
 
-    const creatorUserIds = await getAuthorizedCompanyAdminDirectorCreatorUserIds(userId);
-    if (creatorUserIds.length === 0) {
+    const authorizedCompanyIds = await getAuthorizedCompanyIds(userId);
+    if (authorizedCompanyIds.length === 0) {
       return res.json([]);
     }
 
-    // 1 クエリ: user_requirements を INNER JOIN し created_by でフィルタ（2 本のクエリをやめる）
     let query = supabase
       .from("mapping_user_requirements")
       .select(
-        "id, user_id, user_requirement_id, issued_date, specific_date, created_at, updated_at, user_requirements!inner(created_by)",
+        "id, user_id, user_requirement_id, issued_date, specific_date, created_at, updated_at, user_requirements!inner(company_id)",
       )
-      .in("user_requirements.created_by", creatorUserIds)
+      .in("user_requirements.company_id", authorizedCompanyIds)
       .order("created_at", { ascending: false });
 
     if (userIds) {
@@ -107,40 +160,28 @@ router.post("/", async (req, res) => {
       return res.status(403).json({ error: "Access denied" });
     }
 
-    const creatorUserIds = await getAuthorizedCompanyAdminDirectorCreatorUserIds(userId);
-    if (creatorUserIds.length === 0) {
+    const authorizedCompanyIds = await getAuthorizedCompanyIds(userId);
+    if (authorizedCompanyIds.length === 0) {
       return res.status(403).json({ error: "Access denied" });
     }
 
     const { data: requirement, error: reqError } = await supabase
       .from("user_requirements")
-      .select("id, created_by")
+      .select("id, company_id")
       .eq("id", body.user_requirement_id)
-      .in("created_by", creatorUserIds)
+      .in("company_id", authorizedCompanyIds)
       .single();
 
     if (reqError || !requirement) {
       return res.status(404).json({ error: "Requirement not found or access denied" });
     }
 
-    const ok = await isUserRequirementAccessibleByCompany(
-      userId,
-      requirement.created_by ?? null
-    );
-    if (!ok || !requirement.created_by) {
-      return res.status(403).json({ error: "Access denied" });
-    }
-
-    const createdByUserId = requirement.created_by;
-
-    // その要件（created_by）に紐づく company スコープにいるユーザーだけが対象
-    const creatorCompanyIds = await getCompanyAdminDirectorCompanyIdsForUser(
-      createdByUserId
-    );
     const targetCompanyIds = await getCompanyIdsForUserViaProfiles(
       body.user_id
     );
-    const inScope = creatorCompanyIds.some((cid) => targetCompanyIds.includes(cid));
+    const inScope =
+      requirement.company_id != null &&
+      targetCompanyIds.includes(requirement.company_id);
     if (!inScope) {
       return res.status(403).json({ error: "Access denied" });
     }

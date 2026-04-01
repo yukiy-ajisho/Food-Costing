@@ -28,9 +28,8 @@ export interface VendorProduct {
   brand_name?: string | null;
   purchase_unit: string;
   purchase_quantity: number;
-  purchase_cost: number;
+  current_price: number;
   deprecated?: string | null; // timestamp when deprecated
-  user_id: string; // FK to users (deprecated, use tenant_id)
   tenant_id: string; // FK to tenants
   created_at?: string;
   updated_at?: string;
@@ -177,7 +176,7 @@ export interface Profile {
   id: string;
   user_id: string; // FK to public.users(id)
   tenant_id: string; // FK to tenants(id)
-  role: "admin" | "manager" | "staff";
+  role: "admin" | "manager" | "staff" | "director";
   created_at?: string;
 }
 
@@ -195,6 +194,21 @@ export interface Invitation {
   expires_at: string;
 }
 
+// Cross-tenant item sharing（同一 company 内テナント間での prepped item 公開設定）
+export interface CrossTenantItemShare {
+  id: string;
+  company_id: string; // FK to companies(id)
+  item_id: string; // FK to items(id)（item_kind = 'prepped' のみ）
+  owner_tenant_id: string; // FK to tenants(id)
+  target_type: "company" | "tenant";
+  // 'company': company_id（全テナント公開）, 'tenant': 対象 tenant_id（特定テナント）
+  target_id: string;
+  created_by: string; // FK to users(id)
+  allowed_actions: string[]; // ['read'] = view, [] = 明示的 hide
+  created_at?: string;
+  updated_at?: string;
+}
+
 // Phase 2: Authorization & Sharing
 export interface ResourceShare {
   id: string;
@@ -202,7 +216,7 @@ export interface ResourceShare {
   resource_id: string;
   owner_tenant_id: string; // FK to tenants(id)
   target_type: "tenant" | "role" | "user";
-  target_id: string | null; // tenant_id (uuid), role名 ('admin', 'manager', 'staff'), user_id (uuid) - nullable
+  target_id: string | null; // tenant_id (uuid), role名 ('admin', 'manager', 'staff', 'director'), user_id (uuid) - nullable
   is_exclusion: boolean; // TRUE = FORBID（permitを上書き）
   allowed_actions: string[]; // ['read'] または ['read', 'update'] - View only または Editable
   show_history_to_shared: boolean; // 価格履歴の可視性
@@ -226,15 +240,17 @@ export interface HistoryLog {
 export interface UserRequirement {
   id: string;
   title: string;
+  company_id: string;
+  jurisdiction_id: string;
   validity_period: number | null;
   validity_period_unit: string | null; // 'years' | 'months' | 'days'. NULL = years
-  first_due_date: number | null; // 雇われてから何日以内に取得が必要か（日数）。Due days from hire のとき使用
+  first_due_date: number | null; // 雇われてから何日以内に取得が必要か（日数）。Days from hire のとき使用
   first_due_on_date: string | null; // date YYYY-MM-DD。First due date on のとき使用。first_due_date と排他
   renewal_advance_days: number | null;
   expiry_rule: string | null;
   created_at?: string;
   updated_at?: string;
-  created_by: string | null; // FK to users(id)。要件はテナントに属さず作成者に属する
+  created_by: string | null; // FK to users(id)
 }
 
 // Reminder: 適用状態（誰にどの要件を適用しているか）
@@ -257,6 +273,17 @@ export interface MappingUserRequirement {
   specific_date: string | null; // date YYYY-MM-DD（手入力の期限日。auto OFF のとき使用）
   created_at?: string;
   updated_at?: string;
+}
+
+/** Employee requirement document (R2 key in value) */
+export interface DocumentMetadataUserRequirement {
+  id: string;
+  mapping_user_requirement_id: string;
+  value: string;
+  file_name: string;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  created_at?: string;
 }
 
 // Tenant Requirements v2（設計: tenant_requirements_design_v2.txt）

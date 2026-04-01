@@ -1,0 +1,105 @@
+=============================================================================
+Cross-tenant: Hide / Deprecated / Grandfather — 実装・不具合修正のまとめ
+=============================================================================
+作成目的: 本件で行った変更・原因調査・仕様判断を一枚に残す（コード差分の索引）。
+
+-----------------------------------------------------------------------------
+1. Cross-tenant deprecated（計画書 cross_tenant_deprecated_implementation_plan.txt 系）
+-----------------------------------------------------------------------------
+
+1.1 カスケード（deprecation.ts）
+ ・getTenantIdsInSameCompany(tenant_id): company_tenants から同一 company の全 tenant_id。
+ ・deprecatePreppedItem: カスケードに上記スコープを使用（Hide / 共有状態は見ない）。
+   recipe_lines の探索を「同一社内の全テナント」に拡張。対象品目の直接更新は item の tenant_id で限定。
+ ・deprecateVendorProduct: VP の tenant_id 基準で同様にカスケードスコープを拡張。
+
+1.2 recipe-lines（validateRecipeLineNotDeprecated）
+ ・子 items は id のみ取得。自テナント外は prepped かつ同一 company のとき許可。
+ ・raw の mapping / VP は child の tenant_id で照合。
+ ・新規・子変更時の共有チェックは従来どおり validateCrossTenantIngredientShare が先行。
+
+1.3 cross-tenant-item-shares API
+ ・GET /available: items.deprecated を embed。case1 用に非推奨行も返しうる（プルダウンで [Deprecated]）。
+ ・POST /: deprecated 品目は新規共有不可（400）。
+
+1.4 フロント（cost ページ）
+ ・cross-tenant 候補に deprecated / disabled（現選択行のみ再選択可）。
+ ・Cross-tenant Access Control: deprecated 時は Company / Specific を無効化（Hide は可）。
+
+1.5 Undeprecate 整合（deprecation.ts）
+ ・autoUndeprecateAfterRecipeLineUpdate: 親品目の tenant から company スコープを決めて
+   recursivelyUndeprecateParents へ。
+ ・autoUndeprecateAfterVendorProductCreation: VP tenant 基準で company スコープ。
+ ・undeprecateItem / undeprecateBaseItem: 親方向・材料チェックに company スコープを使用。
+
+挙動確認の例: item A を廃止 → 他テナントの item B（A 使用）→ さらに B 使用の C が、
+同一 company 内で indirect に連鎖しうる。
+
+-----------------------------------------------------------------------------
+2. Hide 後も「既存レシピ」は有効・名前・コストを維持（grandfather）
+-----------------------------------------------------------------------------
+
+2.1 問題
+ ・Hide 後、共有一覧（/available）から子が落ち、UI が「Unavailable item」になり、
+   設計上は「既存行は有効」のまま表示が崩れた。
+
+2.2 表示用メタ（バックエンド）
+ ・POST /cross-tenant-item-shares/grandfathered-ingredients
+   body: { tenant_id, item_ids }
+ ・当該 tenant の recipe_lines（ingredient）が child として参照している id のみ通過。
+   他テナント prepped かつ同一 company のみ返す（name, proceed_yield_unit, each_grams 等）。
+
+2.3 フロント（cost ページ）
+ ・grandfatheredIngredientLabels 状態で API 結果を保持。
+ ・読み取り専用・SearchableSelect（現選択のみ disabled オプション注入）・単位・convertToGrams・
+   行コスト・フッターで利用。
+ ・テナント切替時に前テナントのラベルが残らないよう ref でクリア。
+
+2.4 新規 ingredient のプルダウン
+ ・/available に出さない方針は維持（Hide 後に新規で A を選べない）。
+
+-----------------------------------------------------------------------------
+3. Hide 後に原価が計算されない問題（原因は二段）
+-----------------------------------------------------------------------------
+
+3.1 API: POST /items/costs/breakdown/missing（cost.ts）
+ ・従来は cross_tenant_item_shares の read のみ accessible。
+ ・Hide 後は scoped breakdown を呼べない → 追補。
+ ・対応: 閲覧テナントの recipe_lines が child を参照していれば grandfather として
+   accessibleItemIds に含める（API 側ゲート）。
+
+3.2 PostgreSQL（本体の不具合）
+ ・calculate_item_costs_with_breakdown_scoped 内 temp_ct_foreign_needed の条件が
+     「read 共有の EXISTS のみ」
+     のため、Hide 後は外国 prepped が needed に入らず、テナント B 全体の breakdown でも
+     B→A が織り込まれず B の原価が出ない。
+
+ ・マイグレーション:
+     supabase/migrations/20260327120000_breakdown_grandfather_hidden_cross_tenant.sql
+   ・追加条件（OR）:
+     p_tenant_id の recipe_lines に line_type=ingredient かつ child_item_id=当該外国 prepped
+     がある（既存行 grandfather）。
+
+ ・適用後: Hide 後も B および「B を材料にした表示」で原価が計算されることを確認。
+
+注意: マイグレーション未適用の環境では API 修正だけでは足りない。
+
+-----------------------------------------------------------------------------
+4. 終了状態
+-----------------------------------------------------------------------------
+ ・本件スレッドでは上記までを実装・検証し、ユーザー確認で「計算された」「カスケードも期待どおり」
+   として一旦クローズ。
+
+-----------------------------------------------------------------------------
+5. 参照ファイル（索引）
+-----------------------------------------------------------------------------
+ ・backend/src/services/deprecation.ts
+ ・backend/src/routes/recipe-lines.ts
+ ・backend/src/routes/cross-tenant-item-shares.ts
+ ・backend/src/routes/cost.ts（breakdown/missing の grandfather）
+ ・frontend/app/cost/page.tsx（表示・単位・breakdown 補完・テナント ref）
+ ・frontend/lib/api.ts（grandfathered-ingredients 型・呼び出し）
+ ・docs/cross_tenant_deprecated_implementation_plan.txt（当初計画）
+ ・supabase/migrations/20260327120000_breakdown_grandfather_hidden_cross_tenant.sql
+
+=============================================================================

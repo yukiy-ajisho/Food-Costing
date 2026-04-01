@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Plus,
   Edit,
@@ -13,6 +13,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useCompany } from "@/contexts/CompanyContext";
 import {
   companyRequirementsAPI,
   type CompanyRequirement,
@@ -25,8 +26,9 @@ import {
   companyRequirementRealDataAPI,
   type CompanyRequirementRealDataRow,
 } from "@/lib/api/reminder/company-requirement-real-data";
+import { openPresignedDocumentInNewTab } from "@/lib/open-presigned-document";
 
-type TabType = "list" | "status" | "documents";
+type TabType = "status" | "documents";
 
 /** Status タブ用: 最新 group の実データを value type 名でまとめたもの */
 interface MappingEntry {
@@ -39,6 +41,8 @@ interface MappingEntry {
   validityDurationUnit: "years" | "months" | "days" | null;
   /** Estimated due date（specific または validity-based のどちらか一方） */
   estimatedDueDate: string | null;
+  estimatedSpecificBillDate: string | null;
+  estimatedBillDateValidityBased: string | null;
 }
 
 function getTodayYYYYMMDD(): string {
@@ -82,6 +86,18 @@ function formatExpirationDate(expiration: string): string {
   });
 }
 
+function formatDetailSidebarBillDate(entry: MappingEntry | undefined): string {
+  if (!entry) return "—";
+  const ymd =
+    (entry.billDate?.trim() && entry.billDate) ||
+    (entry.estimatedSpecificBillDate?.trim() && entry.estimatedSpecificBillDate) ||
+    (entry.estimatedBillDateValidityBased?.trim() &&
+      entry.estimatedBillDateValidityBased) ||
+    null;
+  if (!ymd) return "—";
+  return formatExpirationDate(ymd);
+}
+
 /** Expiration: due date or estimated due date (specific / validity-based). One of these exists per group. */
 function getExpiration(
   _requirement: CompanyRequirement,
@@ -110,13 +126,9 @@ interface AdminCompany {
 export default function CompanyRequirementsPage() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const { selectedCompanyId, companies } = useCompany();
 
-  const [activeTab, setActiveTab] = useState<TabType>("list");
-  const [requirements, setRequirements] = useState<CompanyRequirement[]>([]);
-  const [requirementsLoading, setRequirementsLoading] = useState(true);
-  const [requirementsError, setRequirementsError] = useState<string | null>(
-    null,
-  );
+  const [activeTab, setActiveTab] = useState<TabType>("status");
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [requirementSaving, setRequirementSaving] = useState(false);
@@ -136,10 +148,8 @@ export default function CompanyRequirementsPage() {
   const [formValidityMonths, setFormValidityMonths] = useState("");
   const [formValidityDays, setFormValidityDays] = useState("");
 
-  // Status tab（アクセス可能な会社のみ）
+  // Add モーダル: 要件を作成できる会社（company_admin / company_director）。閲覧の選択はヘッダー CompanySelector と同期。
   const [adminCompanies, setAdminCompanies] = useState<AdminCompany[]>([]);
-  const [adminCompaniesLoading, setAdminCompaniesLoading] = useState(false);
-  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [statusRequirements, setStatusRequirements] = useState<
     CompanyRequirement[]
   >([]);
@@ -152,7 +162,12 @@ export default function CompanyRequirementsPage() {
   const [statusMaxGroupKeyByReq, setStatusMaxGroupKeyByReq] = useState<
     Record<string, number>
   >({}); // requirementId -> 表示中の最新 group_key（Edit 保存先にも使用）
+  /** 要件一覧取得中、または一覧取得後に real data 取得中（Current Status をまとめてロード扱いにする） */
+  const [statusRequirementsLoading, setStatusRequirementsLoading] =
+    useState(false);
   const [statusLoading, setStatusLoading] = useState(false);
+  /** 選択会社について初回の status real data 取得が済んだら一致する ID（再取得時はフルスクリーンロードにしない） */
+  const statusRealDataReadyCompanyIdRef = useRef<string | null>(null);
   const [statusRefreshing, setStatusRefreshing] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
   // Record Payment モード（テーブル外ボタンでオン、モーダル Save/Cancel でオフ）
@@ -176,14 +191,16 @@ export default function CompanyRequirementsPage() {
   const [savingRecordPayment, setSavingRecordPayment] = useState(false);
   const [recordPaymentUploadFile, setRecordPaymentUploadFile] =
     useState<File | null>(null);
-  // Documents タブ: 展開中の requirement / ドキュメント一覧
-  const [documentsExpandedReqId, setDocumentsExpandedReqId] = useState<
-    string | null
-  >(null);
-  const [documentsList, setDocumentsList] = useState<
-    { pay_date: string | null; key: string; file_name: string }[]
-  >([]);
-  const [documentsListLoading, setDocumentsListLoading] = useState(false);
+  // Documents タブ: 複数 requirement を同時展開可
+  const [documentsExpandedIds, setDocumentsExpandedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [documentsByReqId, setDocumentsByReqId] = useState<
+    Record<string, { pay_date: string | null; key: string; file_name: string }[]>
+  >({});
+  const [documentsLoadingByReqId, setDocumentsLoadingByReqId] = useState<
+    Record<string, boolean>
+  >({});
   // Requirement 詳細モーダル（要件名クリックで開く）
   const [detailModalReqId, setDetailModalReqId] = useState<string | null>(null);
   const [detailModalEditMode, setDetailModalEditMode] = useState(false);
@@ -224,31 +241,7 @@ export default function CompanyRequirementsPage() {
     );
   };
 
-  const fetchRequirements = async () => {
-    setRequirementsLoading(true);
-    setRequirementsError(null);
-    try {
-      const list = await companyRequirementsAPI.getAll();
-      setRequirements(list);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to load requirements";
-      if (isPermissionErrorMessage(message)) {
-        setPermissionDenied(true);
-      } else {
-        setRequirementsError(message);
-      }
-    } finally {
-      setRequirementsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchRequirements();
-  }, []);
-
   const fetchAdminCompanies = useCallback(async () => {
-    setAdminCompaniesLoading(true);
     try {
       const data = await companyRequirementsAPI.getAdminCompanies();
       setAdminCompanies(data.companies ?? []);
@@ -260,29 +253,18 @@ export default function CompanyRequirementsPage() {
       } else {
         setAdminCompanies([]);
       }
-    } finally {
-      setAdminCompaniesLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (
-      activeTab === "list" ||
-      activeTab === "status" ||
-      activeTab === "documents"
-    ) {
+    if (activeTab === "status" || activeTab === "documents") {
       fetchAdminCompanies();
     }
   }, [activeTab, fetchAdminCompanies]);
 
   // Value types を取得（List の Add モーダル・Status・Documents タブで利用）
   useEffect(() => {
-    if (
-      activeTab !== "list" &&
-      activeTab !== "status" &&
-      activeTab !== "documents"
-    )
-      return;
+    if (activeTab !== "status" && activeTab !== "documents") return;
     companyRequirementValueTypesAPI
       .getAll()
       .then(setValueTypes)
@@ -304,11 +286,21 @@ export default function CompanyRequirementsPage() {
       !selectedCompanyId
     ) {
       setStatusRequirements([]);
+      setStatusRequirementsLoading(false);
+      statusRealDataReadyCompanyIdRef.current = null;
       return;
     }
+    statusRealDataReadyCompanyIdRef.current = null;
+    setStatusRequirementsLoading(true);
+    setStatusRequirements([]);
     companyRequirementsAPI
       .getAll(selectedCompanyId)
-      .then(setStatusRequirements)
+      .then((list) => {
+        setStatusRequirements(list);
+        if (list.length === 0 || activeTab !== "status") {
+          setStatusRequirementsLoading(false);
+        }
+      })
       .catch((err) => {
         const message =
           err instanceof Error
@@ -319,8 +311,15 @@ export default function CompanyRequirementsPage() {
         } else {
           setStatusRequirements([]);
         }
+        setStatusRequirementsLoading(false);
       });
   }, [activeTab, selectedCompanyId]);
+
+  useEffect(() => {
+    setDocumentsExpandedIds(new Set());
+    setDocumentsByReqId({});
+    setDocumentsLoadingByReqId({});
+  }, [selectedCompanyId]);
 
   const fetchStatusData = useCallback(
     async (options?: { background?: boolean }) => {
@@ -368,6 +367,8 @@ export default function CompanyRequirementsPage() {
             validityDurationValue: null,
             validityDurationUnit: null,
             estimatedDueDate: null,
+            estimatedSpecificBillDate: null,
+            estimatedBillDateValidityBased: null,
           };
         }
         for (const row of rows) {
@@ -413,6 +414,10 @@ export default function CompanyRequirementsPage() {
           setStatusRefreshing(false);
         } else {
           setStatusLoading(false);
+          setStatusRequirementsLoading(false);
+          if (selectedCompanyId) {
+            statusRealDataReadyCompanyIdRef.current = selectedCompanyId;
+          }
         }
       }
     },
@@ -481,6 +486,8 @@ export default function CompanyRequirementsPage() {
           validityDurationValue: null,
           validityDurationUnit: null,
           estimatedDueDate: null,
+          estimatedSpecificBillDate: null,
+          estimatedBillDateValidityBased: null,
         };
       }
       const name = nameById[row.type_id];
@@ -504,6 +511,13 @@ export default function CompanyRequirementsPage() {
         e.estimatedDueDate == null
       ) {
         e.estimatedDueDate = row.value ?? null;
+      } else if (name === "Estimated specific bill date") {
+        e.estimatedSpecificBillDate = row.value ?? null;
+      } else if (
+        name === "Estimated bill date based on validity duration" &&
+        e.estimatedBillDateValidityBased == null
+      ) {
+        e.estimatedBillDateValidityBased = row.value ?? null;
       }
     }
     return byGroup;
@@ -587,6 +601,8 @@ export default function CompanyRequirementsPage() {
         validityDurationValue: null,
         validityDurationUnit: null,
         estimatedDueDate: null,
+        estimatedSpecificBillDate: null,
+        estimatedBillDateValidityBased: null,
       };
     setDetailEditDueDate(entry.dueDate ?? "");
     setDetailEditBillDate(entry.billDate ?? "");
@@ -724,6 +740,8 @@ export default function CompanyRequirementsPage() {
         validityDurationValue: null,
         validityDurationUnit: null,
         estimatedDueDate: null,
+        estimatedSpecificBillDate: null,
+        estimatedBillDateValidityBased: null,
       };
       const idByName = Object.fromEntries(
         valueTypes.map((vt) => [vt.name, vt.id]),
@@ -824,7 +842,7 @@ export default function CompanyRequirementsPage() {
   const openNewModal = () => {
     setEditingId(null);
     setFormTitle("");
-    setFormCompanyId("");
+    setFormCompanyId(selectedCompanyId ?? "");
     setFormInitialDueDate("");
     setFormInitialBillDate("");
     setFormInitialPayDate("");
@@ -939,8 +957,7 @@ export default function CompanyRequirementsPage() {
         }
       }
       closeModal();
-      await fetchRequirements();
-      if (selectedCompanyId && activeTab === "status") {
+      if (selectedCompanyId && formCompanyId === selectedCompanyId) {
         const list = await companyRequirementsAPI.getAll(selectedCompanyId);
         setStatusRequirements(list);
         await fetchStatusData({ background: true });
@@ -965,7 +982,11 @@ export default function CompanyRequirementsPage() {
       return;
     try {
       await companyRequirementsAPI.delete(id);
-      await fetchRequirements();
+      if (selectedCompanyId) {
+        const list = await companyRequirementsAPI.getAll(selectedCompanyId);
+        setStatusRequirements(list);
+        await fetchStatusData({ background: true });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to delete";
       if (isPermissionErrorMessage(message)) {
@@ -977,10 +998,17 @@ export default function CompanyRequirementsPage() {
   };
 
   const modalTitle = editingId
-    ? (requirements.find((r) => r.id === editingId)?.title ??
+    ? (statusRequirements.find((r) => r.id === editingId)?.title ??
       "Edit Requirement")
     : "New Requirement";
   const isNewRequirement = !editingId;
+
+  /** Current Status: 会社切替や初回表示では一覧＋real data までフルロード。valueTypes 到着などの再取得ではテーブルを隠さない */
+  const statusPanelFullBleedLoading =
+    !!selectedCompanyId &&
+    (statusRequirementsLoading ||
+      (statusLoading &&
+        statusRealDataReadyCompanyIdRef.current !== selectedCompanyId));
 
   if (permissionDenied) {
     return (
@@ -1010,18 +1038,6 @@ export default function CompanyRequirementsPage() {
         >
           <nav className="flex space-x-8">
             <button
-              onClick={() => setActiveTab("list")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "list"
-                  ? "border-blue-500 text-blue-600"
-                  : isDark
-                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Requirements List
-            </button>
-            <button
               onClick={() => setActiveTab("status")}
               className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === "status"
@@ -1048,82 +1064,6 @@ export default function CompanyRequirementsPage() {
           </nav>
         </div>
 
-        {activeTab === "list" && (
-          <>
-            <div className="flex justify-between items-center gap-2 mb-6">
-              <button
-                onClick={openNewModal}
-                className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
-                  isDark
-                    ? "bg-slate-600 hover:bg-slate-500"
-                    : "bg-gray-600 hover:bg-gray-700"
-                }`}
-              >
-                <Plus className="w-5 h-5" />
-                Add
-              </button>
-            </div>
-            <div
-              className={`rounded-lg shadow-sm border transition-colors ${
-                isDark
-                  ? "bg-slate-800 border-slate-700"
-                  : "bg-white border-gray-200"
-              }`}
-            >
-              {requirementsLoading && (
-                <div
-                  className={`px-6 py-8 text-center ${isDark ? "text-slate-400" : "text-gray-500"}`}
-                >
-                  Loading...
-                </div>
-              )}
-              {!requirementsLoading && requirementsError && (
-                <div className="px-6 py-4 text-red-600 dark:text-red-400">
-                  {requirementsError}
-                </div>
-              )}
-              {!requirementsLoading && !requirementsError && (
-                <ul className="divide-y divide-gray-200 dark:divide-slate-700">
-                  {requirements.map((r) => (
-                    <li
-                      key={r.id}
-                      className={`flex items-center justify-between px-6 py-4 ${
-                        isDark ? "text-slate-200" : "text-gray-900"
-                      }`}
-                    >
-                      <span className="font-medium">{r.title}</span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => openEditModal(r)}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                            isDark
-                              ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
-                              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                          }`}
-                        >
-                          <Edit className="w-4 h-4" />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(r.id)}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                            isDark
-                              ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
-                              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                          }`}
-                          aria-label="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </>
-        )}
-
         {activeTab === "status" && (
           <div className="space-y-6 relative">
             {recordPaymentMode && (
@@ -1133,85 +1073,82 @@ export default function CompanyRequirementsPage() {
                 style={{ pointerEvents: "none" }}
               />
             )}
-            <div className="flex items-center gap-4">
-              <label
-                className={`text-sm font-medium ${isDark ? "text-slate-300" : "text-gray-700"}`}
-              >
-                Select company
-              </label>
-              <select
-                value={adminCompaniesLoading ? "" : (selectedCompanyId ?? "")}
-                onChange={(e) => setSelectedCompanyId(e.target.value || null)}
-                disabled={adminCompaniesLoading}
-                className={`px-3 py-2 rounded-lg border text-sm min-w-48 ${
-                  isDark
-                    ? "bg-slate-700 border-slate-600 text-slate-200"
-                    : "bg-white border-gray-300 text-gray-700"
-                }`}
-              >
-                {adminCompaniesLoading ? (
-                  <option value="">Loading</option>
-                ) : (
-                  <>
-                    <option value="">Select...</option>
-                    {adminCompanies.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.company_name}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
 
-            {statusLoading && (
+            {statusPanelFullBleedLoading && (
               <div
                 className={`text-sm ${isDark ? "text-slate-400" : "text-gray-500"}`}
               >
                 Loading status...
               </div>
             )}
-            {!statusLoading && statusError && (
+            {!statusPanelFullBleedLoading && statusError && (
               <div className="text-red-600 dark:text-red-400 text-sm">
                 {statusError}
               </div>
             )}
-            {!statusLoading &&
+            {!statusPanelFullBleedLoading &&
               !statusError &&
-              (!selectedCompanyId || statusRequirements.length === 0) && (
+              !selectedCompanyId && (
                 <div
                   className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
                 >
-                  {!selectedCompanyId
-                    ? "Select a company to view status."
-                    : "No requirements for this company. Add requirements in the Requirements List tab."}
+                  Select a company in the header to view status.
                 </div>
               )}
-            {!statusLoading &&
+            {!statusPanelFullBleedLoading &&
               !statusError &&
-              selectedCompanyId &&
-              statusRequirements.length > 0 && (
-                <div className="flex flex-col items-end gap-2">
-                  <div className="flex items-center gap-2">
-                    {recordPaymentMode ? (
-                      <button
-                        type="button"
-                        onClick={handleCancelRecordPayment}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
-                      >
-                        <X className="w-4 h-4" />
-                        Cancel
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setRecordPaymentMode(true)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-600 text-white hover:bg-gray-700"}`}
-                      >
-                        Record Payment
-                      </button>
-                    )}
+              selectedCompanyId && (
+                <div className="flex flex-col gap-2 w-full">
+                  <div className="flex w-full items-center justify-between gap-4">
+                    <button
+                      type="button"
+                      onClick={openNewModal}
+                      disabled={!selectedCompanyId || recordPaymentMode}
+                      title={
+                        !selectedCompanyId
+                          ? "Select a company in the header first"
+                          : recordPaymentMode
+                            ? "Exit Record Payment to add"
+                            : undefined
+                      }
+                      className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors shrink-0 ${
+                        isDark
+                          ? "bg-slate-600 hover:bg-slate-500 disabled:opacity-50 disabled:pointer-events-none"
+                          : "bg-gray-600 hover:bg-gray-700 disabled:opacity-50 disabled:pointer-events-none"
+                      }`}
+                    >
+                      <Plus className="w-5 h-5" />
+                      Add
+                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {statusRequirements.length > 0 &&
+                        (recordPaymentMode ? (
+                          <button
+                            type="button"
+                            onClick={handleCancelRecordPayment}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
+                          >
+                            <X className="w-4 h-4" />
+                            Cancel
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setRecordPaymentMode(true)}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-600 text-white hover:bg-gray-700"}`}
+                          >
+                            Record Payment
+                          </button>
+                        ))}
+                    </div>
                   </div>
+                  {statusRequirements.length === 0 ? (
+                    <div
+                      className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
+                    >
+                      No requirements for this company. Use Add to create one.
+                    </div>
+                  ) : (
                   <div
                     className={`rounded-lg shadow-sm border overflow-x-auto transition-colors w-full ${recordPaymentMode ? "relative z-50" : ""} ${
                       isDark
@@ -1260,6 +1197,8 @@ export default function CompanyRequirementsPage() {
                             validityDurationValue: null,
                             validityDurationUnit: null,
                             estimatedDueDate: null,
+                            estimatedSpecificBillDate: null,
+                            estimatedBillDateValidityBased: null,
                           };
                           const expiration = getExpiration(req, entry);
                           const status = getStatus(expiration);
@@ -1288,19 +1227,72 @@ export default function CompanyRequirementsPage() {
                               role={recordPaymentMode ? "button" : undefined}
                             >
                               <td
-                                className={`px-4 py-3 font-medium ${isDark ? "text-slate-200" : "text-gray-900"} ${recordPaymentMode ? "" : "cursor-pointer hover:underline"}`}
-                                style={{ minWidth: 160 }}
-                                onClick={
-                                  recordPaymentMode
-                                    ? undefined
-                                    : (e) => {
-                                        e.stopPropagation();
-                                        setDetailModalReqId(req.id);
-                                        setDetailModalEditMode(false);
-                                      }
-                                }
+                                className={`px-4 py-3 ${isDark ? "text-slate-200" : "text-gray-900"}`}
+                                style={{ minWidth: 200 }}
                               >
-                                {req.title}
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className={`font-medium min-w-0 truncate ${recordPaymentMode ? "" : "cursor-pointer hover:underline"}`}
+                                    onClick={
+                                      recordPaymentMode
+                                        ? undefined
+                                        : (e) => {
+                                            e.stopPropagation();
+                                            setDetailModalReqId(req.id);
+                                            setDetailModalEditMode(false);
+                                          }
+                                    }
+                                    role={
+                                      recordPaymentMode ? undefined : "button"
+                                    }
+                                    onKeyDown={
+                                      recordPaymentMode
+                                        ? undefined
+                                        : (e) => {
+                                            if (
+                                              e.key === "Enter" ||
+                                              e.key === " "
+                                            ) {
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              setDetailModalReqId(req.id);
+                                              setDetailModalEditMode(false);
+                                            }
+                                          }
+                                    }
+                                    tabIndex={recordPaymentMode ? undefined : 0}
+                                  >
+                                    {req.title}
+                                  </span>
+                                  {!recordPaymentMode && (
+                                    <span className="hidden">
+                                      <span className="shrink-0 flex items-center gap-0.5 ml-auto">
+                                        <button
+                                          type="button"
+                                          aria-label="Edit requirement"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            openEditModal(req);
+                                          }}
+                                          className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
+                                        >
+                                          <Edit className="w-4 h-4" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Delete requirement"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void handleDelete(req.id);
+                                          }}
+                                          className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </span>
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td
                                 className={`px-4 py-3 ${isDimmed ? "opacity-40" : ""}`}
@@ -1354,6 +1346,7 @@ export default function CompanyRequirementsPage() {
                       </tbody>
                     </table>
                   </div>
+                  )}
                 </div>
               )}
           </div>
@@ -1361,42 +1354,12 @@ export default function CompanyRequirementsPage() {
 
         {activeTab === "documents" && (
           <div className="space-y-6">
-            <div className="flex items-center gap-4">
-              <label
-                className={`text-sm font-medium ${isDark ? "text-slate-300" : "text-gray-700"}`}
-              >
-                Select company
-              </label>
-              <select
-                value={adminCompaniesLoading ? "" : (selectedCompanyId ?? "")}
-                onChange={(e) => setSelectedCompanyId(e.target.value || null)}
-                disabled={adminCompaniesLoading}
-                className={`px-3 py-2 rounded-lg border text-sm min-w-48 ${
-                  isDark
-                    ? "bg-slate-700 border-slate-600 text-slate-200"
-                    : "bg-white border-gray-300 text-gray-700"
-                }`}
-              >
-                {adminCompaniesLoading ? (
-                  <option value="">Loading</option>
-                ) : (
-                  <>
-                    <option value="">Select...</option>
-                    {adminCompanies.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.company_name}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
             {!selectedCompanyId || statusRequirements.length === 0 ? (
               <div
                 className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
               >
                 {!selectedCompanyId
-                  ? "Select a company to view documents."
+                  ? "Select a company in the header to view documents."
                   : "No requirements for this company."}
               </div>
             ) : (
@@ -1409,7 +1372,9 @@ export default function CompanyRequirementsPage() {
               >
                 <ul className="divide-y divide-gray-200 dark:divide-slate-700">
                   {statusRequirements.map((req) => {
-                    const isExpanded = documentsExpandedReqId === req.id;
+                    const isExpanded = documentsExpandedIds.has(req.id);
+                    const docList = documentsByReqId[req.id];
+                    const docLoading = documentsLoadingByReqId[req.id] === true;
                     return (
                       <li
                         key={req.id}
@@ -1418,37 +1383,41 @@ export default function CompanyRequirementsPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (isExpanded) {
-                              setDocumentsExpandedReqId(null);
-                              setDocumentsList([]);
+                            const id = req.id;
+                            if (documentsExpandedIds.has(id)) {
+                              setDocumentsExpandedIds((prev) => {
+                                const n = new Set(prev);
+                                n.delete(id);
+                                return n;
+                              });
                               return;
                             }
-                            setDocumentsExpandedReqId(req.id);
-                            setDocumentsListLoading(true);
-                            setDocumentsList([]);
-                            const requestedId = req.id;
+                            setDocumentsExpandedIds(
+                              (prev) => new Set(prev).add(id),
+                            );
+                            setDocumentsLoadingByReqId((m) => ({
+                              ...m,
+                              [id]: true,
+                            }));
                             companyRequirementRealDataAPI
-                              .getDocuments(req.id)
+                              .getDocuments(id)
                               .then((list) => {
-                                setDocumentsExpandedReqId((current) => {
-                                  if (current === requestedId)
-                                    setDocumentsList(list);
-                                  return current;
-                                });
+                                setDocumentsByReqId((m) => ({
+                                  ...m,
+                                  [id]: list,
+                                }));
                               })
                               .catch(() => {
-                                setDocumentsExpandedReqId((current) => {
-                                  if (current === requestedId)
-                                    setDocumentsList([]);
-                                  return current;
-                                });
+                                setDocumentsByReqId((m) => ({
+                                  ...m,
+                                  [id]: [],
+                                }));
                               })
                               .finally(() => {
-                                setDocumentsExpandedReqId((current) => {
-                                  if (current === requestedId)
-                                    setDocumentsListLoading(false);
-                                  return current;
-                                });
+                                setDocumentsLoadingByReqId((m) => ({
+                                  ...m,
+                                  [id]: false,
+                                }));
                               });
                           }}
                           className={`w-full px-4 py-3 text-left flex items-center justify-between font-medium ${isDark ? "text-slate-200 hover:bg-slate-700" : "text-gray-900 hover:bg-gray-50"}`}
@@ -1464,13 +1433,13 @@ export default function CompanyRequirementsPage() {
                           <div
                             className={`px-4 pb-3 ${isDark ? "bg-slate-800" : "bg-gray-50"}`}
                           >
-                            {documentsListLoading ? (
+                            {docLoading ? (
                               <div
                                 className={`text-sm py-2 ${isDark ? "text-slate-400" : "text-gray-500"}`}
                               >
                                 Loading...
                               </div>
-                            ) : documentsList.length === 0 ? (
+                            ) : (docList ?? []).length === 0 ? (
                               <div
                                 className={`text-sm py-2 ${isDark ? "text-slate-400" : "text-gray-500"}`}
                               >
@@ -1478,7 +1447,7 @@ export default function CompanyRequirementsPage() {
                               </div>
                             ) : (
                               <ul className="space-y-1.5">
-                                {documentsList.map((doc, idx) => {
+                                {(docList ?? []).map((doc, idx) => {
                                   const label =
                                     doc.file_name ||
                                     doc.key.split("/").pop() ||
@@ -1506,25 +1475,11 @@ export default function CompanyRequirementsPage() {
                                         type="button"
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          const newWindow = window.open(
-                                            "",
-                                            "_blank",
-                                            "noopener,noreferrer",
+                                          openPresignedDocumentInNewTab(() =>
+                                            companyRequirementRealDataAPI.getDocumentUrl(
+                                              doc.key,
+                                            ),
                                           );
-                                          companyRequirementRealDataAPI
-                                            .getDocumentUrl(doc.key)
-                                            .then(({ url }) => {
-                                              if (newWindow)
-                                                newWindow.location.href = url;
-                                            })
-                                            .catch((err) => {
-                                              if (newWindow) newWindow.close();
-                                              alert(
-                                                err instanceof Error
-                                                  ? err.message
-                                                  : "Failed to open document",
-                                              );
-                                            });
                                         }}
                                         className={`text-blue-600 hover:underline dark:text-blue-400 ${isDark ? "hover:text-blue-300" : "hover:text-blue-700"}`}
                                       >
@@ -1794,10 +1749,12 @@ export default function CompanyRequirementsPage() {
                 validityDurationUnit: null,
                 estimatedDueDate: null,
               };
+            const cid = req?.companyId ?? selectedCompanyId;
             const companyName =
-              adminCompanies.find(
-                (t) => t.id === (req?.companyId ?? selectedCompanyId),
-              )?.company_name ?? "";
+              (cid
+                ? companies.find((c) => c.id === cid)?.company_name ??
+                  adminCompanies.find((t) => t.id === cid)?.company_name
+                : null) ?? "";
             const formatD = (s: string | null) =>
               s
                 ? new Date(s + "T12:00:00").toLocaleDateString(undefined, {
@@ -1820,25 +1777,24 @@ export default function CompanyRequirementsPage() {
                   <div
                     className={`px-6 py-4 border-b flex items-center justify-between shrink-0 ${isDark ? "border-slate-700" : "border-gray-200"}`}
                   >
-                    <h3
-                      className={`text-lg font-semibold ${isDark ? "text-slate-100" : "text-gray-900"}`}
-                    >
-                      {req?.title ?? "Requirement"}
-                    </h3>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDetailModalReqId(null);
-                          setDetailModalEditMode(false);
-                          setDetailUploadMode(false);
-                          setDetailUploadFile(null);
-                        }}
-                        className={`p-2 rounded-lg transition-colors ${isDark ? "hover:bg-slate-600 text-slate-300" : "hover:bg-gray-200 text-gray-700"}`}
-                        title="Close"
+                    <div className="min-w-0 flex items-center gap-3">
+                      <h3
+                        className={`text-lg font-semibold truncate ${isDark ? "text-slate-100" : "text-gray-900"}`}
                       >
-                        <X className="w-5 h-5" />
-                      </button>
+                        {req?.title ?? "Requirement"}
+                      </h3>
+                      {detailUploadMode && detailSelectedGroupKey != null && (
+                        <span
+                          className={`text-xs shrink-0 ${isDark ? "text-slate-300" : "text-gray-600"}`}
+                        >
+                          Bill date:{" "}
+                          {formatDetailSidebarBillDate(
+                            detailEntryByGroup[detailSelectedGroupKey],
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
                       {detailUploadMode ? (
                         <>
                           <button
@@ -1862,31 +1818,7 @@ export default function CompanyRequirementsPage() {
                             {detailUploadSaving ? "Saving..." : "Save"}
                           </button>
                         </>
-                      ) : !detailModalEditMode ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (detailSelectedGroupKey == null) return;
-                              setDetailUploadMode(true);
-                            }}
-                            disabled={detailSelectedGroupKey == null}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-gray-200 text-gray-700 hover:bg-gray-300"} ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
-                          >
-                            <UploadCloud className="w-4 h-4" />
-                            Upload document
-                          </button>
-                          <button
-                            type="button"
-                            onClick={openDetailEditMode}
-                            disabled={savingDetail}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
-                          >
-                            <Edit className="w-4 h-4" />
-                            Edit
-                          </button>
-                        </>
-                      ) : (
+                      ) : !detailModalEditMode ? null : (
                         <>
                           <button
                             type="button"
@@ -1907,67 +1839,113 @@ export default function CompanyRequirementsPage() {
                           </button>
                         </>
                       )}
+                      {!detailUploadMode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDetailModalReqId(null);
+                            setDetailModalEditMode(false);
+                            setDetailUploadMode(false);
+                            setDetailUploadFile(null);
+                          }}
+                          className={`p-2 rounded-lg transition-colors `}
+                          title="Close"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-1 min-h-0">
                     {/* 左: グループ一覧（新しい順） */}
-                    <div
-                      className={`w-32 shrink-0 border-r overflow-y-auto ${isDark ? "border-slate-700 bg-slate-800/80" : "border-gray-200 bg-gray-50"}`}
-                    >
-                      {detailGroupKeys.length === 0 ? (
+                    {!detailUploadMode && (
+                      <div
+                        className={`w-32 shrink-0 border-r overflow-y-auto ${isDark ? "border-slate-700 bg-slate-800/80" : "border-gray-200 bg-gray-50"}`}
+                      >
                         <div
-                          className={`p-3 text-xs ${isDark ? "text-slate-500" : "text-gray-500"}`}
+                          className={`px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide ${isDark ? "text-slate-400" : "text-gray-500"}`}
                         >
-                          Loading...
+                          Bill date
                         </div>
-                      ) : (
-                        <ul className="p-2 space-y-0.5">
-                          {detailGroupKeys.map((gk) => (
-                            <li key={gk}>
-                              <button
-                                type="button"
-                                onClick={() => setDetailSelectedGroupKey(gk)}
-                                className={`w-full text-left px-3 py-2 rounded text-sm font-medium transition-colors ${
-                                  detailSelectedGroupKey === gk
-                                    ? isDark
-                                      ? "bg-slate-600 text-slate-100"
-                                      : "bg-blue-100 text-blue-800"
-                                    : isDark
-                                      ? "text-slate-300 hover:bg-slate-700"
-                                      : "text-gray-700 hover:bg-gray-200"
-                                }`}
-                              >
-                                Group {gk}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
+                        {detailGroupKeys.length === 0 ? (
+                          <div
+                            className={`p-3 text-xs ${isDark ? "text-slate-500" : "text-gray-500"}`}
+                          >
+                            Loading...
+                          </div>
+                        ) : (
+                          <ul className="p-2 space-y-0.5">
+                            {detailGroupKeys.map((gk) => (
+                              <li key={gk}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (detailUploadMode || detailModalEditMode)
+                                      return;
+                                    setDetailSelectedGroupKey(gk);
+                                  }}
+                                  disabled={detailUploadMode || detailModalEditMode}
+                                  className={`w-full text-left px-2 py-2 rounded text-xs font-medium leading-snug transition-colors ${
+                                    detailSelectedGroupKey === gk
+                                      ? isDark
+                                        ? "bg-slate-600 text-slate-100"
+                                        : "bg-blue-100 text-blue-800"
+                                      : isDark
+                                        ? "text-slate-300 hover:bg-slate-700"
+                                        : "text-gray-700 hover:bg-gray-200"
+                                  } ${detailUploadMode || detailModalEditMode ? "opacity-60 cursor-not-allowed" : ""}`}
+                                >
+                                  {formatDetailSidebarBillDate(
+                                    detailEntryByGroup[gk],
+                                  )}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                     {/* 右: 選択中 group の詳細 / Upload モード */}
                     <div className="flex-1 overflow-y-auto p-6 space-y-3 text-sm">
                       {!detailUploadMode && (
                         <>
-                          <p>
-                            <span
-                              className={
-                                isDark ? "text-slate-400" : "text-gray-500"
-                              }
-                            >
-                              Company:
-                            </span>{" "}
-                            {companyName || "—"}
-                          </p>
-                          <p>
-                            <span
-                              className={
-                                isDark ? "text-slate-400" : "text-gray-500"
-                              }
-                            >
-                              Period (group):
-                            </span>{" "}
-                            {detailSelectedGroupKey ?? "—"}
-                          </p>
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="min-w-0 flex-1">
+                              <span
+                                className={
+                                  isDark ? "text-slate-400" : "text-gray-500"
+                                }
+                              >
+                                Company:
+                              </span>{" "}
+                              <span className="inline-block max-w-full truncate align-middle">{companyName || "—"}</span>
+                            </p>
+                            {!detailModalEditMode && (
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={openDetailEditMode}
+                                  disabled={savingDetail || detailSelectedGroupKey == null}
+                                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"} ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
+                                >
+                                  <Edit className="w-4 h-4" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (detailSelectedGroupKey == null) return;
+                                    setDetailUploadMode(true);
+                                  }}
+                                  disabled={detailSelectedGroupKey == null}
+                                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-gray-200 text-gray-700 hover:bg-gray-300"} ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
+                                >
+                                  <UploadCloud className="w-4 h-4" />
+                                  Upload
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </>
                       )}
                       {!detailUploadMode && !detailModalEditMode ? (
@@ -2060,24 +2038,11 @@ export default function CompanyRequirementsPage() {
                                       key={doc.key}
                                       type="button"
                                       onClick={() => {
-                                        const w = window.open(
-                                          "",
-                                          "_blank",
-                                          "noopener,noreferrer",
+                                        openPresignedDocumentInNewTab(() =>
+                                          companyRequirementRealDataAPI.getDocumentUrl(
+                                            doc.key,
+                                          ),
                                         );
-                                        companyRequirementRealDataAPI
-                                          .getDocumentUrl(doc.key)
-                                          .then(({ url }) => {
-                                            if (w) w.location.href = url;
-                                          })
-                                          .catch((err) => {
-                                            if (w) w.close();
-                                            alert(
-                                              err instanceof Error
-                                                ? err.message
-                                                : "Failed to open document",
-                                            );
-                                          });
                                       }}
                                       className={`text-blue-600 hover:underline dark:text-blue-400 ${isDark ? "hover:text-blue-300" : "hover:text-blue-700"}`}
                                     >
@@ -2254,24 +2219,12 @@ export default function CompanyRequirementsPage() {
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            const w = window.open(
-                                              "",
-                                              "_blank",
-                                              "noopener,noreferrer",
+                                            openPresignedDocumentInNewTab(
+                                              () =>
+                                                companyRequirementRealDataAPI.getDocumentUrl(
+                                                  doc.key,
+                                                ),
                                             );
-                                            companyRequirementRealDataAPI
-                                              .getDocumentUrl(doc.key)
-                                              .then(({ url }) => {
-                                                if (w) w.location.href = url;
-                                              })
-                                              .catch((err) => {
-                                                if (w) w.close();
-                                                alert(
-                                                  err instanceof Error
-                                                    ? err.message
-                                                    : "Failed to open document",
-                                                );
-                                              });
                                           }}
                                           className={`text-sm text-blue-600 hover:underline dark:text-blue-400 ${isDark ? "hover:text-blue-300" : "hover:text-blue-700"}`}
                                         >
@@ -2318,7 +2271,7 @@ export default function CompanyRequirementsPage() {
                               isDark ? "text-slate-200" : "text-gray-800"
                             }`}
                           >
-                            Upload document
+                            Upload
                           </div>
                           {!detailUploadFile ? (
                             <label
@@ -2384,12 +2337,8 @@ export default function CompanyRequirementsPage() {
                                     const url = URL.createObjectURL(
                                       detailUploadFile,
                                     );
-                                    const w = window.open(
-                                      url,
-                                      "_blank",
-                                      "noopener,noreferrer",
-                                    );
-                                    if (!w) {
+                                    const w = window.open(url, "_blank");
+                                    if (w == null) {
                                       URL.revokeObjectURL(url);
                                     }
                                   }}
@@ -2437,6 +2386,8 @@ export default function CompanyRequirementsPage() {
               validityDurationValue: null,
               validityDurationUnit: null,
               estimatedDueDate: null,
+              estimatedSpecificBillDate: null,
+              estimatedBillDateValidityBased: null,
             };
             const computedDueValidity =
               entry.dueDate &&
@@ -2591,12 +2542,8 @@ export default function CompanyRequirementsPage() {
                                     const url = URL.createObjectURL(
                                       recordPaymentUploadFile,
                                     );
-                                    const w = window.open(
-                                      url,
-                                      "_blank",
-                                      "noopener,noreferrer",
-                                    );
-                                    if (!w) {
+                                    const w = window.open(url, "_blank");
+                                    if (w == null) {
                                       URL.revokeObjectURL(url);
                                     }
                                   }}

@@ -143,7 +143,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -157,7 +158,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -171,7 +173,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -185,7 +188,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -206,7 +210,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -220,7 +225,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -241,7 +247,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }
@@ -255,7 +262,8 @@
             "type": "Record",
             "attributes": {
               "is_owner": { "type": "Boolean", "required": false },
-              "is_shared": { "type": "Boolean", "required": false }
+              "is_shared": { "type": "Boolean", "required": false },
+              "is_cross_tenant_shared": { "type": "Boolean", "required": false }
             }
           }
         }

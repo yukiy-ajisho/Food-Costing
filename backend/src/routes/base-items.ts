@@ -225,7 +225,7 @@ router.get(
           brand_name,
           purchase_unit,
           purchase_quantity,
-          purchase_cost,
+          current_price,
           deprecated,
           tenant_id,
           created_at,

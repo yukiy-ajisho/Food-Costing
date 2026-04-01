@@ -143,10 +143,12 @@ router.post(
 
       // target_idのバリデーション
       if (share.target_type === "role") {
-        if (!["admin", "manager", "staff"].includes(share.target_id)) {
+        if (
+          !["admin", "manager", "staff", "director"].includes(share.target_id)
+        ) {
           return res.status(400).json({
             error:
-              "target_id must be one of: admin, manager, staff when target_type is 'role'",
+              "target_id must be one of: admin, manager, staff, director when target_type is 'role'",
           });
         }
       } else if (share.target_type === "tenant") {
@@ -264,17 +266,22 @@ router.post(
         });
       }
 
-      // 権限チェック: Admin、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
-      const isAdmin = role === "admin";
+      // 権限チェック: Admin/Director、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
+      const isTenantAdminOrDirector =
+        role === "admin" || role === "director";
       const isCreatorAndResponsible =
         resourceUserId === currentUserId &&
         resourceResponsibleUserId === currentUserId;
       const isResponsibleUser = resourceResponsibleUserId === currentUserId;
 
-      if (!isAdmin && !isCreatorAndResponsible && !isResponsibleUser) {
+      if (
+        !isTenantAdminOrDirector &&
+        !isCreatorAndResponsible &&
+        !isResponsibleUser
+      ) {
         return res.status(403).json({
           error:
-            "Only admins, creators (if they are the responsible user), or the responsible user can create resource shares",
+            "Only admins, directors, creators (if they are the responsible user), or the responsible user can create resource shares",
         });
       }
 
@@ -395,17 +402,22 @@ router.put(
         }
       }
 
-      // 権限チェック: Admin、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
-      const isAdmin = role === "admin";
+      // 権限チェック: Admin/Director、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
+      const isTenantAdminOrDirector =
+        role === "admin" || role === "director";
       const isCreatorAndResponsible =
         resourceUserId === currentUserId &&
         resourceResponsibleUserId === currentUserId;
       const isResponsibleUser = resourceResponsibleUserId === currentUserId;
 
-      if (!isAdmin && !isCreatorAndResponsible && !isResponsibleUser) {
+      if (
+        !isTenantAdminOrDirector &&
+        !isCreatorAndResponsible &&
+        !isResponsibleUser
+      ) {
         return res.status(403).json({
           error:
-            "Only admins, creators (if they are the responsible user), or the responsible user can update resource shares",
+            "Only admins, directors, creators (if they are the responsible user), or the responsible user can update resource shares",
         });
       }
 
@@ -462,10 +474,12 @@ router.put(
 
       // target_typeに応じたバリデーション（最終的な組み合わせをチェック）
       if (finalTargetType === "role") {
-        if (!["admin", "manager", "staff"].includes(finalTargetId)) {
+        if (
+          !["admin", "manager", "staff", "director"].includes(finalTargetId)
+        ) {
           return res.status(400).json({
             error:
-              "target_id must be one of: admin, manager, staff when target_type is 'role'",
+              "target_id must be one of: admin, manager, staff, director when target_type is 'role'",
           });
         }
       } else if (finalTargetType === "tenant") {
@@ -642,17 +656,22 @@ router.delete(
         }
       }
 
-      // 権限チェック: Admin、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
-      const isAdmin = role === "admin";
+      // 権限チェック: Admin/Director、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
+      const isTenantAdminOrDirector =
+        role === "admin" || role === "director";
       const isCreatorAndResponsible =
         resourceUserId === currentUserId &&
         resourceResponsibleUserId === currentUserId;
       const isResponsibleUser = resourceResponsibleUserId === currentUserId;
 
-      if (!isAdmin && !isCreatorAndResponsible && !isResponsibleUser) {
+      if (
+        !isTenantAdminOrDirector &&
+        !isCreatorAndResponsible &&
+        !isResponsibleUser
+      ) {
         return res.status(403).json({
           error:
-            "Only admins, creators (if they are the responsible user), or the responsible user can delete resource shares",
+            "Only admins, directors, creators (if they are the responsible user), or the responsible user can delete resource shares",
         });
       }
 

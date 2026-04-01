@@ -2,10 +2,8 @@ import { Router } from "express";
 import { supabase } from "../../config/supabase";
 import { hasAnyCompanyAccess } from "./authorization-helpers";
 import {
-  getAuthorizedCompanyAdminDirectorCreatorUserIds,
-  getCompanyAdminDirectorCompanyIdsForUser,
+  getAuthorizedCompanyIds,
   getCompanyIdsForUserViaProfiles,
-  isUserRequirementAccessibleByCompany,
 } from "./authorization-helpers";
 
 const router = Router();
@@ -26,15 +24,15 @@ router.get("/", async (req, res) => {
     const requirementIds = req.query.user_requirement_ids as string | undefined;
     const userIds = req.query.user_ids as string | undefined;
 
-    const creatorUserIds = await getAuthorizedCompanyAdminDirectorCreatorUserIds(userId);
-    if (creatorUserIds.length === 0) {
+    const authorizedCompanyIds = await getAuthorizedCompanyIds(userId);
+    if (authorizedCompanyIds.length === 0) {
       return res.json({ assignments: [] });
     }
 
     const { data: myRequirementIds } = await supabase
       .from("user_requirements")
       .select("id")
-      .in("created_by", creatorUserIds);
+      .in("company_id", authorizedCompanyIds);
 
     const ids = (myRequirementIds ?? []).map((r) => r.id);
     if (ids.length === 0) {
@@ -102,7 +100,7 @@ router.patch("/", async (req, res) => {
 
     const { data: requirement, error: reqError } = await supabase
       .from("user_requirements")
-      .select("id, created_by")
+      .select("id, company_id")
       .eq("id", user_requirement_id)
       .single();
 
@@ -110,27 +108,18 @@ router.patch("/", async (req, res) => {
       return res.status(404).json({ error: "Requirement not found or access denied" });
     }
 
-    const ok = await isUserRequirementAccessibleByCompany(
-      userId,
-      requirement.created_by ?? null
-    );
-    if (!ok) {
+    const authorizedCompanyIds = await getAuthorizedCompanyIds(userId);
+    if (
+      !requirement.company_id ||
+      !authorizedCompanyIds.includes(requirement.company_id)
+    ) {
       return res.status(403).json({ error: "Access denied" });
     }
 
-    const createdByUserId = requirement.created_by;
-    if (!createdByUserId) {
-      return res.status(403).json({ error: "Access denied" });
-    }
-
-    // requirement（created_by）スコープの company に所属しているユーザーだけ変更可能
-    const creatorCompanyIds = await getCompanyAdminDirectorCompanyIdsForUser(
-      createdByUserId
-    );
     const targetCompanyIds = await getCompanyIdsForUserViaProfiles(user_id);
-    const inScope = creatorCompanyIds.some((cid) =>
-      targetCompanyIds.includes(cid)
-    );
+    const inScope =
+      requirement.company_id != null &&
+      targetCompanyIds.includes(requirement.company_id);
     if (!inScope) {
       return res.status(403).json({ error: "Access denied" });
     }

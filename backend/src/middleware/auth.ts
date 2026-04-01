@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "../config/supabase";
+import { getAuthorizedTenantIds } from "../routes/reminder/authorization-helpers";
 
 async function userHasCompanyAdminOrDirectorOnTenant(
   userId: string,
@@ -127,21 +128,37 @@ export function authMiddleware(
       });
     }
 
-    // テナントIDの配列を取得
-    const tenantIds = profiles?.map((p) => p.tenant_id) || [];
+    // テナントIDの配列を取得（profiles）
+    const tenantIds: string[] = [...(profiles?.map((p) => p.tenant_id) || [])];
 
-      // profilesがない場合のチェック（allowNoProfilesがfalseの場合のみ）
-      if (tenantIds.length === 0 && !allowNoProfiles) {
-      return res.status(403).json({
-        error: "User does not belong to any tenant. Please contact administrator.",
-      });
-    }
-
-    // tenant_id -> role のマッピングを作成（Phase 2: RBAC用）
+    // tenant_id -> role のマッピング（profiles のテナントロール）
     const rolesMap = new Map<string, string>();
     profiles?.forEach((p) => {
       rolesMap.set(p.tenant_id, p.role);
     });
+
+    // company_admin / company_director: company_tenants 経由のテナントも利用可能にする
+    // （profiles が無い会社オフィサーも License 等で X-Tenant-ID / 一覧が使えるようにする）
+    try {
+      const companyTenantIds = await getAuthorizedTenantIds(user.id);
+      for (const tid of companyTenantIds) {
+        if (!rolesMap.has(tid)) {
+          rolesMap.set(tid, "company");
+          if (!tenantIds.includes(tid)) {
+            tenantIds.push(tid);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Failed to merge company-linked tenants in auth:", e);
+    }
+
+    // profiles も会社経由テナントも無い場合
+    if (tenantIds.length === 0 && !allowNoProfiles) {
+      return res.status(403).json({
+        error: "User does not belong to any tenant. Please contact administrator.",
+      });
+    }
 
       // X-Tenant-IDヘッダーから選択されたテナントIDを取得
       const selectedTenantIdHeader = req.headers["x-tenant-id"] as string | undefined;

@@ -32,7 +32,8 @@ function computeRawCost(
   if (
     !vendorProduct.purchase_unit ||
     !vendorProduct.purchase_quantity ||
-    !vendorProduct.purchase_cost
+    vendorProduct.current_price == null ||
+    vendorProduct.current_price <= 0
   ) {
     throw new Error(
       `Raw item ${item.id} is missing purchase information in vendor_product`
@@ -43,7 +44,7 @@ function computeRawCost(
   const multiplier = MASS_UNIT_CONVERSIONS[vendorProduct.purchase_unit];
   if (multiplier) {
     const grams = vendorProduct.purchase_quantity * multiplier;
-    return vendorProduct.purchase_cost / grams;
+    return vendorProduct.current_price / grams;
   }
 
   // 非質量単位の場合、base_itemsから取得
@@ -86,7 +87,7 @@ function computeRawCost(
     throw new Error(`Invalid unit: ${vendorProduct.purchase_unit}`);
   }
 
-  return vendorProduct.purchase_cost / grams;
+  return vendorProduct.current_price / grams;
 }
 
 /**
@@ -141,10 +142,39 @@ export async function getCost(
       .single();
 
     if (itemError || !fetchedItem) {
-      throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
+      // cross-tenant の可能性: テナントフィルタなしで再取得を試みる
+      const { data: crossItem } = await supabase
+        .from("items")
+        .select("*")
+        .eq("id", itemId)
+        .single();
+      if (!crossItem) {
+        throw new Error(`Item ${itemId} not found: ${itemError?.message}`);
+      }
+      item = crossItem;
+    } else {
+      item = fetchedItem;
     }
-    item = fetchedItem;
     itemsMap.set(itemId, item);
+  }
+
+  // cross-tenant アイテムの場合、そのテナント自身のデータで計算する
+  // （パン屋がカレー屋のカレーを使う場合、カレーのコストはカレー屋の recipe_lines から算出）
+  // この時点では visited.add(itemId) はまだ呼ばれていないため、
+  // 再帰呼び出しに visited のコピーを渡せばサイクル検出は正しく機能する。
+  if (!tenantIds.includes(item.tenant_id)) {
+    const crossCost = await getCost(
+      itemId,
+      [item.tenant_id],
+      new Set(visited), // コピーを渡す（元の visited は変更しない）
+      new Map(),
+      new Map(),
+      new Map(),
+      new Map(),
+      specificVendorProductId
+    );
+    costCache.set(getCacheKey(itemId, item.item_kind, specificVendorProductId), crossCost);
+    return crossCost; // visited.add はまだ呼ばれていないので delete 不要
   }
 
   // 1. キャッシュチェック
@@ -168,27 +198,35 @@ export async function getCost(
     // アイテムは既に取得済み（キャッシュキー生成のため）
 
     /**
-     * 子アイテムがitemsMapに存在することを保証するヘルパー関数
-     * convertToGrams呼び出し前に使用
+     * 子アイテムがitemsMapに存在することを保証するヘルパー関数。
+     * tenantIds で見つからない場合は cross-tenant アイテムとして任意テナントから取得する。
      */
     const ensureItemInMap = async (
       childItemId: string,
       tenantIds: string[]
     ): Promise<void> => {
       if (!itemsMap.has(childItemId)) {
-        const { data: fetchedItem, error: itemError } = await supabase
+        const { data: fetchedItem } = await supabase
           .from("items")
           .select("*")
           .eq("id", childItemId)
           .in("tenant_id", tenantIds)
           .single();
 
-        if (itemError || !fetchedItem) {
-          throw new Error(
-            `Item ${childItemId} not found: ${itemError?.message}`
-          );
+        if (fetchedItem) {
+          itemsMap.set(childItemId, fetchedItem);
+        } else {
+          // cross-tenant フォールバック: テナントフィルタなしで取得
+          const { data: crossItem, error: crossError } = await supabase
+            .from("items")
+            .select("*")
+            .eq("id", childItemId)
+            .single();
+          if (crossError || !crossItem) {
+            throw new Error(`Item ${childItemId} not found: ${crossError?.message}`);
+          }
+          itemsMap.set(childItemId, crossItem);
         }
-        itemsMap.set(childItemId, fetchedItem);
       }
     };
 

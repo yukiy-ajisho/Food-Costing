@@ -7,6 +7,7 @@ import {
   UnifiedTenantAction,
   type UnifiedResource,
 } from "../authz/unified/authorize";
+import { getAuthorizedTenantIds } from "./reminder/authorization-helpers";
 
 const router = Router();
 
@@ -39,29 +40,50 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    if (!profilesWithTenants || profilesWithTenants.length === 0) {
-      return res.json({ tenants: [] });
+    const tenantsWithRole: Record<string, unknown>[] = [];
+    const tenantRoleById = new Map<string, string>();
+
+    if (profilesWithTenants && profilesWithTenants.length > 0) {
+      const fromProfiles = profilesWithTenants
+        .filter((p) => p.tenants != null)
+        .map((p) => ({
+          ...(p.tenants as unknown as Record<string, unknown>),
+          role: p.role,
+        }));
+      for (const t of fromProfiles) {
+        const tenantId = (t as Record<string, unknown>).id as string;
+        const tenantRole = (t as Record<string, unknown>).role as string;
+        tenantRoleById.set(tenantId, tenantRole);
+        tenantsWithRole.push(t);
+      }
     }
 
-    // 各 profile の tenants を展開し、role を付与
-    const tenantsWithRole = profilesWithTenants
-      .filter((p) => p.tenants != null)
-      .map((p) => ({
-        ...(p.tenants as unknown as Record<string, unknown>),
-        role: p.role,
-      }));
+    // profiles が無い／不足でも、会社オフィサーなら company_tenants 上のテナントを追加
+    const companyTenantIds = await getAuthorizedTenantIds(req.user!.id);
+    const missingForCompany = companyTenantIds.filter(
+      (id) => !tenantRoleById.has(id)
+    );
+    if (missingForCompany.length > 0) {
+      const { data: extraRows, error: extraErr } = await supabase
+        .from("tenants")
+        .select("*")
+        .in("id", missingForCompany);
+      if (extraErr) {
+        return res.status(500).json({ error: extraErr.message });
+      }
+      for (const row of extraRows ?? []) {
+        const rec = row as unknown as Record<string, unknown>;
+        const tid = rec.id as string;
+        tenantRoleById.set(tid, "company");
+        tenantsWithRole.push({ ...rec, role: "company" });
+      }
+    }
 
-    const tenantRoleById = new Map<string, string>();
-    for (const t of tenantsWithRole) {
-      const tenantId = (t as Record<string, unknown>).id as string;
-      const tenantRole = (t as Record<string, unknown>).role as string;
-      tenantRoleById.set(tenantId, tenantRole);
+    if (tenantRoleById.size === 0) {
+      return res.json({ tenants: [] });
     }
 
     const allTenantIds = Array.from(tenantRoleById.keys());
-    if (allTenantIds.length === 0) {
-      return res.json({ tenants: [] });
-    }
 
     // Cedar 認可（全テナント並列）と company_tenants 取得を同時に走らせる
     const [cedarResults, linksResult] = await Promise.all([
@@ -72,7 +94,11 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
             UnifiedTenantAction.list_resources,
             { type: "Tenant", id: tenantId },
             undefined,
-            { tenantId, tenantRole }
+            {
+              tenantId,
+              tenantRole:
+                tenantRole === "company" ? undefined : tenantRole,
+            }
           ).then((allowed) => ({ tenantId, allowed }))
         )
       ),
@@ -345,9 +371,12 @@ router.put(
 
     const { role } = req.body;
 
-    if (!role || !["admin", "manager", "staff"].includes(role)) {
+    if (
+      !role ||
+      !["admin", "manager", "staff", "director"].includes(role)
+    ) {
       return res.status(400).json({
-        error: "role must be one of: admin, manager, staff",
+        error: "role must be one of: admin, manager, staff, director",
       });
     }
 

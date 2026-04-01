@@ -106,8 +106,7 @@ export function buildTestMaps(data: {
         brand_name: vp.brandName ?? null,
         purchase_unit: vp.purchaseUnit,
         purchase_quantity: vp.purchaseQuantity,
-        purchase_cost: vp.purchaseCost,
-        user_id: "test-user-id",
+        current_price: vp.purchaseCost,
         tenant_id: "test-tenant-id", // Required field
       });
     });

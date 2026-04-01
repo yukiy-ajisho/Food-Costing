@@ -3,7 +3,7 @@ import { supabase } from "../config/supabase";
 import { Item, RecipeLine, BaseItem, VendorProduct } from "../types/database";
 import { convertToGrams } from "../services/units";
 import { MASS_UNIT_CONVERSIONS } from "../constants/units";
-import { checkCycle } from "../services/cycle-detection";
+import { checkCycleCrossTenant } from "../services/cycle-detection-cross-tenant";
 import { UnifiedTenantAction } from "../authz/unified/authorize";
 import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import {
@@ -23,7 +23,7 @@ router.get(
   "/",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.list_resources,
-    getUnifiedTenantResource
+    getUnifiedTenantResource,
   ),
   async (req, res) => {
     try {
@@ -54,7 +54,7 @@ router.get(
       if (role === "manager" && data) {
         // Prepped Itemsのみをフィルタリング
         const preppedItems = data.filter(
-          (item) => item.item_kind === "prepped"
+          (item) => item.item_kind === "prepped",
         );
         const otherItems = data.filter((item) => item.item_kind !== "prepped");
 
@@ -62,14 +62,14 @@ router.get(
         const ownPreppedItems = preppedItems.filter(
           (item) =>
             item.user_id === req.user!.id ||
-            item.responsible_user_id === req.user!.id
+            item.responsible_user_id === req.user!.id,
         );
 
         // 自分が作ったものではないPrepped Items
         const otherPreppedItems = preppedItems.filter(
           (item) =>
             item.user_id !== req.user!.id &&
-            item.responsible_user_id !== req.user!.id
+            item.responsible_user_id !== req.user!.id,
         );
 
         // resource_sharesから共有されているPrepped Itemsを一括取得（パフォーマンス最適化）
@@ -116,7 +116,7 @@ router.get(
 
           // 共有されているPrepped Itemsを取得
           const sharedPreppedItems = otherPreppedItems.filter((item) =>
-            sharedItemIds.includes(item.id)
+            sharedItemIds.includes(item.id),
           );
 
           // 自分が作ったもの + 共有されているものを結合
@@ -142,7 +142,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -153,7 +153,7 @@ router.get(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.read_resource,
-    getUnifiedItemResource
+    getUnifiedItemResource,
   ),
   async (req, res) => {
     try {
@@ -186,7 +186,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -197,7 +197,7 @@ router.post(
   "/",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.create_item,
-    getUnifiedTenantResource
+    getUnifiedTenantResource,
   ),
   async (req, res) => {
     try {
@@ -268,7 +268,7 @@ router.post(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -279,7 +279,7 @@ router.put(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.update_item,
-    getUnifiedItemResource
+    getUnifiedItemResource,
   ),
   async (req, res) => {
     try {
@@ -291,7 +291,7 @@ router.put(
       existingItemQuery = withTenantFilter(existingItemQuery, req);
       const { data: existingItem } = await existingItemQuery.single();
 
-      // responsible_user_idの変更権限チェック（Adminのみ許可）
+      // responsible_user_idの変更権限チェック（Admin / Director のみ許可）
       if (
         item.responsible_user_id !== undefined &&
         existingItem &&
@@ -300,9 +300,9 @@ router.put(
         const currentTenantId =
           req.user!.selected_tenant_id || req.user!.tenant_ids[0];
         const role = req.user!.roles.get(currentTenantId);
-        if (role !== "admin") {
+        if (role !== "admin" && role !== "director") {
           return res.status(403).json({
-            error: "Only admins can change responsible_user_id",
+            error: "Only admins and directors can change responsible_user_id",
           });
         }
       }
@@ -346,7 +346,7 @@ router.put(
                   .select("*");
                 vendorProductsQuery = withTenantFilter(
                   vendorProductsQuery,
-                  req
+                  req,
                 );
                 const { data: vendorProducts } = await vendorProductsQuery;
 
@@ -359,7 +359,7 @@ router.put(
 
                 const vendorProductsMap = new Map<string, VendorProduct>();
                 vendorProducts?.forEach((vp) =>
-                  vendorProductsMap.set(vp.id, vp)
+                  vendorProductsMap.set(vp.id, vp),
                 );
 
                 // 材料の総合計を計算
@@ -376,14 +376,14 @@ router.put(
                       line.child_item_id,
                       itemsMap,
                       baseItemsMap,
-                      vendorProductsMap
+                      vendorProductsMap,
                     );
                     void (totalIngredientsGrams += grams);
                   } catch (error) {
                     // 変換エラーは無視（バリデーションをスキップ）
                     console.error(
                       `Failed to convert ${line.quantity} ${line.unit} to grams:`,
-                      error
+                      error,
                     );
                   }
                 }
@@ -441,14 +441,19 @@ router.put(
           });
 
           // 循環参照をチェック（既存データも含めてチェック）
+          const viewerTenantIdItems =
+            req.user!.selected_tenant_id || req.user!.tenant_ids[0];
           try {
-            await checkCycle(
+            await checkCycleCrossTenant(
               id,
-              req.user!.tenant_ids,
+              viewerTenantIdItems,
               new Set(),
               itemsMap,
               recipeLinesMap,
-              []
+              new Map(),
+              new Map(),
+              [],
+              false,
             );
           } catch (cycleError: unknown) {
             const message =
@@ -501,7 +506,7 @@ router.put(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -512,14 +517,14 @@ router.patch(
   "/:id/deprecate",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.update_item,
-    getUnifiedItemResource
+    getUnifiedItemResource,
   ),
   async (req, res) => {
     try {
       const { deprecatePreppedItem } = await import("../services/deprecation");
       const result = await deprecatePreppedItem(
         req.params.id,
-        req.user!.tenant_ids
+        req.user!.tenant_ids,
       );
 
       if (!result.success) {
@@ -534,7 +539,7 @@ router.patch(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -545,7 +550,7 @@ router.delete(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.delete_item,
-    getUnifiedItemResource
+    getUnifiedItemResource,
   ),
   async (req, res) => {
     try {
@@ -562,7 +567,7 @@ router.delete(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 export default router;

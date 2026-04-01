@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTenant } from "@/contexts/TenantContext";
 import {
   Plus,
@@ -12,6 +12,8 @@ import {
   UploadCloud,
   FileText,
   Image as ImageIcon,
+  ArrowDown,
+  ArrowUp,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import {
@@ -26,8 +28,9 @@ import {
   tenantRequirementRealDataAPI,
   type TenantRequirementRealDataRow,
 } from "@/lib/api/reminder/tenant-requirement-real-data";
+import { openPresignedDocumentInNewTab } from "@/lib/open-presigned-document";
 
-type TabType = "list" | "status" | "documents";
+type TabType = "status" | "documents";
 
 /** Status タブ用: 最新 group の実データを value type 名でまとめたもの */
 interface MappingEntry {
@@ -40,6 +43,10 @@ interface MappingEntry {
   validityDurationUnit: "years" | "months" | "days" | null;
   /** Estimated due date（specific または validity-based のどちらか一方） */
   estimatedDueDate: string | null;
+  /** Estimated specific bill date（詳細モーダル左列・Record Payment で使用） */
+  estimatedSpecificBillDate: string | null;
+  /** Estimated bill date based on validity duration */
+  estimatedBillDateValidityBased: string | null;
 }
 
 function getTodayYYYYMMDD(): string {
@@ -83,6 +90,20 @@ function formatExpirationDate(expiration: string): string {
   });
 }
 
+/** 詳細モーダル左列: Bill date / estimated bill のいずれか（日付のみ表示） */
+function formatDetailSidebarBillDate(entry: MappingEntry | undefined): string {
+  if (!entry) return "—";
+  const ymd =
+    (entry.billDate?.trim() && entry.billDate) ||
+    (entry.estimatedSpecificBillDate?.trim() &&
+      entry.estimatedSpecificBillDate) ||
+    (entry.estimatedBillDateValidityBased?.trim() &&
+      entry.estimatedBillDateValidityBased) ||
+    null;
+  if (!ymd) return "—";
+  return formatExpirationDate(ymd);
+}
+
 /** Expiration: due date or estimated due date (specific / validity-based). One of these exists per group. */
 function getExpiration(
   _requirement: TenantRequirement,
@@ -106,25 +127,9 @@ function getExpiration(
 export default function TenantRequirementsPage() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
-  const {
-    tenants,
-    selectedTenantId,
-    setSelectedTenantId,
-    loading: tenantsLoading,
-  } = useTenant();
-  // admin 権限を持つテナントのみ Status・Documents タブで使用
-  const adminTenants = useMemo(
-    () => tenants.filter((t) => t.role === "admin"),
-    [tenants]
-  );
-  const adminTenantsLoading = tenantsLoading;
+  const { tenants, selectedTenantId, setSelectedTenantId } = useTenant();
 
-  const [activeTab, setActiveTab] = useState<TabType>("list");
-  const [requirements, setRequirements] = useState<TenantRequirement[]>([]);
-  const [requirementsLoading, setRequirementsLoading] = useState(true);
-  const [requirementsError, setRequirementsError] = useState<string | null>(
-    null,
-  );
+  const [activeTab, setActiveTab] = useState<TabType>("status");
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [requirementSaving, setRequirementSaving] = useState(false);
@@ -144,7 +149,7 @@ export default function TenantRequirementsPage() {
   const [formValidityMonths, setFormValidityMonths] = useState("");
   const [formValidityDays, setFormValidityDays] = useState("");
 
-  // Status tab（admin のテナントのみ） ← adminTenants / adminTenantsLoading / selectedTenantId は上部で TenantContext から取得
+  // テナントはヘッダーの TenantSelector と同じ TenantContext（selectedTenantId）のみ
   const [statusRequirements, setStatusRequirements] = useState<
     TenantRequirement[]
   >([]);
@@ -154,12 +159,30 @@ export default function TenantRequirementsPage() {
   const [statusMapping, setStatusMapping] = useState<
     Record<string, MappingEntry>
   >({}); // requirementId -> { dueDate, payDate, billDate, validityDuration }
-  const [statusMaxGroupKeyByReq, setStatusMaxGroupKeyByReq] = useState<
-    Record<string, number>
-  >({}); // requirementId -> 表示中の最新 group_key（Edit 保存先にも使用）
+  /** 要件一覧取得中、または一覧取得後に real data 取得中（Current Status をまとめてロード扱いにする） */
+  const [statusRequirementsLoading, setStatusRequirementsLoading] =
+    useState(false);
   const [statusLoading, setStatusLoading] = useState(false);
+  /** 選択テナントについて初回の status real data 取得が済んだら一致する ID（再取得時はフルスクリーンロードにしない） */
+  const statusRealDataReadyTenantIdRef = useRef<string | null>(null);
   const [statusRefreshing, setStatusRefreshing] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [otherTenantExpandedIds, setOtherTenantExpandedIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [otherTenantStatusByTenantId, setOtherTenantStatusByTenantId] =
+    useState<
+      Record<
+        string,
+        {
+          loaded: boolean;
+          loading: boolean;
+          error: string | null;
+          requirements: TenantRequirement[];
+          mapping: Record<string, MappingEntry>;
+        }
+      >
+    >({});
   // Record Payment モード（テーブル外ボタンでオン、モーダル Save/Cancel でオフ）
   const [recordPaymentMode, setRecordPaymentMode] = useState(false);
   const [recordPaymentModalReqId, setRecordPaymentModalReqId] = useState<
@@ -181,14 +204,19 @@ export default function TenantRequirementsPage() {
   const [savingRecordPayment, setSavingRecordPayment] = useState(false);
   const [recordPaymentUploadFile, setRecordPaymentUploadFile] =
     useState<File | null>(null);
-  // Documents タブ: 展開中の requirement / ドキュメント一覧
-  const [documentsExpandedReqId, setDocumentsExpandedReqId] = useState<
-    string | null
-  >(null);
-  const [documentsList, setDocumentsList] = useState<
-    { pay_date: string | null; key: string; file_name: string }[]
-  >([]);
-  const [documentsListLoading, setDocumentsListLoading] = useState(false);
+  // Documents タブ: 複数 requirement を同時展開可
+  const [documentsExpandedIds, setDocumentsExpandedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [documentsByReqId, setDocumentsByReqId] = useState<
+    Record<
+      string,
+      { pay_date: string | null; key: string; file_name: string }[]
+    >
+  >({});
+  const [documentsLoadingByReqId, setDocumentsLoadingByReqId] = useState<
+    Record<string, boolean>
+  >({});
   // Requirement 詳細モーダル（要件名クリックで開く）
   const [detailModalReqId, setDetailModalReqId] = useState<string | null>(null);
   const [detailModalEditMode, setDetailModalEditMode] = useState(false);
@@ -229,38 +257,9 @@ export default function TenantRequirementsPage() {
     );
   };
 
-  const fetchRequirements = async () => {
-    setRequirementsLoading(true);
-    setRequirementsError(null);
-    try {
-      const list = await tenantRequirementsAPI.getAll();
-      setRequirements(list);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Failed to load requirements";
-      if (isPermissionErrorMessage(message)) {
-        setPermissionDenied(true);
-      } else {
-        setRequirementsError(message);
-      }
-    } finally {
-      setRequirementsLoading(false);
-    }
-  };
-
+  // Value types を取得（Add モーダル・Status・Documents タブで利用）
   useEffect(() => {
-    fetchRequirements();
-  }, []);
-
-
-  // Value types を取得（List の Add モーダル・Status・Documents タブで利用）
-  useEffect(() => {
-    if (
-      activeTab !== "list" &&
-      activeTab !== "status" &&
-      activeTab !== "documents"
-    )
-      return;
+    if (activeTab !== "status" && activeTab !== "documents") return;
     tenantRequirementValueTypesAPI
       .getAll()
       .then(setValueTypes)
@@ -282,11 +281,21 @@ export default function TenantRequirementsPage() {
       !selectedTenantId
     ) {
       setStatusRequirements([]);
+      setStatusRequirementsLoading(false);
+      statusRealDataReadyTenantIdRef.current = null;
       return;
     }
+    statusRealDataReadyTenantIdRef.current = null;
+    setStatusRequirementsLoading(true);
+    setStatusRequirements([]);
     tenantRequirementsAPI
       .getAll(selectedTenantId)
-      .then(setStatusRequirements)
+      .then((list) => {
+        setStatusRequirements(list);
+        if (list.length === 0 || activeTab !== "status") {
+          setStatusRequirementsLoading(false);
+        }
+      })
       .catch((err) => {
         const message =
           err instanceof Error
@@ -297,14 +306,142 @@ export default function TenantRequirementsPage() {
         } else {
           setStatusRequirements([]);
         }
+        setStatusRequirementsLoading(false);
       });
   }, [activeTab, selectedTenantId]);
+
+  const buildLatestMapping = useCallback(
+    (
+      rows: TenantRequirementRealDataRow[],
+      requirementIds: string[],
+    ): Record<string, MappingEntry> => {
+      const nameById = Object.fromEntries(valueTypes.map((vt) => [vt.id, vt.name]));
+      const maxGroupKeyByReq: Record<string, number> = {};
+      for (const row of rows) {
+        const rid = row.tenant_requirement_id;
+        const current = maxGroupKeyByReq[rid];
+        if (current === undefined || row.group_key > current) {
+          maxGroupKeyByReq[rid] = row.group_key;
+        }
+      }
+      const map: Record<string, MappingEntry> = {};
+      for (const rid of requirementIds) {
+        map[rid] = {
+          dueDate: null,
+          payDate: null,
+          billDate: null,
+          validityDurationValue: null,
+          validityDurationUnit: null,
+          estimatedDueDate: null,
+          estimatedSpecificBillDate: null,
+          estimatedBillDateValidityBased: null,
+        };
+      }
+      for (const row of rows) {
+        const latestGroup = maxGroupKeyByReq[row.tenant_requirement_id];
+        if (latestGroup === undefined || row.group_key !== latestGroup) continue;
+        const name = nameById[row.type_id];
+        const entry = map[row.tenant_requirement_id];
+        if (!entry) continue;
+        if (name === "Due date") entry.dueDate = row.value ?? null;
+        else if (name === "Pay date") entry.payDate = row.value ?? null;
+        else if (name === "Bill date") entry.billDate = row.value ?? null;
+        else if (name === "Validity duration (years)") {
+          entry.validityDurationValue = row.value ?? null;
+          entry.validityDurationUnit = "years";
+        } else if (name === "Validity duration (months)") {
+          entry.validityDurationValue = row.value ?? null;
+          entry.validityDurationUnit = "months";
+        } else if (name === "Validity duration (days)") {
+          entry.validityDurationValue = row.value ?? null;
+          entry.validityDurationUnit = "days";
+        } else if (name === "Estimated specific due date") {
+          entry.estimatedDueDate = row.value ?? null;
+        } else if (
+          name === "Estimated due date based on validity duration" &&
+          entry.estimatedDueDate == null
+        ) {
+          entry.estimatedDueDate = row.value ?? null;
+        }
+      }
+      return map;
+    },
+    [valueTypes],
+  );
+
+  const loadOtherTenantStatus = useCallback(
+    async (tenantId: string) => {
+      setOtherTenantStatusByTenantId((prev) => ({
+        ...prev,
+        [tenantId]: {
+          loaded: prev[tenantId]?.loaded ?? false,
+          loading: true,
+          error: null,
+          requirements: prev[tenantId]?.requirements ?? [],
+          mapping: prev[tenantId]?.mapping ?? {},
+        },
+      }));
+      try {
+        const requirements = await tenantRequirementsAPI.getAll(tenantId);
+        const requirementIds = requirements.map((r) => r.id);
+        let mapping: Record<string, MappingEntry> = {};
+        if (requirementIds.length > 0) {
+          const realData = await tenantRequirementRealDataAPI.getByRequirementIds(
+            requirementIds,
+          );
+          mapping = buildLatestMapping(
+            realData as TenantRequirementRealDataRow[],
+            requirementIds,
+          );
+        }
+        setOtherTenantStatusByTenantId((prev) => ({
+          ...prev,
+          [tenantId]: {
+            loaded: true,
+            loading: false,
+            error: null,
+            requirements,
+            mapping,
+          },
+        }));
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Failed to load tenant status";
+        setOtherTenantStatusByTenantId((prev) => ({
+          ...prev,
+          [tenantId]: {
+            loaded: true,
+            loading: false,
+            error: message,
+            requirements: [],
+            mapping: {},
+          },
+        }));
+      }
+    },
+    [buildLatestMapping],
+  );
+
+  const otherTenants = useMemo(
+    () => tenants.filter((t) => t.id !== selectedTenantId),
+    [tenants, selectedTenantId],
+  );
+
+  useEffect(() => {
+    setDocumentsExpandedIds(new Set());
+    setDocumentsByReqId({});
+    setDocumentsLoadingByReqId({});
+  }, [selectedTenantId]);
+
+  useEffect(() => {
+    setOtherTenantExpandedIds(new Set());
+    setOtherTenantStatusByTenantId({});
+  }, [selectedTenantId]);
 
   const fetchStatusData = useCallback(
     async (options?: { background?: boolean }) => {
       if (!selectedTenantId || statusRequirements.length === 0) {
         setStatusMapping({});
-        setStatusMaxGroupKeyByReq({});
         return;
       }
       const background = options?.background ?? false;
@@ -318,7 +455,6 @@ export default function TenantRequirementsPage() {
         const requirementIds = statusRequirements.map((r) => r.id);
         if (requirementIds.length === 0) {
           setStatusMapping({});
-          setStatusMaxGroupKeyByReq({});
           return;
         }
         const realData =
@@ -346,6 +482,8 @@ export default function TenantRequirementsPage() {
             validityDurationValue: null,
             validityDurationUnit: null,
             estimatedDueDate: null,
+            estimatedSpecificBillDate: null,
+            estimatedBillDateValidityBased: null,
           };
         }
         for (const row of rows) {
@@ -377,7 +515,6 @@ export default function TenantRequirementsPage() {
           }
         }
         setStatusMapping(map);
-        setStatusMaxGroupKeyByReq(maxGroupKeyByReq);
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to load status data";
@@ -391,6 +528,10 @@ export default function TenantRequirementsPage() {
           setStatusRefreshing(false);
         } else {
           setStatusLoading(false);
+          setStatusRequirementsLoading(false);
+          if (selectedTenantId) {
+            statusRealDataReadyTenantIdRef.current = selectedTenantId;
+          }
         }
       }
     },
@@ -459,6 +600,8 @@ export default function TenantRequirementsPage() {
           validityDurationValue: null,
           validityDurationUnit: null,
           estimatedDueDate: null,
+          estimatedSpecificBillDate: null,
+          estimatedBillDateValidityBased: null,
         };
       }
       const name = nameById[row.type_id];
@@ -482,6 +625,13 @@ export default function TenantRequirementsPage() {
         e.estimatedDueDate == null
       ) {
         e.estimatedDueDate = row.value ?? null;
+      } else if (name === "Estimated specific bill date") {
+        e.estimatedSpecificBillDate = row.value ?? null;
+      } else if (
+        name === "Estimated bill date based on validity duration" &&
+        e.estimatedBillDateValidityBased == null
+      ) {
+        e.estimatedBillDateValidityBased = row.value ?? null;
       }
     }
     return byGroup;
@@ -565,6 +715,8 @@ export default function TenantRequirementsPage() {
         validityDurationValue: null,
         validityDurationUnit: null,
         estimatedDueDate: null,
+        estimatedSpecificBillDate: null,
+        estimatedBillDateValidityBased: null,
       };
     setDetailEditDueDate(entry.dueDate ?? "");
     setDetailEditBillDate(entry.billDate ?? "");
@@ -702,6 +854,8 @@ export default function TenantRequirementsPage() {
         validityDurationValue: null,
         validityDurationUnit: null,
         estimatedDueDate: null,
+        estimatedSpecificBillDate: null,
+        estimatedBillDateValidityBased: null,
       };
       const idByName = Object.fromEntries(
         valueTypes.map((vt) => [vt.name, vt.id]),
@@ -802,7 +956,7 @@ export default function TenantRequirementsPage() {
   const openNewModal = () => {
     setEditingId(null);
     setFormTitle("");
-    setFormTenantId("");
+    setFormTenantId(selectedTenantId ?? "");
     setFormInitialDueDate("");
     setFormInitialBillDate("");
     setFormInitialPayDate("");
@@ -917,8 +1071,7 @@ export default function TenantRequirementsPage() {
         }
       }
       closeModal();
-      await fetchRequirements();
-      if (selectedTenantId && activeTab === "status") {
+      if (selectedTenantId && formTenantId === selectedTenantId) {
         const list = await tenantRequirementsAPI.getAll(selectedTenantId);
         setStatusRequirements(list);
         await fetchStatusData({ background: true });
@@ -943,7 +1096,11 @@ export default function TenantRequirementsPage() {
       return;
     try {
       await tenantRequirementsAPI.delete(id);
-      await fetchRequirements();
+      if (selectedTenantId) {
+        const list = await tenantRequirementsAPI.getAll(selectedTenantId);
+        setStatusRequirements(list);
+        await fetchStatusData({ background: true });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to delete";
       if (isPermissionErrorMessage(message)) {
@@ -955,10 +1112,17 @@ export default function TenantRequirementsPage() {
   };
 
   const modalTitle = editingId
-    ? (requirements.find((r) => r.id === editingId)?.title ??
+    ? (statusRequirements.find((r) => r.id === editingId)?.title ??
       "Edit Requirement")
     : "New Requirement";
   const isNewRequirement = !editingId;
+
+  /** Current Status: テナント切替や初回表示では一覧＋real data までフルロード。valueTypes 到着などの再取得ではテーブルを隠さない */
+  const statusPanelFullBleedLoading =
+    !!selectedTenantId &&
+    (statusRequirementsLoading ||
+      (statusLoading &&
+        statusRealDataReadyTenantIdRef.current !== selectedTenantId));
 
   if (permissionDenied) {
     return (
@@ -988,18 +1152,6 @@ export default function TenantRequirementsPage() {
         >
           <nav className="flex space-x-8">
             <button
-              onClick={() => setActiveTab("list")}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === "list"
-                  ? "border-blue-500 text-blue-600"
-                  : isDark
-                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Requirements List
-            </button>
-            <button
               onClick={() => setActiveTab("status")}
               className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                 activeTab === "status"
@@ -1026,82 +1178,6 @@ export default function TenantRequirementsPage() {
           </nav>
         </div>
 
-        {activeTab === "list" && (
-          <>
-            <div className="flex justify-between items-center gap-2 mb-6">
-              <button
-                onClick={openNewModal}
-                className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
-                  isDark
-                    ? "bg-slate-600 hover:bg-slate-500"
-                    : "bg-gray-600 hover:bg-gray-700"
-                }`}
-              >
-                <Plus className="w-5 h-5" />
-                Add
-              </button>
-            </div>
-            <div
-              className={`rounded-lg shadow-sm border transition-colors ${
-                isDark
-                  ? "bg-slate-800 border-slate-700"
-                  : "bg-white border-gray-200"
-              }`}
-            >
-              {requirementsLoading && (
-                <div
-                  className={`px-6 py-8 text-center ${isDark ? "text-slate-400" : "text-gray-500"}`}
-                >
-                  Loading...
-                </div>
-              )}
-              {!requirementsLoading && requirementsError && (
-                <div className="px-6 py-4 text-red-600 dark:text-red-400">
-                  {requirementsError}
-                </div>
-              )}
-              {!requirementsLoading && !requirementsError && (
-                <ul className="divide-y divide-gray-200 dark:divide-slate-700">
-                  {requirements.map((r) => (
-                    <li
-                      key={r.id}
-                      className={`flex items-center justify-between px-6 py-4 ${
-                        isDark ? "text-slate-200" : "text-gray-900"
-                      }`}
-                    >
-                      <span className="font-medium">{r.title}</span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => openEditModal(r)}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                            isDark
-                              ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
-                              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                          }`}
-                        >
-                          <Edit className="w-4 h-4" />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDelete(r.id)}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                            isDark
-                              ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
-                              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                          }`}
-                          aria-label="Delete"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </>
-        )}
-
         {activeTab === "status" && (
           <div className="space-y-6 relative">
             {recordPaymentMode && (
@@ -1111,85 +1187,82 @@ export default function TenantRequirementsPage() {
                 style={{ pointerEvents: "none" }}
               />
             )}
-            <div className="flex items-center gap-4">
-              <label
-                className={`text-sm font-medium ${isDark ? "text-slate-300" : "text-gray-700"}`}
-              >
-                Select tenant
-              </label>
-              <select
-                value={adminTenantsLoading ? "" : (selectedTenantId ?? "")}
-                onChange={(e) => setSelectedTenantId(e.target.value || null)}
-                disabled={adminTenantsLoading}
-                className={`px-3 py-2 rounded-lg border text-sm min-w-48 ${
-                  isDark
-                    ? "bg-slate-700 border-slate-600 text-slate-200"
-                    : "bg-white border-gray-300 text-gray-700"
-                }`}
-              >
-                {adminTenantsLoading ? (
-                  <option value="">Loading</option>
-                ) : (
-                  <>
-                    <option value="">Select...</option>
-                    {adminTenants.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
 
-            {statusLoading && (
+            {statusPanelFullBleedLoading && (
               <div
                 className={`text-sm ${isDark ? "text-slate-400" : "text-gray-500"}`}
               >
                 Loading status...
               </div>
             )}
-            {!statusLoading && statusError && (
+            {!statusPanelFullBleedLoading && statusError && (
               <div className="text-red-600 dark:text-red-400 text-sm">
                 {statusError}
               </div>
             )}
-            {!statusLoading &&
+            {!statusPanelFullBleedLoading &&
               !statusError &&
-              (!selectedTenantId || statusRequirements.length === 0) && (
-                <div
-                  className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
-                >
-                  {!selectedTenantId
-                    ? "Select a tenant to view status."
-                    : "No requirements for this tenant. Add requirements in the Requirements List tab."}
-                </div>
-              )}
-            {!statusLoading &&
+              !selectedTenantId && (
+              <div
+                className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
+              >
+                Select a tenant in the header to view status.
+              </div>
+            )}
+            {!statusPanelFullBleedLoading &&
               !statusError &&
-              selectedTenantId &&
-              statusRequirements.length > 0 && (
-                <div className="flex flex-col items-end gap-2">
-                  <div className="flex items-center gap-2">
-                    {recordPaymentMode ? (
-                      <button
-                        type="button"
-                        onClick={handleCancelRecordPayment}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
-                      >
-                        <X className="w-4 h-4" />
-                        Cancel
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setRecordPaymentMode(true)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-600 text-white hover:bg-gray-700"}`}
-                      >
-                        Record Payment
-                      </button>
-                    )}
+              selectedTenantId && (
+              <div className="flex flex-col gap-2 w-full">
+                <div className="flex w-full items-center justify-between gap-4">
+                  <button
+                    type="button"
+                    onClick={openNewModal}
+                    disabled={!selectedTenantId || recordPaymentMode}
+                    title={
+                      !selectedTenantId
+                        ? "Select a tenant in the header first"
+                        : recordPaymentMode
+                          ? "Exit Record Payment to add"
+                          : undefined
+                    }
+                    className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors shrink-0 ${
+                      isDark
+                        ? "bg-slate-600 hover:bg-slate-500 disabled:opacity-50 disabled:pointer-events-none"
+                        : "bg-gray-600 hover:bg-gray-700 disabled:opacity-50 disabled:pointer-events-none"
+                    }`}
+                  >
+                    <Plus className="w-5 h-5" />
+                    Add
+                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {statusRequirements.length > 0 &&
+                      (recordPaymentMode ? (
+                        <button
+                          type="button"
+                          onClick={handleCancelRecordPayment}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
+                        >
+                          <X className="w-4 h-4" />
+                          Cancel
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setRecordPaymentMode(true)}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-600 text-white hover:bg-gray-700"}`}
+                        >
+                          Record Payment
+                        </button>
+                      ))}
                   </div>
+                </div>
+                {statusRequirements.length === 0 ? (
+                  <div
+                    className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
+                  >
+                    No requirements for this tenant. Use Add to create one.
+                  </div>
+                ) : (
                   <div
                     className={`rounded-lg shadow-sm border overflow-x-auto transition-colors w-full ${recordPaymentMode ? "relative z-50" : ""} ${
                       isDark
@@ -1238,6 +1311,8 @@ export default function TenantRequirementsPage() {
                             validityDurationValue: null,
                             validityDurationUnit: null,
                             estimatedDueDate: null,
+                            estimatedSpecificBillDate: null,
+                            estimatedBillDateValidityBased: null,
                           };
                           const expiration = getExpiration(req, entry);
                           const status = getStatus(expiration);
@@ -1266,19 +1341,72 @@ export default function TenantRequirementsPage() {
                               role={recordPaymentMode ? "button" : undefined}
                             >
                               <td
-                                className={`px-4 py-3 font-medium ${isDark ? "text-slate-200" : "text-gray-900"} ${recordPaymentMode ? "" : "cursor-pointer hover:underline"}`}
-                                style={{ minWidth: 160 }}
-                                onClick={
-                                  recordPaymentMode
-                                    ? undefined
-                                    : (e) => {
-                                        e.stopPropagation();
-                                        setDetailModalReqId(req.id);
-                                        setDetailModalEditMode(false);
-                                      }
-                                }
+                                className={`px-4 py-3 ${isDark ? "text-slate-200" : "text-gray-900"}`}
+                                style={{ minWidth: 200 }}
                               >
-                                {req.title}
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className={`font-medium min-w-0 truncate ${recordPaymentMode ? "" : "cursor-pointer hover:underline"}`}
+                                    onClick={
+                                      recordPaymentMode
+                                        ? undefined
+                                        : (e) => {
+                                            e.stopPropagation();
+                                            setDetailModalReqId(req.id);
+                                            setDetailModalEditMode(false);
+                                          }
+                                    }
+                                    role={
+                                      recordPaymentMode ? undefined : "button"
+                                    }
+                                    onKeyDown={
+                                      recordPaymentMode
+                                        ? undefined
+                                        : (e) => {
+                                            if (
+                                              e.key === "Enter" ||
+                                              e.key === " "
+                                            ) {
+                                              e.preventDefault();
+                                              e.stopPropagation();
+                                              setDetailModalReqId(req.id);
+                                              setDetailModalEditMode(false);
+                                            }
+                                          }
+                                    }
+                                    tabIndex={recordPaymentMode ? undefined : 0}
+                                  >
+                                    {req.title}
+                                  </span>
+                                  {!recordPaymentMode && (
+                                    <span className="hidden">
+                                      <span className="shrink-0 flex items-center gap-0.5 ml-auto">
+                                        <button
+                                          type="button"
+                                          aria-label="Edit requirement"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            openEditModal(req);
+                                          }}
+                                          className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
+                                        >
+                                          <Edit className="w-4 h-4" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label="Delete requirement"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void handleDelete(req.id);
+                                          }}
+                                          className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </span>
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               <td
                                 className={`px-4 py-3 ${isDimmed ? "opacity-40" : ""}`}
@@ -1332,49 +1460,242 @@ export default function TenantRequirementsPage() {
                       </tbody>
                     </table>
                   </div>
-                </div>
-              )}
+                )}
+                {otherTenants.length > 0 && (
+                  <div
+                    className={`mt-10 rounded-lg border shadow-sm transition-colors ${
+                      isDark
+                        ? "bg-slate-800 border-slate-500 shadow-black/25"
+                        : "bg-white border-gray-300 shadow-gray-200/90"
+                    }`}
+                  >
+                    <div
+                      className={`px-4 py-3 text-sm font-medium ${
+                        isDark
+                          ? "text-slate-100 bg-slate-700/60"
+                          : "text-gray-800 bg-gray-50"
+                      }`}
+                    >
+                      Other tenants
+                    </div>
+                    <div
+                      className={`border-t ${
+                        isDark ? "border-slate-700" : "border-gray-200"
+                      }`}
+                    >
+                        {otherTenants.map((tenant) => {
+                          const expanded = otherTenantExpandedIds.has(tenant.id);
+                          const snapshot = otherTenantStatusByTenantId[tenant.id];
+                          return (
+                            <div
+                              key={tenant.id}
+                              className={`border-b last:border-b-0 ${
+                                isDark ? "border-slate-600" : "border-gray-300"
+                              }`}
+                            >
+                              <div
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => {
+                                  setOtherTenantExpandedIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(tenant.id)) {
+                                      next.delete(tenant.id);
+                                    } else {
+                                      next.add(tenant.id);
+                                    }
+                                    return next;
+                                  });
+                                  if (!snapshot?.loaded && !snapshot?.loading) {
+                                    void loadOtherTenantStatus(tenant.id);
+                                  }
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    setOtherTenantExpandedIds((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(tenant.id)) {
+                                        next.delete(tenant.id);
+                                      } else {
+                                        next.add(tenant.id);
+                                      }
+                                      return next;
+                                    });
+                                    if (!snapshot?.loaded && !snapshot?.loading) {
+                                      void loadOtherTenantStatus(tenant.id);
+                                    }
+                                  }
+                                }}
+                                className={`w-full px-4 py-3 flex items-center justify-between text-left text-sm cursor-pointer ${
+                                  isDark
+                                    ? "text-slate-200"
+                                    : "text-gray-800"
+                                }`}
+                              >
+                                <span className="flex items-center gap-2">
+                                  <span className="font-medium">{tenant.name}</span>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedTenantId(tenant.id);
+                                    }}
+                                    title="Switch tenant"
+                                    className={`inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                                      isDark
+                                        ? "text-blue-100 bg-blue-600/80 hover:bg-blue-500"
+                                        : "text-white bg-blue-600 hover:bg-blue-700"
+                                    }`}
+                                  >
+                                    <span className="inline-flex items-center gap-0">
+                                      <ArrowUp className="w-3 h-3 shrink-0" aria-hidden />
+                                      <ArrowDown
+                                        className="w-3 h-3 shrink-0 -ml-1"
+                                        aria-hidden
+                                      />
+                                    </span>
+                                    <span>Switch tenant</span>
+                                  </button>
+                                </span>
+                                <span
+                                  className={isDark ? "text-slate-400" : "text-gray-500"}
+                                >
+                                  {expanded ? "▼" : "▶"}
+                                </span>
+                              </div>
+                              {expanded && (
+                                <div className="px-4 pb-4">
+                                  {snapshot?.loading ? (
+                                    <div
+                                      className={`text-sm ${isDark ? "text-slate-400" : "text-gray-500"}`}
+                                    >
+                                      Loading...
+                                    </div>
+                                  ) : snapshot?.error ? (
+                                    <div className="text-sm text-red-500">
+                                      {snapshot.error}
+                                    </div>
+                                  ) : (snapshot?.requirements ?? []).length === 0 ? (
+                                    <div
+                                      className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
+                                    >
+                                      No requirements for this tenant.
+                                    </div>
+                                  ) : (
+                                    <div
+                                      className={`rounded-lg border overflow-x-auto ${
+                                        isDark
+                                          ? "border-slate-400 bg-slate-900/40"
+                                          : "border-gray-400 bg-gray-50"
+                                      }`}
+                                    >
+                                      <table
+                                        className="w-full"
+                                        style={{
+                                          tableLayout: "auto",
+                                          minWidth: "min-content",
+                                        }}
+                                      >
+                                        <thead
+                                          className={isDark ? "bg-slate-700" : "bg-white"}
+                                        >
+                                          <tr>
+                                            <th
+                                              className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                                            >
+                                              Requirement name
+                                            </th>
+                                            <th
+                                              className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                                            >
+                                              Status
+                                            </th>
+                                            <th
+                                              className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                                            >
+                                              Due date
+                                            </th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {snapshot.requirements.map((req) => {
+                                            const entry = snapshot.mapping[req.id] ?? {
+                                              dueDate: null,
+                                              payDate: null,
+                                              billDate: null,
+                                              validityDurationValue: null,
+                                              validityDurationUnit: null,
+                                              estimatedDueDate: null,
+                                              estimatedSpecificBillDate: null,
+                                              estimatedBillDateValidityBased: null,
+                                            };
+                                            const expiration = getExpiration(req, entry);
+                                            const status = getStatus(expiration);
+                                            return (
+                                              <tr
+                                                key={req.id}
+                                                className={
+                                                  isDark
+                                                    ? "border-t border-slate-700"
+                                                    : "border-t border-gray-200"
+                                                }
+                                              >
+                                                <td
+                                                  className={`px-4 py-2.5 text-sm ${isDark ? "text-slate-200" : "text-gray-900"}`}
+                                                >
+                                                  {req.title}
+                                                </td>
+                                                <td className="px-4 py-2.5">
+                                                  <span
+                                                    className={`inline-block w-2.5 h-2.5 rounded-full ${
+                                                      status === "ok"
+                                                        ? "bg-green-500"
+                                                        : status === "overdue"
+                                                          ? "bg-red-500"
+                                                          : "bg-gray-400"
+                                                    }`}
+                                                  />
+                                                </td>
+                                                <td
+                                                  className={`px-4 py-2.5 text-sm ${isDark ? "text-slate-300" : "text-gray-700"}`}
+                                                >
+                                                  {entry.estimatedDueDate || entry.dueDate || "—"}
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
         {activeTab === "documents" && (
           <div className="space-y-6">
-            <div className="flex items-center gap-4">
-              <label
-                className={`text-sm font-medium ${isDark ? "text-slate-300" : "text-gray-700"}`}
+            {selectedTenantId && statusRequirementsLoading ? (
+              <div
+                className={`text-sm ${isDark ? "text-slate-400" : "text-gray-500"}`}
               >
-                Select tenant
-              </label>
-              <select
-                value={adminTenantsLoading ? "" : (selectedTenantId ?? "")}
-                onChange={(e) => setSelectedTenantId(e.target.value || null)}
-                disabled={adminTenantsLoading}
-                className={`px-3 py-2 rounded-lg border text-sm min-w-48 ${
-                  isDark
-                    ? "bg-slate-700 border-slate-600 text-slate-200"
-                    : "bg-white border-gray-300 text-gray-700"
-                }`}
-              >
-                {adminTenantsLoading ? (
-                  <option value="">Loading</option>
-                ) : (
-                  <>
-                    <option value="">Select...</option>
-                    {adminTenants.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
-            {!selectedTenantId || statusRequirements.length === 0 ? (
+                Loading requirements...
+              </div>
+            ) : !selectedTenantId || statusRequirements.length === 0 ? (
               <div
                 className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
               >
                 {!selectedTenantId
-                  ? "Select a tenant to view documents."
+                  ? "Select a tenant in the header to view documents."
                   : "No requirements for this tenant."}
               </div>
             ) : (
@@ -1387,7 +1708,9 @@ export default function TenantRequirementsPage() {
               >
                 <ul className="divide-y divide-gray-200 dark:divide-slate-700">
                   {statusRequirements.map((req) => {
-                    const isExpanded = documentsExpandedReqId === req.id;
+                    const isExpanded = documentsExpandedIds.has(req.id);
+                    const docList = documentsByReqId[req.id];
+                    const docLoading = documentsLoadingByReqId[req.id] === true;
                     return (
                       <li
                         key={req.id}
@@ -1396,37 +1719,41 @@ export default function TenantRequirementsPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            if (isExpanded) {
-                              setDocumentsExpandedReqId(null);
-                              setDocumentsList([]);
+                            const id = req.id;
+                            if (documentsExpandedIds.has(id)) {
+                              setDocumentsExpandedIds((prev) => {
+                                const n = new Set(prev);
+                                n.delete(id);
+                                return n;
+                              });
                               return;
                             }
-                            setDocumentsExpandedReqId(req.id);
-                            setDocumentsListLoading(true);
-                            setDocumentsList([]);
-                            const requestedId = req.id;
+                            setDocumentsExpandedIds((prev) =>
+                              new Set(prev).add(id),
+                            );
+                            setDocumentsLoadingByReqId((m) => ({
+                              ...m,
+                              [id]: true,
+                            }));
                             tenantRequirementRealDataAPI
-                              .getDocuments(req.id)
+                              .getDocuments(id)
                               .then((list) => {
-                                setDocumentsExpandedReqId((current) => {
-                                  if (current === requestedId)
-                                    setDocumentsList(list);
-                                  return current;
-                                });
+                                setDocumentsByReqId((m) => ({
+                                  ...m,
+                                  [id]: list,
+                                }));
                               })
                               .catch(() => {
-                                setDocumentsExpandedReqId((current) => {
-                                  if (current === requestedId)
-                                    setDocumentsList([]);
-                                  return current;
-                                });
+                                setDocumentsByReqId((m) => ({
+                                  ...m,
+                                  [id]: [],
+                                }));
                               })
                               .finally(() => {
-                                setDocumentsExpandedReqId((current) => {
-                                  if (current === requestedId)
-                                    setDocumentsListLoading(false);
-                                  return current;
-                                });
+                                setDocumentsLoadingByReqId((m) => ({
+                                  ...m,
+                                  [id]: false,
+                                }));
                               });
                           }}
                           className={`w-full px-4 py-3 text-left flex items-center justify-between font-medium ${isDark ? "text-slate-200 hover:bg-slate-700" : "text-gray-900 hover:bg-gray-50"}`}
@@ -1442,13 +1769,13 @@ export default function TenantRequirementsPage() {
                           <div
                             className={`px-4 pb-3 ${isDark ? "bg-slate-800" : "bg-gray-50"}`}
                           >
-                            {documentsListLoading ? (
+                            {docLoading ? (
                               <div
                                 className={`text-sm py-2 ${isDark ? "text-slate-400" : "text-gray-500"}`}
                               >
                                 Loading...
                               </div>
-                            ) : documentsList.length === 0 ? (
+                            ) : (docList ?? []).length === 0 ? (
                               <div
                                 className={`text-sm py-2 ${isDark ? "text-slate-400" : "text-gray-500"}`}
                               >
@@ -1456,7 +1783,7 @@ export default function TenantRequirementsPage() {
                               </div>
                             ) : (
                               <ul className="space-y-1.5">
-                                {documentsList.map((doc, idx) => {
+                                {(docList ?? []).map((doc, idx) => {
                                   const label =
                                     doc.file_name ||
                                     doc.key.split("/").pop() ||
@@ -1484,25 +1811,11 @@ export default function TenantRequirementsPage() {
                                         type="button"
                                         onClick={(e) => {
                                           e.stopPropagation();
-                                          const newWindow = window.open(
-                                            "",
-                                            "_blank",
-                                            "noopener,noreferrer",
+                                          openPresignedDocumentInNewTab(() =>
+                                            tenantRequirementRealDataAPI.getDocumentUrl(
+                                              doc.key,
+                                            ),
                                           );
-                                          tenantRequirementRealDataAPI
-                                            .getDocumentUrl(doc.key)
-                                            .then(({ url }) => {
-                                              if (newWindow)
-                                                newWindow.location.href = url;
-                                            })
-                                            .catch((err) => {
-                                              if (newWindow) newWindow.close();
-                                              alert(
-                                                err instanceof Error
-                                                  ? err.message
-                                                  : "Failed to open document",
-                                              );
-                                            });
                                         }}
                                         className={`text-blue-600 hover:underline dark:text-blue-400 ${isDark ? "hover:text-blue-300" : "hover:text-blue-700"}`}
                                       >
@@ -1554,7 +1867,7 @@ export default function TenantRequirementsPage() {
                       className={`w-full px-4 py-2.5 rounded-lg border text-base ${isDark ? "bg-slate-700 border-slate-600 text-slate-200" : "bg-white border-gray-300 text-gray-700"}`}
                     >
                       <option value="">Select...</option>
-                      {adminTenants.map((t) => (
+                      {tenants.map((t) => (
                         <option key={t.id} value={t.id}>
                           {t.name}
                         </option>
@@ -1771,11 +2084,12 @@ export default function TenantRequirementsPage() {
                 validityDurationValue: null,
                 validityDurationUnit: null,
                 estimatedDueDate: null,
+                estimatedSpecificBillDate: null,
+                estimatedBillDateValidityBased: null,
               };
             const tenantName =
-              adminTenants.find(
-                (t) => t.id === (req?.tenantId ?? selectedTenantId),
-              )?.name ?? "";
+              tenants.find((t) => t.id === (req?.tenantId ?? selectedTenantId))
+                ?.name ?? "";
             const formatD = (s: string | null) =>
               s
                 ? new Date(s + "T12:00:00").toLocaleDateString(undefined, {
@@ -1798,25 +2112,24 @@ export default function TenantRequirementsPage() {
                   <div
                     className={`px-6 py-4 border-b flex items-center justify-between shrink-0 ${isDark ? "border-slate-700" : "border-gray-200"}`}
                   >
-                    <h3
-                      className={`text-lg font-semibold ${isDark ? "text-slate-100" : "text-gray-900"}`}
-                    >
-                      {req?.title ?? "Requirement"}
-                    </h3>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDetailModalReqId(null);
-                          setDetailModalEditMode(false);
-                          setDetailUploadMode(false);
-                          setDetailUploadFile(null);
-                        }}
-                        className={`p-2 rounded-lg transition-colors ${isDark ? "hover:bg-slate-600 text-slate-300" : "hover:bg-gray-200 text-gray-700"}`}
-                        title="Close"
+                    <div className="min-w-0 flex items-center gap-3">
+                      <h3
+                        className={`text-lg font-semibold truncate ${isDark ? "text-slate-100" : "text-gray-900"}`}
                       >
-                        <X className="w-5 h-5" />
-                      </button>
+                        {req?.title ?? "Requirement"}
+                      </h3>
+                      {detailUploadMode && detailSelectedGroupKey != null && (
+                        <span
+                          className={`text-xs shrink-0 ${isDark ? "text-slate-300" : "text-gray-600"}`}
+                        >
+                          Bill date:{" "}
+                          {formatDetailSidebarBillDate(
+                            detailEntryByGroup[detailSelectedGroupKey],
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
                       {detailUploadMode ? (
                         <>
                           <button
@@ -1840,31 +2153,7 @@ export default function TenantRequirementsPage() {
                             {detailUploadSaving ? "Saving..." : "Save"}
                           </button>
                         </>
-                      ) : !detailModalEditMode ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (detailSelectedGroupKey == null) return;
-                              setDetailUploadMode(true);
-                            }}
-                            disabled={detailSelectedGroupKey == null}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-gray-200 text-gray-700 hover:bg-gray-300"} ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
-                          >
-                            <UploadCloud className="w-4 h-4" />
-                            Upload document
-                          </button>
-                          <button
-                            type="button"
-                            onClick={openDetailEditMode}
-                            disabled={savingDetail}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
-                          >
-                            <Edit className="w-4 h-4" />
-                            Edit
-                          </button>
-                        </>
-                      ) : (
+                      ) : !detailModalEditMode ? null : (
                         <>
                           <button
                             type="button"
@@ -1885,67 +2174,113 @@ export default function TenantRequirementsPage() {
                           </button>
                         </>
                       )}
+                      {!detailUploadMode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDetailModalReqId(null);
+                            setDetailModalEditMode(false);
+                            setDetailUploadMode(false);
+                            setDetailUploadFile(null);
+                          }}
+                          className={`p-2 rounded-lg transition-colors `}
+                          title="Close"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-1 min-h-0">
-                    {/* 左: グループ一覧（新しい順） */}
-                    <div
-                      className={`w-32 shrink-0 border-r overflow-y-auto ${isDark ? "border-slate-700 bg-slate-800/80" : "border-gray-200 bg-gray-50"}`}
-                    >
-                      {detailGroupKeys.length === 0 ? (
+                    {/* 左: 請求関連日付（新しい group 順） */}
+                    {!detailUploadMode && (
+                      <div
+                        className={`w-40 shrink-0 border-r overflow-y-auto ${isDark ? "border-slate-700 bg-slate-800/80" : "border-gray-200 bg-gray-50"}`}
+                      >
                         <div
-                          className={`p-3 text-xs ${isDark ? "text-slate-500" : "text-gray-500"}`}
+                          className={`px-3 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide ${isDark ? "text-slate-400" : "text-gray-500"}`}
                         >
-                          Loading...
+                          Bill date
                         </div>
-                      ) : (
-                        <ul className="p-2 space-y-0.5">
-                          {detailGroupKeys.map((gk) => (
-                            <li key={gk}>
-                              <button
-                                type="button"
-                                onClick={() => setDetailSelectedGroupKey(gk)}
-                                className={`w-full text-left px-3 py-2 rounded text-sm font-medium transition-colors ${
-                                  detailSelectedGroupKey === gk
-                                    ? isDark
-                                      ? "bg-slate-600 text-slate-100"
-                                      : "bg-blue-100 text-blue-800"
-                                    : isDark
-                                      ? "text-slate-300 hover:bg-slate-700"
-                                      : "text-gray-700 hover:bg-gray-200"
-                                }`}
-                              >
-                                Group {gk}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
+                        {detailGroupKeys.length === 0 ? (
+                          <div
+                            className={`p-3 text-xs ${isDark ? "text-slate-500" : "text-gray-500"}`}
+                          >
+                            Loading...
+                          </div>
+                        ) : (
+                          <ul className="p-2 space-y-0.5">
+                            {detailGroupKeys.map((gk) => (
+                              <li key={gk}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (detailUploadMode || detailModalEditMode)
+                                      return;
+                                    setDetailSelectedGroupKey(gk);
+                                  }}
+                                  disabled={detailUploadMode || detailModalEditMode}
+                                  className={`w-full text-left px-2 py-2 rounded text-xs font-medium leading-snug transition-colors ${
+                                    detailSelectedGroupKey === gk
+                                      ? isDark
+                                        ? "bg-slate-600 text-slate-100"
+                                        : "bg-blue-100 text-blue-800"
+                                      : isDark
+                                        ? "text-slate-300 hover:bg-slate-700"
+                                        : "text-gray-700 hover:bg-gray-200"
+                                  } ${detailUploadMode || detailModalEditMode ? "opacity-60 cursor-not-allowed" : ""}`}
+                                >
+                                  {formatDetailSidebarBillDate(
+                                    detailEntryByGroup[gk],
+                                  )}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                     {/* 右: 選択中 group の詳細 / Upload モード */}
                     <div className="flex-1 overflow-y-auto p-6 space-y-3 text-sm">
                       {!detailUploadMode && (
                         <>
-                          <p>
-                            <span
-                              className={
-                                isDark ? "text-slate-400" : "text-gray-500"
-                              }
-                            >
-                              Tenant:
-                            </span>{" "}
-                            {tenantName || "—"}
-                          </p>
-                          <p>
-                            <span
-                              className={
-                                isDark ? "text-slate-400" : "text-gray-500"
-                              }
-                            >
-                              Period (group):
-                            </span>{" "}
-                            {detailSelectedGroupKey ?? "—"}
-                          </p>
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="min-w-0 flex-1">
+                              <span
+                                className={
+                                  isDark ? "text-slate-400" : "text-gray-500"
+                                }
+                              >
+                                Tenant:
+                              </span>{" "}
+                              <span className="inline-block max-w-full truncate align-middle">{tenantName || "—"}</span>
+                            </p>
+                            {!detailModalEditMode && (
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={openDetailEditMode}
+                                  disabled={savingDetail || detailSelectedGroupKey == null}
+                                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"} ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
+                                >
+                                  <Edit className="w-4 h-4" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (detailSelectedGroupKey == null) return;
+                                    setDetailUploadMode(true);
+                                  }}
+                                  disabled={detailSelectedGroupKey == null}
+                                  className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-gray-200 text-gray-700 hover:bg-gray-300"} ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
+                                >
+                                  <UploadCloud className="w-4 h-4" />
+                                  Upload
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </>
                       )}
                       {!detailUploadMode && !detailModalEditMode ? (
@@ -2038,24 +2373,11 @@ export default function TenantRequirementsPage() {
                                       key={doc.key}
                                       type="button"
                                       onClick={() => {
-                                        const w = window.open(
-                                          "",
-                                          "_blank",
-                                          "noopener,noreferrer",
+                                        openPresignedDocumentInNewTab(() =>
+                                          tenantRequirementRealDataAPI.getDocumentUrl(
+                                            doc.key,
+                                          ),
                                         );
-                                        tenantRequirementRealDataAPI
-                                          .getDocumentUrl(doc.key)
-                                          .then(({ url }) => {
-                                            if (w) w.location.href = url;
-                                          })
-                                          .catch((err) => {
-                                            if (w) w.close();
-                                            alert(
-                                              err instanceof Error
-                                                ? err.message
-                                                : "Failed to open document",
-                                            );
-                                          });
                                       }}
                                       className={`text-blue-600 hover:underline dark:text-blue-400 ${isDark ? "hover:text-blue-300" : "hover:text-blue-700"}`}
                                     >
@@ -2232,24 +2554,11 @@ export default function TenantRequirementsPage() {
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            const w = window.open(
-                                              "",
-                                              "_blank",
-                                              "noopener,noreferrer",
+                                            openPresignedDocumentInNewTab(() =>
+                                              tenantRequirementRealDataAPI.getDocumentUrl(
+                                                doc.key,
+                                              ),
                                             );
-                                            tenantRequirementRealDataAPI
-                                              .getDocumentUrl(doc.key)
-                                              .then(({ url }) => {
-                                                if (w) w.location.href = url;
-                                              })
-                                              .catch((err) => {
-                                                if (w) w.close();
-                                                alert(
-                                                  err instanceof Error
-                                                    ? err.message
-                                                    : "Failed to open document",
-                                                );
-                                              });
                                           }}
                                           className={`text-sm text-blue-600 hover:underline dark:text-blue-400 ${isDark ? "hover:text-blue-300" : "hover:text-blue-700"}`}
                                         >
@@ -2296,7 +2605,7 @@ export default function TenantRequirementsPage() {
                               isDark ? "text-slate-200" : "text-gray-800"
                             }`}
                           >
-                            Upload document
+                            Upload
                           </div>
                           {!detailUploadFile ? (
                             <label
@@ -2359,15 +2668,10 @@ export default function TenantRequirementsPage() {
                                   type="button"
                                   onClick={() => {
                                     if (typeof window === "undefined") return;
-                                    const url = URL.createObjectURL(
-                                      detailUploadFile,
-                                    );
-                                    const w = window.open(
-                                      url,
-                                      "_blank",
-                                      "noopener,noreferrer",
-                                    );
-                                    if (!w) {
+                                    const url =
+                                      URL.createObjectURL(detailUploadFile);
+                                    const w = window.open(url, "_blank");
+                                    if (w == null) {
                                       URL.revokeObjectURL(url);
                                     }
                                   }}
@@ -2415,6 +2719,8 @@ export default function TenantRequirementsPage() {
               validityDurationValue: null,
               validityDurationUnit: null,
               estimatedDueDate: null,
+              estimatedSpecificBillDate: null,
+              estimatedBillDateValidityBased: null,
             };
             const computedDueValidity =
               entry.dueDate &&
@@ -2569,12 +2875,8 @@ export default function TenantRequirementsPage() {
                                     const url = URL.createObjectURL(
                                       recordPaymentUploadFile,
                                     );
-                                    const w = window.open(
-                                      url,
-                                      "_blank",
-                                      "noopener,noreferrer",
-                                    );
-                                    if (!w) {
+                                    const w = window.open(url, "_blank");
+                                    if (w == null) {
                                       URL.revokeObjectURL(url);
                                     }
                                   }}

@@ -29,14 +29,11 @@ const CompanyContext = createContext<CompanyContextType | undefined>(undefined);
 export function CompanyProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
+  // 常に null で初期化（SSR とクライア初回ペイントを一致させハイドレーションずれを防ぐ）。
+  // localStorage からの復元は fetchCompanies 内で行う。
   const [selectedCompanyId, setSelectedCompanyIdState] = useState<
     string | null
-  >(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("selectedCompanyId");
-    }
-    return null;
-  });
+  >(null);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -81,7 +78,9 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
           ? list.some((c) => c.id === storedId)
           : false;
 
-        if (!storedId || !storedExists) {
+        if (storedId && storedExists) {
+          setSelectedCompanyIdState(storedId);
+        } else {
           const firstId = list[0].id;
           setSelectedCompanyIdState(firstId);
           try {

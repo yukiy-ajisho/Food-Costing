@@ -11,7 +11,7 @@ const router = Router();
 /**
  * POST /invite
  * 招待を作成してメールを送信
- * Body: { email: string, role: "manager" | "staff", tenant_id: string }
+ * Body: { email: string, role: "manager" | "staff" | "director", tenant_id: string }
  * 認可: tenant::manage_members（Cedar）または親会社の company_admin / company_director（company::manage_tenant_team）
  */
 router.post(
@@ -34,10 +34,10 @@ router.post(
       }
 
       // ロールのバリデーション
-      if (!["manager", "staff"].includes(role)) {
+      if (!["manager", "staff", "director"].includes(role)) {
         return res.status(400).json({
           error: "Invalid role",
-          details: "Role must be 'manager' or 'staff'",
+          details: "Role must be 'manager', 'staff', or 'director'",
         });
       }
 

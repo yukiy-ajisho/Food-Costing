@@ -7,6 +7,30 @@ import { VendorProduct, RecipeLine } from "../types/database";
  */
 
 /**
+ * 指定テナントと同一 company に属する全テナント ID。company に属さない場合は null。
+ * カスケードで recipe_lines を他テナント（消費側）まで辿るために使う。
+ */
+export async function getTenantIdsInSameCompany(
+  tenantId: string,
+): Promise<string[] | null> {
+  const { data: link } = await supabase
+    .from("company_tenants")
+    .select("company_id")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+
+  if (!link) return null;
+
+  const { data: rows } = await supabase
+    .from("company_tenants")
+    .select("tenant_id")
+    .eq("company_id", link.company_id);
+
+  if (!rows?.length) return null;
+  return rows.map((r) => r.tenant_id);
+}
+
+/**
  * Base Itemをdeprecatedにする
  * 条件: アクティブなvendor_productsが0個の場合のみ
  */
@@ -103,6 +127,9 @@ export async function deprecateVendorProduct(
       return { success: false, error: "Vendor product not found" };
     }
 
+    const cascadeTenantIds =
+      (await getTenantIdsInSameCompany(vendorProduct.tenant_id)) ?? tenantIds;
+
     // Vendor Productをdeprecatedにする
     const { error: updateError } = await supabase
       .from("virtual_vendor_products")
@@ -120,7 +147,7 @@ export async function deprecateVendorProduct(
       .select("*, items!recipe_lines_parent_item_id_fkey(*)")
       .eq("line_type", "ingredient")
       .eq("specific_child", vendorProductId)
-      .in("tenant_id", tenantIds);
+      .in("tenant_id", cascadeTenantIds);
 
     console.log(
       `[DEPRECATE VP] Vendor Product ${vendorProductId} deprecated. Found ${
@@ -149,7 +176,7 @@ export async function deprecateVendorProduct(
           .from("items")
           .update({ deprecated: now, deprecation_reason: "indirect" })
           .eq("id", parentItemId)
-          .in("tenant_id", tenantIds);
+          .in("tenant_id", cascadeTenantIds);
 
         if (parentUpdateError) {
           console.error(
@@ -160,7 +187,7 @@ export async function deprecateVendorProduct(
         }
 
         // その親のさらに親も連鎖的にdeprecate
-        await deprecateItemCascade(parentItemId, now, tenantIds);
+        await deprecateItemCascade(parentItemId, now, cascadeTenantIds);
       }
     }
 
@@ -171,7 +198,7 @@ export async function deprecateVendorProduct(
       .from("product_mappings")
       .select("base_item_id")
       .eq("virtual_product_id", vendorProductId)
-      .in("tenant_id", tenantIds);
+      .in("tenant_id", cascadeTenantIds);
 
     if (mappingError) {
       return { success: false, error: mappingError.message };
@@ -193,7 +220,7 @@ export async function deprecateVendorProduct(
       .select("*")
       .eq("item_kind", "raw")
       .in("base_item_id", baseItemIds)
-      .in("tenant_id", tenantIds)
+      .in("tenant_id", cascadeTenantIds)
       .is("deprecated", null);
 
     if (rawError) {
@@ -209,7 +236,7 @@ export async function deprecateVendorProduct(
           .eq("line_type", "ingredient")
           .eq("child_item_id", rawItem.id)
           .eq("specific_child", "lowest")
-          .in("tenant_id", tenantIds);
+          .in("tenant_id", cascadeTenantIds);
 
         if (lowestError) continue;
 
@@ -219,7 +246,7 @@ export async function deprecateVendorProduct(
             .from("product_mappings")
             .select("virtual_product_id")
             .eq("base_item_id", rawItem.base_item_id)
-            .in("tenant_id", tenantIds);
+            .in("tenant_id", cascadeTenantIds);
 
           if (mappingError2) continue;
 
@@ -241,7 +268,7 @@ export async function deprecateVendorProduct(
                 .from("items")
                 .update({ deprecated: now, deprecation_reason: "indirect" })
                 .eq("id", line.parent_item_id)
-                .in("tenant_id", tenantIds);
+                .in("tenant_id", cascadeTenantIds);
 
               if (parentUpdateError) {
                 console.error(
@@ -252,7 +279,7 @@ export async function deprecateVendorProduct(
               }
 
               // その親のさらに親も連鎖的にdeprecate
-              await deprecateItemCascade(line.parent_item_id, now, tenantIds);
+              await deprecateItemCascade(line.parent_item_id, now, cascadeTenantIds);
             }
             continue;
           }
@@ -262,7 +289,7 @@ export async function deprecateVendorProduct(
             .from("virtual_vendor_products")
             .select("*")
             .in("id", otherVirtualProductIds)
-            .in("tenant_id", tenantIds)
+            .in("tenant_id", cascadeTenantIds)
             .is("deprecated", null);
 
           if (otherError) continue;
@@ -281,7 +308,7 @@ export async function deprecateVendorProduct(
                 .from("items")
                 .update({ deprecated: now, deprecation_reason: "indirect" })
                 .eq("id", line.parent_item_id)
-                .in("tenant_id", tenantIds);
+                .in("tenant_id", cascadeTenantIds);
 
               if (parentUpdateError) {
                 console.error(
@@ -292,7 +319,7 @@ export async function deprecateVendorProduct(
               }
 
               // その親のさらに親も連鎖的にdeprecate
-              await deprecateItemCascade(line.parent_item_id, now, tenantIds);
+              await deprecateItemCascade(line.parent_item_id, now, cascadeTenantIds);
             }
           } else {
             // 代替がある場合、最安値を探して切り替え、last_changeを記録
@@ -301,7 +328,7 @@ export async function deprecateVendorProduct(
               vendorProduct,
               otherVPs,
               vendorProductId,
-              tenantIds
+              cascadeTenantIds
             );
           }
         }
@@ -344,8 +371,16 @@ export async function deprecatePreppedItem(
 
     const now = new Date().toISOString();
 
+    const cascadeTenantIds =
+      (await getTenantIdsInSameCompany(item.tenant_id)) ?? tenantIds;
+
     // 先に親itemsを再帰的にdeprecatedにする（この時点ではまだItem自体はactive）
-    const affectedItemIds = await deprecateItemCascade(itemId, now, tenantIds);
+    // 同一 company 内の全テナントの recipe_lines を辿る（Hide の有無に依存しない）
+    const affectedItemIds = await deprecateItemCascade(
+      itemId,
+      now,
+      cascadeTenantIds,
+    );
 
     // その後、Itemをdeprecatedにする（direct - ユーザーが明示的にdeprecate）
     // 既にindirectでdeprecatedされている場合でも、directに上書き
@@ -353,7 +388,7 @@ export async function deprecatePreppedItem(
       .from("items")
       .update({ deprecated: now, deprecation_reason: "direct" })
       .eq("id", itemId)
-      .in("tenant_id", tenantIds);
+      .eq("tenant_id", item.tenant_id);
 
     if (updateError) {
       return { success: false, error: updateError.message };
@@ -452,12 +487,12 @@ async function switchToLowestVendorProduct(
 ): Promise<void> {
   try {
     // 最安のvendor_productを探す（コスト計算ロジックと同じ）
-    // 簡易的にpurchase_cost / purchase_quantityで比較
+    // 簡易的に current_price / purchase_quantity で比較
     let lowestVP = activeVendorProducts[0];
-    let lowestCostPerUnit = lowestVP.purchase_cost / lowestVP.purchase_quantity;
+    let lowestCostPerUnit = lowestVP.current_price / lowestVP.purchase_quantity;
 
     for (const vp of activeVendorProducts) {
-      const costPerUnit = vp.purchase_cost / vp.purchase_quantity;
+      const costPerUnit = vp.current_price / vp.purchase_quantity;
       if (costPerUnit < lowestCostPerUnit) {
         lowestVP = vp;
         lowestCostPerUnit = costPerUnit;
@@ -583,11 +618,14 @@ export async function undeprecateItem(
       }
     }
 
+    const cascadeTenantIds =
+      (await getTenantIdsInSameCompany(item.tenant_id)) ?? tenantIds;
+
     // Prepped itemの場合、すべての材料がアクティブかチェック
     if (item.item_kind === "prepped") {
       const allIngredientsActive = await checkAllIngredientsActive(
         itemId,
-        tenantIds
+        cascadeTenantIds
       );
       if (!allIngredientsActive) {
         return {
@@ -618,13 +656,13 @@ export async function undeprecateItem(
       .select("*")
       .eq("line_type", "ingredient")
       .eq("child_item_id", itemId)
-      .in("tenant_id", tenantIds);
+      .in("tenant_id", cascadeTenantIds);
 
     if (!rlError && recipeLines) {
       for (const line of recipeLines) {
         const result = await recursivelyUndeprecateParents(
           line.parent_item_id,
-          tenantIds,
+          cascadeTenantIds,
           new Set()
         );
         result.forEach((id) => undeprecatedItems.add(id));
@@ -695,6 +733,18 @@ export async function undeprecateBaseItem(
       return { success: false, error: error.message };
     }
 
+    const { data: baseRow } = await supabase
+      .from("base_items")
+      .select("tenant_id")
+      .eq("id", baseItemId)
+      .in("tenant_id", tenantIds)
+      .maybeSingle();
+
+    const cascadeTenantIds =
+      baseRow?.tenant_id != null
+        ? (await getTenantIdsInSameCompany(baseRow.tenant_id)) ?? tenantIds
+        : tenantIds;
+
     const undeprecatedItems = new Set<string>();
 
     // 対応するraw itemsをundeprecate
@@ -703,7 +753,7 @@ export async function undeprecateBaseItem(
       .select("*")
       .eq("item_kind", "raw")
       .eq("base_item_id", baseItemId)
-      .in("tenant_id", tenantIds)
+      .in("tenant_id", cascadeTenantIds)
       .not("deprecated", "is", null);
 
     if (!rawError && rawItems) {
@@ -712,7 +762,7 @@ export async function undeprecateBaseItem(
           .from("items")
           .update({ deprecated: null, deprecation_reason: null })
           .eq("id", rawItem.id)
-          .in("tenant_id", tenantIds);
+          .in("tenant_id", cascadeTenantIds);
 
         if (!itemUpdateError) {
           undeprecatedItems.add(rawItem.id);
@@ -726,13 +776,13 @@ export async function undeprecateBaseItem(
             .select("*")
             .eq("line_type", "ingredient")
             .eq("child_item_id", rawItem.id)
-            .in("tenant_id", tenantIds);
+            .in("tenant_id", cascadeTenantIds);
 
           if (!rlError && recipeLines) {
             for (const line of recipeLines) {
               const result = await recursivelyUndeprecateParents(
                 line.parent_item_id,
-                tenantIds,
+                cascadeTenantIds,
                 new Set()
               );
               result.forEach((id) => undeprecatedItems.add(id));
@@ -973,6 +1023,9 @@ export async function autoUndeprecateAfterVendorProductCreation(
       return { success: false };
     }
 
+    const cascadeTenantIds =
+      (await getTenantIdsInSameCompany(vendorProduct.tenant_id)) ?? tenantIds;
+
     const undeprecatedItems = new Set<string>();
 
     // product_mappingsからこのvirtual_product_idにマッピングされているbase_item_idを取得
@@ -980,7 +1033,7 @@ export async function autoUndeprecateAfterVendorProductCreation(
       .from("product_mappings")
       .select("base_item_id")
       .eq("virtual_product_id", vendorProductId)
-      .in("tenant_id", tenantIds);
+      .in("tenant_id", cascadeTenantIds);
 
     if (mappingError || !mappings || mappings.length === 0) {
       // マッピングがない場合は何もしない
@@ -995,7 +1048,7 @@ export async function autoUndeprecateAfterVendorProductCreation(
       .select("*")
       .eq("item_kind", "raw")
       .in("base_item_id", baseItemIds)
-      .in("tenant_id", tenantIds);
+      .in("tenant_id", cascadeTenantIds);
 
     if (rawError || !rawItems) {
       return { success: false };
@@ -1008,7 +1061,7 @@ export async function autoUndeprecateAfterVendorProductCreation(
         .select("*")
         .eq("line_type", "ingredient")
         .eq("child_item_id", rawItem.id)
-        .in("tenant_id", tenantIds);
+        .in("tenant_id", cascadeTenantIds);
 
       if (rlError || !recipeLines) continue;
 
@@ -1022,7 +1075,7 @@ export async function autoUndeprecateAfterVendorProductCreation(
         ) {
           const result = await recursivelyUndeprecateParents(
             line.parent_item_id,
-            tenantIds,
+            cascadeTenantIds,
             new Set()
           );
           result.forEach((id) => undeprecatedItems.add(id));
@@ -1052,9 +1105,20 @@ export async function autoUndeprecateAfterRecipeLineUpdate(
       tenantIds: string[]
 ): Promise<{ success: boolean; undeprecatedItems?: string[] }> {
   try {
+    const { data: parent } = await supabase
+      .from("items")
+      .select("tenant_id")
+      .eq("id", parentItemId)
+      .maybeSingle();
+
+    const cascadeTenantIds =
+      parent?.tenant_id != null
+        ? (await getTenantIdsInSameCompany(parent.tenant_id)) ?? tenantIds
+        : tenantIds;
+
     const undeprecatedItems = await recursivelyUndeprecateParents(
       parentItemId,
-      tenantIds,
+      cascadeTenantIds,
       new Set()
     );
 

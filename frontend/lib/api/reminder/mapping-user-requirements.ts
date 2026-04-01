@@ -23,6 +23,16 @@ export interface MappingUserRequirementPayload {
 }
 
 export const mappingUserRequirementsAPI = {
+  /** 1 人×1 要件の mapping 履歴を created_at 降順で全件 */
+  getHistory: (userId: string, userRequirementId: string) => {
+    const params = new URLSearchParams();
+    params.set("user_id", userId);
+    params.set("user_requirement_id", userRequirementId);
+    return apiRequest<MappingUserRequirementRow[]>(
+      `/mapping-user-requirements/history?${params.toString()}`
+    );
+  },
+
   /** 指定した user_ids / user_requirement_ids の組み合わせについて、各 (user_id, user_requirement_id) の最新1件を取得 */
   getMappings: (params: {
     user_ids?: string[];

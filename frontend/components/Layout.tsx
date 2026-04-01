@@ -3,15 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Calculator,
-  Package,
-  Settings,
   Moon,
   Sun,
   Users,
   Menu,
   Shield,
   Award,
+  Utensils,
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
@@ -22,33 +20,42 @@ import { TenantSelector } from "./TenantSelector";
 import { useState, useEffect } from "react";
 import { apiRequest } from "@/lib/api";
 
-// ナビゲーション項目
-const navigationItems = [
-  {
-    id: "cost",
-    label: "Recipes",
-    icon: Calculator,
-    href: "/cost",
-  },
-  {
-    id: "items",
-    label: "Items",
-    icon: Package,
-    href: "/items",
-  },
-  {
-    id: "team",
-    label: "Team",
-    icon: Users,
-    href: "/team",
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    icon: Settings,
-    href: "/settings",
-  },
+/**
+ * サイドバー各行: 2行ラベル(text-sm leading-tight)+h-5アイコン+py-2 を収容。
+ * 畳み・展開で行高が変わらないように最低高を固定し、items-center でアイコン縦位置を統一。
+ */
+const SIDEBAR_NAV_ROW_MIN = "min-h-14";
+const SIDEBAR_NAV_ROW_ALIGN = `${SIDEBAR_NAV_ROW_MIN} flex items-center gap-2`;
+
+/** 外側クリップ用の幅（内側レイアウト幅と一致） */
+const SIDEBAR_COLLAPSED_PX = 64;
+const SIDEBAR_EXPANDED_PX = 178;
+
+/** Recipes / Items / History / Settings いずれかのパスか */
+function isFoodCostingPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/cost") ||
+    pathname.startsWith("/items") ||
+    pathname.startsWith("/history") ||
+    pathname.startsWith("/settings")
+  );
+}
+
+// Food costing サブメニュー
+const foodCostingSubItems = [
+  { id: "cost", label: "Recipes", href: "/cost" },
+  { id: "items", label: "Items", href: "/items" },
+  { id: "history", label: "History", href: "/history" },
+  { id: "settings", label: "Settings", href: "/settings" },
 ];
+
+// Team（単体リンク）
+const teamNavItem = {
+  id: "team",
+  label: "Team",
+  icon: Users,
+  href: "/team",
+} as const;
 
 // License & certification のサブメニュー
 const licenseSubItems = [
@@ -77,15 +84,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [isHovered, setIsHovered] = useState(false);
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
   const [licenseExpanded, setLicenseExpanded] = useState(false);
+  const [foodCostingExpanded, setFoodCostingExpanded] = useState(false);
 
-  // License & certification 配下のページにいる場合は親を開いた状態に
+  const isFoodCostingSectionActive = isFoodCostingPath(pathname);
+
+  const isLicenseSectionActive =
+    pathname.startsWith("/employee-requirements") ||
+    pathname.startsWith("/tenant-requirements") ||
+    pathname.startsWith("/company-requirements");
+
+  // License 配下にいるときは開く／それ以外では閉じる（他ページ選択時はサブも畳む）
   useEffect(() => {
-    if (
+    setLicenseExpanded(
       pathname.startsWith("/employee-requirements") ||
-      pathname.startsWith("/tenant-requirements") ||
-      pathname.startsWith("/company-requirements")
-    )
-      setLicenseExpanded(true);
+        pathname.startsWith("/tenant-requirements") ||
+        pathname.startsWith("/company-requirements"),
+    );
+  }, [pathname]);
+
+  // Food costing 配下にいるときは開く／それ以外では閉じる
+  useEffect(() => {
+    setFoodCostingExpanded(isFoodCostingPath(pathname));
   }, [pathname]);
 
   // System Adminチェック
@@ -114,10 +133,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
       return "Tenant Requirements";
     if (pathname.startsWith("/company-requirements"))
       return "Company Requirements";
-    const currentItem = navigationItems.find(
+    const foodItem = foodCostingSubItems.find(
       (item) => pathname === item.href || pathname.startsWith(item.href + "/"),
     );
-    return currentItem ? currentItem.label : "Food Costing";
+    if (foodItem) return foodItem.label;
+    if (
+      pathname === teamNavItem.href ||
+      pathname.startsWith(teamNavItem.href + "/")
+    )
+      return teamNavItem.label;
+    return "Food Costing";
   };
 
   // サイドバーの表示モードを切り替え
@@ -130,10 +155,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isSidebarExpanded =
     sidebarMode === "full" || (sidebarMode === "compact" && isHovered);
 
-  // サイドバーの幅を決定
-  const sidebarWidth = isSidebarExpanded ? "178px" : "64px";
+  // 外側だけ幅アニメ。内側は常に SIDEBAR_EXPANDED_PX でレイアウトし overflow で切る
+  const sidebarWidth = isSidebarExpanded
+    ? `${SIDEBAR_EXPANDED_PX}px`
+    : `${SIDEBAR_COLLAPSED_PX}px`;
 
   const isDark = theme === "dark";
+  const TeamNavIcon = teamNavItem.icon;
 
   return (
     <div
@@ -217,9 +245,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
           />
         )}
 
-        {/* サイドバー（左側、ヘッダーの下から） */}
+        {/* サイドバー：外側は block のクリップ窓。内側は常に展開幅でレイアウト。
+            コンパクト時はラベル・シェブロンは isSidebarExpanded で非表示（アイコンのみ）。 */}
         <div
-          className={`h-full shadow-lg flex flex-col border-r transition-all duration-300 ease-in-out overflow-hidden ${
+          className={`h-full min-w-0 shrink-0 shadow-lg border-r overflow-hidden transition-[width] duration-300 ease-in-out ${
             isDark
               ? "bg-slate-800 border-slate-700"
               : "bg-white border-gray-200"
@@ -238,78 +267,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
             }
           }}
         >
+          <div
+            className="flex h-full min-h-0 flex-col overflow-hidden"
+            style={{
+              width: SIDEBAR_EXPANDED_PX,
+              minWidth: SIDEBAR_EXPANDED_PX,
+              maxWidth: SIDEBAR_EXPANDED_PX,
+            }}
+          >
           {/* ナビゲーション項目 */}
-          <nav className="flex-1 px-3 pb-3 overflow-hidden pt-6">
-            <div className="flex flex-col h-full gap-2">
-              {navigationItems.map((item) => {
-                const IconComponent = item.icon;
-                const isActive =
-                  pathname === item.href ||
-                  pathname.startsWith(item.href + "/");
-
-                return (
-                  <Link
-                    key={item.id}
-                    href={item.href}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
-                      isActive
-                        ? isDark
-                          ? "text-blue-400 font-semibold"
-                          : "text-blue-700 font-semibold"
-                        : isDark
-                          ? "text-slate-300 hover:text-blue-400"
-                          : "text-gray-600 hover:text-blue-700"
-                    }`}
-                    style={{
-                      backgroundColor: isDark ? "#1e293b" : "white",
-                      transition:
-                        "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
-                      color: isActive
-                        ? isDark
-                          ? "#60a5fa"
-                          : "#1d4ed8"
-                        : isDark
-                          ? "#cbd5e1"
-                          : "#6b7280",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = isDark
-                        ? "#334155"
-                        : "#dbeafe";
-                      e.currentTarget.style.color = isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = isDark
-                        ? "#1e293b"
-                        : "white";
-                      e.currentTarget.style.color = isActive
-                        ? isDark
-                          ? "#60a5fa"
-                          : "#1d4ed8"
-                        : isDark
-                          ? "#cbd5e1"
-                          : "#6b7280";
-                    }}
-                  >
-                    <IconComponent className="h-5 w-5 shrink-0" />
-                    {isSidebarExpanded && (
-                      <span className="text-sm whitespace-nowrap">
-                        {item.label}
-                      </span>
-                    )}
-                  </Link>
-                );
-              })}
-
-              {/* License & certification（クリックで開閉、サブの Requirements で遷移） */}
+          <nav className="flex-1 min-h-0 min-w-0 px-3 pb-3 overflow-hidden pt-6">
+            <div className="flex min-h-0 min-w-0 flex-col h-full gap-2">
+              {/* Food costing（クリックで開閉、サブで Recipes / Items / History / Settings） */}
               <div className="flex flex-col gap-0">
                 <button
                   type="button"
-                  onClick={() => setLicenseExpanded((e) => !e)}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
-                    licenseExpanded
+                  onClick={() => setFoodCostingExpanded((e) => !e)}
+                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                    isFoodCostingSectionActive
                       ? isDark
                         ? "text-blue-400 font-semibold"
                         : "text-blue-700 font-semibold"
@@ -319,7 +294,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   }`}
                   style={{
                     backgroundColor: isDark ? "#1e293b" : "white",
-                    color: licenseExpanded
+                    color: isFoodCostingSectionActive
                       ? isDark
                         ? "#60a5fa"
                         : "#1d4ed8"
@@ -339,7 +314,176 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     e.currentTarget.style.backgroundColor = isDark
                       ? "#1e293b"
                       : "white";
-                    e.currentTarget.style.color = licenseExpanded
+                    e.currentTarget.style.color = isFoodCostingSectionActive
+                      ? isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8"
+                      : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280";
+                  }}
+                >
+                  <Utensils className="h-5 w-5 shrink-0" />
+                  {isSidebarExpanded && (
+                    <>
+                      <span className="text-sm leading-tight text-left flex-1 min-w-0">
+                        Food
+                        <br />
+                        Costing
+                      </span>
+                      {foodCostingExpanded ? (
+                        <ChevronDown className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 shrink-0" />
+                      )}
+                    </>
+                  )}
+                </button>
+                {isSidebarExpanded &&
+                  foodCostingExpanded &&
+                  foodCostingSubItems.map((sub) => {
+                    const isActive =
+                      pathname === sub.href ||
+                      pathname.startsWith(sub.href + "/");
+                    return (
+                      <Link
+                        key={sub.id}
+                        href={sub.href}
+                        className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} pl-9 pr-3 py-2 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                          isActive ? "font-semibold" : ""
+                        }`}
+                        style={{
+                          backgroundColor: isDark ? "#1e293b" : "white",
+                          color: isActive
+                            ? isDark
+                              ? "#60a5fa"
+                              : "#1d4ed8"
+                            : isDark
+                              ? "#94a3b8"
+                              : "#6b7280",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = isDark
+                            ? "#334155"
+                            : "#dbeafe";
+                          e.currentTarget.style.color = isDark
+                            ? "#60a5fa"
+                            : "#1d4ed8";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = isDark
+                            ? "#1e293b"
+                            : "white";
+                          e.currentTarget.style.color = isActive
+                            ? isDark
+                              ? "#60a5fa"
+                              : "#1d4ed8"
+                            : isDark
+                              ? "#94a3b8"
+                              : "#6b7280";
+                        }}
+                      >
+                        {sub.label}
+                      </Link>
+                    );
+                  })}
+              </div>
+
+              {/* Team */}
+              <Link
+                key={teamNavItem.id}
+                href={teamNavItem.href}
+                className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
+                  pathname === teamNavItem.href ||
+                  pathname.startsWith(teamNavItem.href + "/")
+                    ? isDark
+                      ? "text-blue-400 font-semibold"
+                      : "text-blue-700 font-semibold"
+                    : isDark
+                      ? "text-slate-300 hover:text-blue-400"
+                      : "text-gray-600 hover:text-blue-700"
+                }`}
+                style={{
+                  backgroundColor: isDark ? "#1e293b" : "white",
+                  transition:
+                    "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
+                  color:
+                    pathname === teamNavItem.href ||
+                    pathname.startsWith(teamNavItem.href + "/")
+                      ? isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8"
+                      : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = isDark
+                    ? "#334155"
+                    : "#dbeafe";
+                  e.currentTarget.style.color = isDark ? "#60a5fa" : "#1d4ed8";
+                }}
+                onMouseLeave={(e) => {
+                  const teamActive =
+                    pathname === teamNavItem.href ||
+                    pathname.startsWith(teamNavItem.href + "/");
+                  e.currentTarget.style.backgroundColor = isDark
+                    ? "#1e293b"
+                    : "white";
+                  e.currentTarget.style.color = teamActive
+                    ? isDark
+                      ? "#60a5fa"
+                      : "#1d4ed8"
+                    : isDark
+                      ? "#cbd5e1"
+                      : "#6b7280";
+                }}
+              >
+                <TeamNavIcon className="h-5 w-5 shrink-0" />
+                {isSidebarExpanded && (
+                  <span className="text-sm whitespace-nowrap">
+                    {teamNavItem.label}
+                  </span>
+                )}
+              </Link>
+
+              {/* License & certification（クリックで開閉、サブの Requirements で遷移） */}
+              <div className="flex flex-col gap-0">
+                <button
+                  type="button"
+                  onClick={() => setLicenseExpanded((e) => !e)}
+                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                    isLicenseSectionActive
+                      ? isDark
+                        ? "text-blue-400 font-semibold"
+                        : "text-blue-700 font-semibold"
+                      : isDark
+                        ? "text-slate-300 hover:text-blue-400"
+                        : "text-gray-600 hover:text-blue-700"
+                  }`}
+                  style={{
+                    backgroundColor: isDark ? "#1e293b" : "white",
+                    color: isLicenseSectionActive
+                      ? isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8"
+                      : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#334155"
+                      : "#dbeafe";
+                    e.currentTarget.style.color = isDark
+                      ? "#60a5fa"
+                      : "#1d4ed8";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#1e293b"
+                      : "white";
+                    e.currentTarget.style.color = isLicenseSectionActive
                       ? isDark
                         ? "#60a5fa"
                         : "#1d4ed8"
@@ -351,13 +495,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   <Award className="h-5 w-5 shrink-0" />
                   {isSidebarExpanded && (
                     <>
-                      <span className="text-sm whitespace-nowrap">
-                        License & certification
+                      <span className="text-sm leading-tight text-left flex-1 min-w-0">
+                        <span className="whitespace-nowrap">License &</span>
+                        <br />
+                        certification
                       </span>
                       {licenseExpanded ? (
-                        <ChevronDown className="h-4 w-4 ml-auto shrink-0" />
+                        <ChevronDown className="h-4 w-4 shrink-0" />
                       ) : (
-                        <ChevronRight className="h-4 w-4 ml-auto shrink-0" />
+                        <ChevronRight className="h-4 w-4 shrink-0" />
                       )}
                     </>
                   )}
@@ -372,7 +518,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       <Link
                         key={sub.id}
                         href={sub.href}
-                        className={`w-full flex items-center gap-2 pl-9 pr-3 py-2 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                        className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} pl-9 pr-3 py-2 text-left transition-colors border-0 no-underline rounded-md text-sm ${
                           isActive ? "font-semibold" : ""
                         }`}
                         style={{
@@ -416,7 +562,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
               {isSystemAdmin && (
                 <Link
                   href="/admin"
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
+                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
                     pathname === "/admin"
                       ? isDark
                         ? "text-blue-400 font-semibold"
@@ -475,7 +621,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="px-3 pb-3">
             <button
               onClick={toggleTheme}
-              className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md transition-colors ${
+              className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} justify-start px-3 py-2 rounded-md transition-colors ${
                 isDark
                   ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
                   : "bg-gray-100 hover:bg-gray-200 text-gray-700"
@@ -498,6 +644,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </>
               )}
             </button>
+          </div>
           </div>
         </div>
 

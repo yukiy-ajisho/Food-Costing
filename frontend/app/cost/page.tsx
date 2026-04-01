@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment, useEffect, useRef } from "react";
+import { useState, Fragment, useEffect, useRef, useMemo } from "react";
 import {
   Edit,
   Save,
@@ -24,6 +24,7 @@ import {
   productMappingsAPI,
   proceedValidationSettingsAPI,
   resourceSharesAPI,
+  crossTenantItemSharesAPI,
   apiRequest,
   saveChangeHistory,
   getItemDisplayName,
@@ -35,7 +36,10 @@ import {
   type VendorProduct,
   type Vendor,
   type ResourceShare,
+  type CrossTenantItemShare,
+  type CrossTenantGrandfatheredIngredientMeta,
 } from "@/lib/api";
+import { useCompany } from "@/contexts/CompanyContext";
 import {
   MASS_UNIT_CONVERSIONS,
   MASS_UNITS_ORDERED,
@@ -107,6 +111,8 @@ function AddItemModal({
   baseItems,
   laborRoles,
   vendors,
+  crossTenantAvailableItems,
+  grandfatheredIngredientLabels,
   getAvailableItemsForSelect,
   getAvailableVendorProducts,
   getAvailableUnitsForItem,
@@ -120,20 +126,40 @@ function AddItemModal({
   baseItems: BaseItem[];
   laborRoles: LaborRole[];
   vendors: Vendor[];
-  getAvailableItemsForSelect: (currentChildItemId?: string) => Array<{
+  crossTenantAvailableItems: Array<{
+    item: {
+      id: string;
+      name: string | null;
+      tenant_id: string;
+      proceed_yield_unit?: string | null;
+      each_grams?: number | null;
+      deprecated?: string | null;
+    };
+    ownerTenantName: string;
+  }>;
+  grandfatheredIngredientLabels: Record<
+    string,
+    CrossTenantGrandfatheredIngredientMeta
+  >;
+  getAvailableItemsForSelect: (
+    currentChildItemId?: string,
+    typeFilter?: "raw" | "prepped" | "cross-tenant",
+    ownerTenantFilter?: string,
+  ) => Array<{
     id: string;
     name: string;
+    subLabel?: string;
     disabled?: boolean;
     deprecated?: boolean;
   }>;
   getAvailableVendorProducts: (
     childItemId: string,
-    currentSpecificChild?: string | null
+    currentSpecificChild?: string | null,
   ) => VendorProduct[];
   getAvailableUnitsForItem: (itemId: string) => string[];
   calculateCostPerKg: (
     vendorProduct: VendorProduct,
-    childItem: Item
+    childItem: Item,
   ) => number | null;
 }) {
   const [name, setName] = useState("");
@@ -143,12 +169,28 @@ function AddItemModal({
     string | null
   >(null); // 入力中の文字列を保持
   const [proceedYieldUnit, setProceedYieldUnit] = useState<"g" | "kg" | "each">(
-    "g"
+    "g",
   );
   const [eachGrams, setEachGrams] = useState<number | null>(null);
   const [eachGramsInput, setEachGramsInput] = useState<string | null>(null); // 入力中の文字列を保持
   const [notes, setNotes] = useState("");
   const [recipeLines, setRecipeLines] = useState<RecipeLine[]>([]);
+  // ingredient 行ごとのアイテム種別ラジオ選択（line.id -> "raw" | "prepped" | "cross-tenant"）
+  const [ingredientTypeByLine, setIngredientTypeByLine] = useState<
+    Map<string, "raw" | "prepped" | "cross-tenant">
+  >(new Map());
+  // cross-tenant 行ごとのオーナーテナントフィルター（line.id -> "all" | tenantId）
+  const [crossTenantFilterByLine, setCrossTenantFilterByLine] = useState<
+    Map<string, string>
+  >(new Map());
+  // cross-tenant アイテムを持つテナント一覧（プルダウン用）
+  const crossTenantOwnerTenantsModal = useMemo(() => {
+    const seen = new Map<string, string>();
+    crossTenantAvailableItems.forEach(({ item, ownerTenantName }) => {
+      if (!seen.has(item.tenant_id)) seen.set(item.tenant_id, ownerTenantName);
+    });
+    return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
+  }, [crossTenantAvailableItems]);
   // 入力中のquantityを文字列として保持（line.id -> 入力中の文字列）
   const [modalQuantityInputs, setModalQuantityInputs] = useState<
     Map<string, string>
@@ -162,7 +204,7 @@ function AddItemModal({
   const handleModalRecipeLineChange = (
     lineId: string,
     field: keyof RecipeLine,
-    value: string | number | null
+    value: string | number | null,
   ) => {
     setRecipeLines(
       recipeLines.map((line) => {
@@ -182,7 +224,7 @@ function AddItemModal({
           return updatedLine;
         }
         return line;
-      })
+      }),
     );
   };
 
@@ -219,8 +261,8 @@ function AddItemModal({
       recipeLines.map((line) =>
         line.id === lineId
           ? { ...line, isMarkedForDeletion: !line.isMarkedForDeletion }
-          : line
-      )
+          : line,
+      ),
     );
   };
 
@@ -232,7 +274,7 @@ function AddItemModal({
 
     // レシピラインが少なくとも1つ必要
     const activeRecipeLines = recipeLines.filter(
-      (line) => !line.isMarkedForDeletion
+      (line) => !line.isMarkedForDeletion,
     );
     if (activeRecipeLines.length === 0) {
       alert("At least one recipe line (ingredient or labor) is required");
@@ -255,6 +297,24 @@ function AddItemModal({
 
     onSave(newItem);
   };
+
+  // ingredient 種別の導出・取得ヘルパー（AddItemModal 内）
+  const deriveIngredientTypeModal = (
+    childItemId: string | null | undefined,
+  ): "raw" | "prepped" | "cross-tenant" => {
+    if (!childItemId) return "raw";
+    if (crossTenantAvailableItems.some(({ item }) => item.id === childItemId))
+      return "cross-tenant";
+    if (grandfatheredIngredientLabels[childItemId]) return "cross-tenant";
+    const found = availableItems.find((i) => i.id === childItemId);
+    return found?.item_kind === "prepped" ? "prepped" : "raw";
+  };
+
+  const getIngredientTypeForLineModal = (
+    lineId: string,
+    childItemId: string | null | undefined,
+  ): "raw" | "prepped" | "cross-tenant" =>
+    ingredientTypeByLine.get(lineId) ?? deriveIngredientTypeModal(childItemId);
 
   return (
     <div
@@ -362,8 +422,8 @@ function AddItemModal({
                   proceedYieldAmountInput !== null
                     ? proceedYieldAmountInput
                     : proceedYieldAmount === 0
-                    ? ""
-                    : String(proceedYieldAmount)
+                      ? ""
+                      : String(proceedYieldAmount)
                 }
                 onChange={(e) => {
                   const value = e.target.value;
@@ -571,18 +631,116 @@ function AddItemModal({
                           }
                         >
                           <td className="px-4 py-2">
+                            {/* アイテム種別ラジオボタン */}
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              {(
+                                ["raw", "prepped", "cross-tenant"] as const
+                              ).map((type) => {
+                                const currentType =
+                                  getIngredientTypeForLineModal(
+                                    line.id,
+                                    line.child_item_id,
+                                  );
+                                return (
+                                  <div
+                                    key={type}
+                                    className="flex items-center gap-1"
+                                  >
+                                    <label className="flex items-center gap-1 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name={`ingredient-type-modal-${line.id}`}
+                                        checked={currentType === type}
+                                        onChange={() => {
+                                          if (currentType !== type) {
+                                            setIngredientTypeByLine((prev) =>
+                                              new Map(prev).set(line.id, type),
+                                            );
+                                            handleModalRecipeLineChange(
+                                              line.id,
+                                              "child_item_id",
+                                              "",
+                                            );
+                                            if (type !== "cross-tenant") {
+                                              setCrossTenantFilterByLine(
+                                                (prev) => {
+                                                  const next = new Map(prev);
+                                                  next.delete(line.id);
+                                                  return next;
+                                                },
+                                              );
+                                            }
+                                          }
+                                        }}
+                                        className="w-3 h-3 accent-blue-500"
+                                      />
+                                      <span
+                                        className={`text-xs ${isDark ? "text-slate-300" : "text-gray-600"}`}
+                                      >
+                                        {type === "raw"
+                                          ? "Base Item"
+                                          : type === "prepped"
+                                            ? "Prepped Item"
+                                            : "Other tenant item"}
+                                      </span>
+                                    </label>
+                                    {type === "cross-tenant" &&
+                                      currentType === "cross-tenant" &&
+                                      crossTenantOwnerTenantsModal.length >
+                                        0 && (
+                                        <select
+                                          value={
+                                            crossTenantFilterByLine.get(
+                                              line.id,
+                                            ) ?? "all"
+                                          }
+                                          onChange={(e) =>
+                                            setCrossTenantFilterByLine((prev) =>
+                                              new Map(prev).set(
+                                                line.id,
+                                                e.target.value,
+                                              ),
+                                            )
+                                          }
+                                          className={`text-xs border rounded px-1 py-0.5 ${isDark ? "bg-slate-700 border-slate-600 text-slate-300" : "bg-white border-gray-300 text-gray-700"}`}
+                                        >
+                                          <option value="all">All</option>
+                                          {crossTenantOwnerTenantsModal.map(
+                                            (t) => (
+                                              <option key={t.id} value={t.id}>
+                                                {t.name}
+                                              </option>
+                                            ),
+                                          )}
+                                        </select>
+                                      )}
+                                  </div>
+                                );
+                              })}
+                            </div>
                             <SearchableSelect
                               options={getAvailableItemsForSelect(
-                                line.child_item_id
+                                line.child_item_id,
+                                getIngredientTypeForLineModal(
+                                  line.id,
+                                  line.child_item_id,
+                                ),
+                                crossTenantFilterByLine.get(line.id) ?? "all",
                               )}
                               value={line.child_item_id || ""}
-                              onChange={(value) =>
+                              onChange={(value) => {
                                 handleModalRecipeLineChange(
                                   line.id,
                                   "child_item_id",
-                                  value
-                                )
-                              }
+                                  value,
+                                );
+                                setIngredientTypeByLine((prev) =>
+                                  new Map(prev).set(
+                                    line.id,
+                                    deriveIngredientTypeModal(value),
+                                  ),
+                                );
+                              }}
                               placeholder="Select item..."
                             />
                           </td>
@@ -590,13 +748,13 @@ function AddItemModal({
                           <td className="px-4 py-2">
                             {(() => {
                               const childItem = availableItems.find(
-                                (i) => i.id === line.child_item_id
+                                (i) => i.id === line.child_item_id,
                               );
                               const isRawItem = childItem?.item_kind === "raw";
                               const availableVendorProducts =
                                 getAvailableVendorProducts(
                                   line.child_item_id || "",
-                                  line.specific_child
+                                  line.specific_child,
                                 );
 
                               if (!isRawItem) {
@@ -628,7 +786,7 @@ function AddItemModal({
                                           handleModalRecipeLineChange(
                                             line.id,
                                             "specific_child",
-                                            "lowest"
+                                            "lowest",
                                           )
                                         }
                                         className="w-4 h-4"
@@ -658,7 +816,7 @@ function AddItemModal({
                                             handleModalRecipeLineChange(
                                               line.id,
                                               "specific_child",
-                                              availableVendorProducts[0].id
+                                              availableVendorProducts[0].id,
                                             );
                                           }
                                         }}
@@ -683,7 +841,7 @@ function AddItemModal({
                                           handleModalRecipeLineChange(
                                             line.id,
                                             "specific_child",
-                                            e.target.value
+                                            e.target.value,
                                           )
                                         }
                                         className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
@@ -694,7 +852,7 @@ function AddItemModal({
                                       >
                                         {availableVendorProducts.map((vp) => {
                                           const vendor = vendors.find(
-                                            (v) => v.id === vp.vendor_id
+                                            (v) => v.id === vp.vendor_id,
                                           );
                                           const vendorName = vendor?.name || "";
                                           const productName =
@@ -702,7 +860,7 @@ function AddItemModal({
                                             vp.brand_name ||
                                             "";
                                           const childItem = availableItems.find(
-                                            (i) => i.id === line.child_item_id
+                                            (i) => i.id === line.child_item_id,
                                           );
                                           const costPerKg = childItem
                                             ? calculateCostPerKg(vp, childItem)
@@ -710,7 +868,7 @@ function AddItemModal({
                                           const costDisplay =
                                             costPerKg !== null
                                               ? `    $${costPerKg.toFixed(
-                                                  2
+                                                  2,
                                                 )}/kg`
                                               : "";
                                           const isDeprecated = !!vp.deprecated;
@@ -748,8 +906,8 @@ function AddItemModal({
                                 modalQuantityInputs.has(line.id)
                                   ? modalQuantityInputs.get(line.id)!
                                   : line.quantity === 0 || !line.quantity
-                                  ? ""
-                                  : String(line.quantity)
+                                    ? ""
+                                    : String(line.quantity)
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
@@ -774,7 +932,7 @@ function AddItemModal({
                                 handleModalRecipeLineChange(
                                   line.id,
                                   "quantity",
-                                  numValue
+                                  numValue,
                                 );
                                 // 入力中の文字列をクリア
                                 setModalQuantityInputs((prev) => {
@@ -798,7 +956,7 @@ function AddItemModal({
                                 handleModalRecipeLineChange(
                                   line.id,
                                   "unit",
-                                  e.target.value
+                                  e.target.value,
                                 )
                               }
                               className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
@@ -810,7 +968,7 @@ function AddItemModal({
                             >
                               {(() => {
                                 const availableUnits = getAvailableUnitsForItem(
-                                  line.child_item_id || ""
+                                  line.child_item_id || "",
                                 );
                                 if (availableUnits.length === 0) {
                                   return (
@@ -820,12 +978,22 @@ function AddItemModal({
                                 return availableUnits.map((unit) => {
                                   let isEachDisabled = false;
                                   if (unit === "each" && line.child_item_id) {
-                                    const selectedItem = availableItems.find(
-                                      (i) => i.id === line.child_item_id
-                                    );
+                                    const crossRow =
+                                      crossTenantAvailableItems.find(
+                                        ({ item: it }) =>
+                                          it.id === line.child_item_id,
+                                      );
+                                    const gf =
+                                      grandfatheredIngredientLabels[
+                                        line.child_item_id
+                                      ];
+                                    const eachGrams = crossRow
+                                      ? crossRow.item.each_grams
+                                      : availableItems.find(
+                                          (i) => i.id === line.child_item_id,
+                                        )?.each_grams ?? gf?.each_grams;
                                     isEachDisabled =
-                                      !selectedItem?.each_grams ||
-                                      selectedItem.each_grams === 0;
+                                      !eachGrams || eachGrams === 0;
                                   }
                                   return (
                                     <option
@@ -855,8 +1023,8 @@ function AddItemModal({
                                 line.isMarkedForDeletion
                                   ? "bg-red-500 text-white hover:bg-red-600"
                                   : isDark
-                                  ? "text-slate-400 hover:text-red-500 hover:bg-red-50"
-                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                    ? "text-slate-400 hover:text-red-500 hover:bg-red-50"
+                                    : "text-gray-400 hover:text-red-500 hover:bg-red-50"
                               }`}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -951,7 +1119,7 @@ function AddItemModal({
                                 handleModalRecipeLineChange(
                                   line.id,
                                   "labor_role",
-                                  e.target.value
+                                  e.target.value,
                                 )
                               }
                               className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
@@ -976,8 +1144,8 @@ function AddItemModal({
                                 modalMinutesInputs.has(line.id)
                                   ? modalMinutesInputs.get(line.id)!
                                   : line.minutes === 0 || !line.minutes
-                                  ? ""
-                                  : String(line.minutes)
+                                    ? ""
+                                    : String(line.minutes)
                               }
                               onChange={(e) => {
                                 const value = e.target.value;
@@ -1000,7 +1168,7 @@ function AddItemModal({
                                 handleModalRecipeLineChange(
                                   line.id,
                                   "minutes",
-                                  numValue
+                                  numValue,
                                 );
                                 // 入力中の文字列をクリア
                                 setModalMinutesInputs((prev) => {
@@ -1026,8 +1194,8 @@ function AddItemModal({
                                 line.isMarkedForDeletion
                                   ? "bg-red-500 text-white hover:bg-red-600"
                                   : isDark
-                                  ? "text-slate-400 hover:text-red-500 hover:bg-red-50"
-                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                    ? "text-slate-400 hover:text-red-500 hover:bg-red-50"
+                                    : "text-gray-400 hover:text-red-500 hover:bg-red-50"
                               }`}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1086,20 +1254,54 @@ function AddItemModal({
 export default function CostPage() {
   const { theme } = useTheme();
   const { user, loading: userLoading } = useUser();
-  const { selectedTenantId, loading: tenantLoading, tenants: contextTenants } =
-    useTenant();
+  const {
+    selectedTenantId,
+    loading: tenantLoading,
+    tenants: contextTenants,
+  } = useTenant();
+  const { selectedCompanyId } = useCompany();
   const isDark = theme === "dark";
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [items, setItems] = useState<PreppedItem[]>([]);
   const [availableItems, setAvailableItems] = useState<Item[]>([]);
+  // 同じ company の公開 prepped items（API 生データ — テナント名は contextTenants と useMemo で解決）
+  const [crossTenantShareRows, setCrossTenantShareRows] = useState<
+    Array<{
+      item: {
+        id: string;
+        name: string | null;
+        tenant_id: string;
+        proceed_yield_unit?: string | null;
+        each_grams?: number | null;
+        deprecated?: string | null;
+      };
+      owner_tenant_id: string;
+    }>
+  >([]);
+
+  const crossTenantAvailableItems = useMemo(
+    () =>
+      crossTenantShareRows.map((row) => ({
+        item: row.item,
+        ownerTenantName:
+          contextTenants.find((t) => t.id === row.item.tenant_id)?.name ??
+          row.owner_tenant_id,
+      })),
+    [crossTenantShareRows, contextTenants],
+  );
+
+  /** Hide 済みだが既存 recipe が参照する他テナント prepped の表示・単位用（/available には出さない） */
+  const [grandfatheredIngredientLabels, setGrandfatheredIngredientLabels] =
+    useState<Record<string, CrossTenantGrandfatheredIngredientMeta>>({});
+
   const [baseItems, setBaseItems] = useState<BaseItem[]>([]);
   const [vendorProducts, setVendorProducts] = useState<VendorProductUI[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
   // モード管理
-  const [activeMode, setActiveMode] = useState<"costing" | "access-control">(
-    "costing"
-  );
+  const [activeMode, setActiveMode] = useState<
+    "costing" | "access-control" | "cross-tenant-access-control"
+  >("costing");
   // Costingモードの編集状態（既存のisEditModeをリネーム）
   const [isEditModeCosting, setIsEditModeCosting] = useState(false);
   // Access Controlモードの編集状態
@@ -1141,42 +1343,85 @@ export default function CostPage() {
       }
     >
   >({});
+  // cross-tenant breakdown 補完の重複実行を抑制
+  const missingBreakdownInFlightRef = useRef<Set<string>>(new Set());
+  const missingBreakdownResolvedRef = useRef<Set<string>>(new Set());
+  /** テナント切替時に前テナントの grandfather 表示キャッシュが残らないようにする */
+  const grandfatherIngredientTenantRef = useRef<string | null>(null);
   // 入力中のproceed_yield_amountを文字列として保持（item.id -> 入力中の文字列）
   const [yieldAmountInputs, setYieldAmountInputs] = useState<
     Map<string, string>
   >(new Map());
   // 入力中のeach_gramsを文字列として保持（item.id -> 入力中の文字列）
   const [eachGramsInputs, setEachGramsInputs] = useState<Map<string, string>>(
-    new Map()
+    new Map(),
   );
   // 入力中のwholesaleを文字列として保持（item.id -> 入力中の文字列）
   const [wholesaleInputs, setWholesaleInputs] = useState<Map<string, string>>(
-    new Map()
+    new Map(),
   );
   // 入力中のretailを文字列として保持（item.id -> 入力中の文字列）
   const [retailInputs, setRetailInputs] = useState<Map<string, string>>(
-    new Map()
+    new Map(),
   );
   // 入力中のquantityを文字列として保持（line.id -> 入力中の文字列）
   const [quantityInputs, setQuantityInputs] = useState<Map<string, string>>(
-    new Map()
+    new Map(),
   );
   // 入力中のminutesを文字列として保持（line.id -> 入力中の文字列）
   const [minutesInputs, setMinutesInputs] = useState<Map<string, string>>(
-    new Map()
+    new Map(),
   );
+  // インラインエディタ用 ingredient 種別ラジオ（line.id -> "raw" | "prepped" | "cross-tenant"）
+  const [ingredientTypeByLine, setIngredientTypeByLine] = useState<
+    Map<string, "raw" | "prepped" | "cross-tenant">
+  >(new Map());
+  // インラインエディタ用 cross-tenant テナントフィルター（line.id -> "all" | tenantId）
+  const [inlineCrossTenantFilterByLine, setInlineCrossTenantFilterByLine] =
+    useState<Map<string, string>>(new Map());
+  // cross-tenant アイテムを持つテナント一覧（インライン用）
+  const crossTenantOwnerTenants = useMemo(() => {
+    const seen = new Map<string, string>();
+    crossTenantAvailableItems.forEach(({ item, ownerTenantName }) => {
+      if (!seen.has(item.tenant_id)) seen.set(item.tenant_id, ownerTenantName);
+    });
+    return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
+  }, [crossTenantAvailableItems]);
   // 固定ヘッダーセクションの高さを取得するためのref
   const fixedHeaderRef = useRef<HTMLDivElement>(null);
   const [fixedHeaderHeight, setFixedHeaderHeight] = useState(0);
   // ユーザーのロール（現在のテナントでのロール）
   const [userRole, setUserRole] = useState<
-    "admin" | "manager" | "staff" | null
+    "admin" | "director" | "manager" | "staff" | "company" | null
   >(null);
+  /** company = テナントの profiles 無し・親会社オフィサー経由で見えているテナント */
+  const isTenantAdminOrDirector =
+    userRole === "admin" || userRole === "director" || userRole === "company";
   // 現在のユーザーID
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   // 各アイテムの共有設定（item.id -> ResourceShare | null）
   const [itemShares, setItemShares] = useState<
     Map<string, ResourceShare | null>
+  >(new Map());
+  // Cross-tenant 共有設定（item.id -> CrossTenantItemShare[]）
+  const [crossTenantShares, setCrossTenantShares] = useState<
+    Map<string, CrossTenantItemShare[]>
+  >(new Map());
+  const [loadingCrossTenantShares, setLoadingCrossTenantShares] =
+    useState(false);
+  // Cross-tenant 編集モード
+  const [isEditModeCrossTenant, setIsEditModeCrossTenant] = useState(false);
+  // Cross-tenant pending 変更（item.id -> "hide" | "company" | "tenant"）
+  const [pendingCrossTenantChanges, setPendingCrossTenantChanges] = useState<
+    Map<string, "hide" | "company" | "tenant">
+  >(new Map());
+  // "tenant" モード選択時の特定テナントID（item.id -> tenantId[]）
+  const [pendingSpecificTenantIds, setPendingSpecificTenantIds] = useState<
+    Map<string, string[]>
+  >(new Map());
+  // Cross-tenant 元の状態（Cancel用）
+  const [originalCrossTenantShares, setOriginalCrossTenantShares] = useState<
+    Map<string, CrossTenantItemShare[]>
   >(new Map());
   // マネージャーのリスト（責任者選択用）
   const [managers, setManagers] = useState<
@@ -1235,7 +1480,9 @@ export default function CostPage() {
                 console.error("Failed to fetch recipes:", error);
                 return { recipes: {} as Record<string, APIRecipeLine[]> };
               })
-            : Promise.resolve({ recipes: {} as Record<string, APIRecipeLine[]> });
+            : Promise.resolve({
+                recipes: {} as Record<string, APIRecipeLine[]>,
+              });
 
         // ④ その他のデータを待つ（breakdownはまだ待たない）
         const [
@@ -1252,7 +1499,7 @@ export default function CostPage() {
         mappingsData?.forEach((mapping) => {
           virtualProductToBaseItemMap.set(
             mapping.virtual_product_id,
-            mapping.base_item_id
+            mapping.base_item_id,
           );
         });
 
@@ -1274,7 +1521,12 @@ export default function CostPage() {
           const currentTenant =
             contextTenants.find((t) => t.id === selectedTenantId) ||
             contextTenants[0];
-          const role = currentTenant.role as "admin" | "manager" | "staff";
+          const role = currentTenant.role as
+            | "admin"
+            | "director"
+            | "manager"
+            | "staff"
+            | "company";
           setUserRole(role);
         }
 
@@ -1305,7 +1557,7 @@ export default function CostPage() {
                 let specificChild = line.specific_child || null;
                 if (line.line_type === "ingredient" && line.child_item_id) {
                   const childItem = allItems.find(
-                    (i) => i.id === line.child_item_id
+                    (i) => i.id === line.child_item_id,
                   );
                   if (childItem?.item_kind === "raw" && !specificChild) {
                     specificChild = "lowest";
@@ -1352,13 +1604,13 @@ export default function CostPage() {
             prev.map((item) => ({
               ...item,
               cost_per_gram: costsRecord[item.id]?.total_cost_per_gram,
-            }))
+            })),
           );
           setOriginalItems((prev) =>
             prev.map((item) => ({
               ...item,
               cost_per_gram: costsRecord[item.id]?.total_cost_per_gram,
-            }))
+            })),
           );
         }
       } catch (error) {
@@ -1379,8 +1631,8 @@ export default function CostPage() {
     return () => {
       cancelled = true;
     };
-  // contextTenants は tenantLoading が false のときには Context で既に設定済みのため依存からは除く（二重 fetch 防止）
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- contextTenants を入れると effect が余計に走り items/recipes 等が二重取得される
+    // contextTenants は tenantLoading が false のときには Context で既に設定済みのため依存からは除く（二重 fetch 防止）
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- contextTenants を入れると effect が余計に走り items/recipes 等が二重取得される
   }, [selectedTenantId, tenantLoading]);
 
   // 現在のユーザーIDを設定（userが取得できた後に設定）
@@ -1392,22 +1644,135 @@ export default function CostPage() {
     }
   }, [user]);
 
+  useEffect(() => {
+    missingBreakdownInFlightRef.current.clear();
+    missingBreakdownResolvedRef.current.clear();
+  }, [selectedTenantId]);
+
+  // 同じ company の公開 prepped items を取得（recipe ingredient 選択用）
+  useEffect(() => {
+    if (!selectedTenantId) {
+      setCrossTenantShareRows([]);
+      return;
+    }
+    let cancelled = false;
+    crossTenantItemSharesAPI
+      .getAvailable(selectedTenantId)
+      .then((shares) => {
+        if (cancelled) return;
+        const result = shares
+          .filter((s) => s.items && s.allowed_actions.includes("read"))
+          .map((s) => ({
+            item: {
+              id: s.item_id,
+              name: s.items!.name,
+              tenant_id: s.items!.tenant_id,
+              proceed_yield_unit: s.items!.proceed_yield_unit ?? null,
+              each_grams: s.items!.each_grams ?? null,
+              deprecated: s.items!.deprecated ?? null,
+            },
+            owner_tenant_id: s.owner_tenant_id,
+          }));
+        setCrossTenantShareRows(result);
+      })
+      .catch(() => {
+        if (!cancelled) setCrossTenantShareRows([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTenantId]);
+
+  useEffect(() => {
+    if (!selectedTenantId) {
+      setGrandfatheredIngredientLabels({});
+      grandfatherIngredientTenantRef.current = null;
+      return;
+    }
+    if (grandfatherIngredientTenantRef.current !== selectedTenantId) {
+      setGrandfatheredIngredientLabels({});
+      grandfatherIngredientTenantRef.current = selectedTenantId;
+    }
+    if (loading) return;
+
+    const crossSet = new Set(
+      crossTenantAvailableItems.map(({ item }) => item.id),
+    );
+    const ownSet = new Set(availableItems.map((i) => i.id));
+    const needed: string[] = [];
+
+    for (const it of items) {
+      for (const line of it.recipe_lines ?? []) {
+        if (
+          line.line_type !== "ingredient" ||
+          !line.child_item_id ||
+          line.isMarkedForDeletion
+        ) {
+          continue;
+        }
+        const id = line.child_item_id;
+        if (ownSet.has(id) || crossSet.has(id)) continue;
+        if (!needed.includes(id)) needed.push(id);
+      }
+    }
+
+    if (needed.length === 0) {
+      setGrandfatheredIngredientLabels({});
+      return;
+    }
+
+    let cancelled = false;
+    crossTenantItemSharesAPI
+      .resolveGrandfatheredIngredients(selectedTenantId, needed)
+      .then((rows) => {
+        if (cancelled) return;
+        const next: Record<string, CrossTenantGrandfatheredIngredientMeta> =
+          {};
+        for (const r of rows) {
+          next[r.id] = r;
+        }
+        setGrandfatheredIngredientLabels(next);
+      })
+      .catch(() => {
+        if (!cancelled) setGrandfatheredIngredientLabels({});
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedTenantId,
+    loading,
+    items,
+    availableItems,
+    crossTenantAvailableItems,
+  ]);
+
   // モード切り替えハンドラー
-  const handleModeChange = async (newMode: "costing" | "access-control") => {
+  const handleModeChange = async (
+    newMode: "costing" | "access-control" | "cross-tenant-access-control",
+  ) => {
     if (activeMode !== newMode) {
       // 編集中の場合はリセット（警告なし、後で追加可能）
       setIsEditModeCosting(false);
       setIsEditModeAccessControl(false);
+      setIsEditModeCrossTenant(false);
       setPendingShareChanges(new Map());
+      setPendingCrossTenantChanges(new Map());
       setActiveMode(newMode);
 
       // Access Controlモードに切り替える場合のみ、shares と members を並列取得
       if (newMode === "access-control") {
-        if (userRole === "admin") {
+        if (isTenantAdminOrDirector) {
           await Promise.all([refreshItemShares(), refreshMembers()]);
         } else {
           await refreshItemShares();
         }
+      }
+
+      // Cross-tenant Access Controlモードに切り替える場合
+      if (newMode === "cross-tenant-access-control") {
+        await refreshCrossTenantShares();
       }
     }
   };
@@ -1446,6 +1811,198 @@ export default function CostPage() {
     }
   };
 
+  // Cross-tenant 共有設定の再取得
+  const refreshCrossTenantShares = async () => {
+    if (!selectedTenantId || !selectedCompanyId) {
+      setCrossTenantShares(new Map());
+      return;
+    }
+    setLoadingCrossTenantShares(true);
+    try {
+      const shares = await crossTenantItemSharesAPI.getAll({
+        company_id: selectedCompanyId,
+        owner_tenant_id: selectedTenantId,
+      });
+      const map = new Map<string, CrossTenantItemShare[]>();
+      for (const share of shares) {
+        const existing = map.get(share.item_id) ?? [];
+        existing.push(share);
+        map.set(share.item_id, existing);
+      }
+      setCrossTenantShares(map);
+    } catch (error) {
+      console.error("Failed to refresh cross-tenant shares:", error);
+      setCrossTenantShares(new Map());
+    } finally {
+      setLoadingCrossTenantShares(false);
+    }
+  };
+
+  // Cross-tenant Edit モード開始
+  const handleCrossTenantEditClick = () => {
+    setOriginalCrossTenantShares(new Map(crossTenantShares));
+    setPendingCrossTenantChanges(new Map());
+    setPendingSpecificTenantIds(new Map());
+    setIsEditModeCrossTenant(true);
+  };
+
+  // Cross-tenant Cancel
+  const handleCrossTenantCancelClick = () => {
+    setCrossTenantShares(new Map(originalCrossTenantShares));
+    setPendingCrossTenantChanges(new Map());
+    setPendingSpecificTenantIds(new Map());
+    setIsEditModeCrossTenant(false);
+  };
+
+  // Cross-tenant pending 変更を記録（ラジオボタン切り替え）
+  const handleCrossTenantChangePending = (
+    itemId: string,
+    value: "hide" | "company" | "tenant",
+  ) => {
+    if (!isEditModeCrossTenant) return;
+    setPendingCrossTenantChanges((prev) => {
+      const next = new Map(prev);
+      next.set(itemId, value);
+      return next;
+    });
+    // "tenant" 以外に切り替えたとき特定テナント選択をクリア
+    if (value !== "tenant") {
+      setPendingSpecificTenantIds((prev) => {
+        const next = new Map(prev);
+        next.delete(itemId);
+        return next;
+      });
+    }
+  };
+
+  // Cross-tenant: 特定テナントのチェックボックスを切り替え
+  const handleCrossTenantToggleSpecificTenant = (
+    itemId: string,
+    tenantId: string,
+    checked: boolean,
+  ) => {
+    if (!isEditModeCrossTenant) return;
+    // Checkbox interaction implies tenant-specific sharing for this item.
+    // Ensure the item is included in the Save loop (pendingCrossTenantChanges).
+    setPendingCrossTenantChanges((prev) => {
+      const next = new Map(prev);
+      if (next.get(itemId) !== "tenant") {
+        next.set(itemId, "tenant");
+      }
+      return next;
+    });
+    setPendingSpecificTenantIds((prev) => {
+      const next = new Map(prev);
+      const current =
+        next.get(itemId) ??
+        (crossTenantShares
+          .get(itemId)
+          ?.filter(
+            (s) => s.target_type === "tenant" && s.allowed_actions.includes("read"),
+          )
+          .map((s) => s.target_id) ??
+          []);
+      if (checked) {
+        next.set(itemId, [...new Set([...current, tenantId])]);
+      } else {
+        next.set(
+          itemId,
+          current.filter((id) => id !== tenantId),
+        );
+      }
+      return next;
+    });
+  };
+
+  // Cross-tenant Save: pending 変更を API に保存
+  const handleCrossTenantSaveClick = async () => {
+    if (!selectedTenantId || !selectedCompanyId || !currentUserId) return;
+    setLoading(true);
+    try {
+      for (const [itemId, value] of pendingCrossTenantChanges.entries()) {
+        const existingShares = crossTenantShares.get(itemId) ?? [];
+        const existingCompany = existingShares.find(
+          (s) => s.target_type === "company",
+        );
+        const existingTenantShares = existingShares.filter(
+          (s) => s.target_type === "tenant",
+        );
+
+        if (value === "company") {
+          // company-wide: company レコードを有効化、tenant-specific レコードを無効化
+          if (existingCompany) {
+            await crossTenantItemSharesAPI.update(existingCompany.id, ["read"]);
+          } else {
+            await crossTenantItemSharesAPI.create({
+              company_id: selectedCompanyId,
+              item_id: itemId,
+              owner_tenant_id: selectedTenantId,
+              target_type: "company",
+              target_id: selectedCompanyId,
+              created_by: currentUserId!,
+              allowed_actions: ["read"],
+            });
+          }
+          // company-wide に切り替えたとき既存の tenant-specific レコードは hide に
+          for (const ts of existingTenantShares) {
+            await crossTenantItemSharesAPI.update(ts.id, []);
+          }
+        } else if (value === "tenant") {
+          // specific tenant: 選択されたテナントへの共有を設定
+          const selectedTenantIds = pendingSpecificTenantIds.get(itemId) ?? [];
+          // company-wide レコードは hide に
+          if (existingCompany) {
+            await crossTenantItemSharesAPI.update(existingCompany.id, []);
+          }
+          // 既存 tenant-specific レコードを処理
+          for (const ts of existingTenantShares) {
+            if (selectedTenantIds.includes(ts.target_id)) {
+              // 選択済み: read を有効化
+              await crossTenantItemSharesAPI.update(ts.id, ["read"]);
+            } else {
+              // 非選択: hide に
+              await crossTenantItemSharesAPI.update(ts.id, []);
+            }
+          }
+          // 新規追加が必要なテナントへのレコードを作成
+          const existingTargetIds = existingTenantShares.map(
+            (s) => s.target_id,
+          );
+          for (const tId of selectedTenantIds) {
+            if (!existingTargetIds.includes(tId)) {
+              await crossTenantItemSharesAPI.create({
+                company_id: selectedCompanyId,
+                item_id: itemId,
+                owner_tenant_id: selectedTenantId,
+                target_type: "tenant",
+                target_id: tId,
+                created_by: currentUserId!,
+                allowed_actions: ["read"],
+              });
+            }
+          }
+        } else {
+          // hide: 全てのレコードを無効化
+          if (existingCompany) {
+            await crossTenantItemSharesAPI.update(existingCompany.id, []);
+          }
+          for (const ts of existingTenantShares) {
+            await crossTenantItemSharesAPI.update(ts.id, []);
+          }
+        }
+      }
+      await refreshCrossTenantShares();
+      setPendingCrossTenantChanges(new Map());
+      setPendingSpecificTenantIds(new Map());
+      setIsEditModeCrossTenant(false);
+    } catch (error) {
+      console.error("Failed to save cross-tenant share settings:", error);
+      alert("Cross-tenant 共有設定の保存に失敗しました");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // メンバー一覧の取得（Access Controlモード用・責任者ドロップダウン）
   const refreshMembers = async () => {
     if (!selectedTenantId) {
@@ -1474,7 +2031,7 @@ export default function CostPage() {
         };
       });
       const managerList = (membersData.members || []).filter(
-        (member) => member.role === "manager"
+        (member) => member.role === "manager",
       );
       setManagers(managerList);
     } catch (error) {
@@ -1597,8 +2154,8 @@ export default function CostPage() {
         }
       }
 
-      // 責任者変更を処理（Adminのみ）
-      if (userRole === "admin") {
+      // 責任者変更を処理（Admin / Director のみ）
+      if (isTenantAdminOrDirector) {
         for (const [
           itemId,
           responsibleUserId,
@@ -1620,8 +2177,8 @@ export default function CostPage() {
             prev.map((i) =>
               i.id === itemId
                 ? { ...i, responsible_user_id: finalResponsibleUserId }
-                : i
-            )
+                : i,
+            ),
           );
         }
       }
@@ -1641,7 +2198,7 @@ export default function CostPage() {
   // アイテムのコントロール権を変更できるかチェック
   const canChangeAccessControl = (item: PreppedItem): boolean => {
     if (!currentUserId) return false;
-    if (userRole === "admin") return true;
+    if (isTenantAdminOrDirector) return true;
     if (userRole !== "manager") return false;
     // 作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
     const isCreatorAndResponsible =
@@ -1654,7 +2211,7 @@ export default function CostPage() {
   // 共有設定の一時的な変更（Editモード用）
   const handleShareChangePending = (
     itemId: string,
-    shareType: "hide" | "view-only" | "editable"
+    shareType: "hide" | "view-only" | "editable",
   ) => {
     if (!isEditModeAccessControl) return;
     const item = items.find((i) => i.id === itemId);
@@ -1671,7 +2228,7 @@ export default function CostPage() {
   const convertToGrams = (
     unit: string,
     quantity: number,
-    itemId: string
+    itemId: string,
   ): number => {
     if (!itemId || !quantity) return 0;
 
@@ -1681,8 +2238,34 @@ export default function CostPage() {
       return quantity * multiplier;
     }
 
-    // Itemを取得
-    const item = availableItems.find((i) => i.id === itemId);
+    const ownItem = availableItems.find((i) => i.id === itemId);
+    const crossRow = crossTenantAvailableItems.find(
+      ({ item: it }) => it.id === itemId,
+    );
+    const gf = grandfatheredIngredientLabels[itemId];
+    const item: Item | null =
+      ownItem ??
+      (crossRow
+        ? ({
+            id: crossRow.item.id,
+            name: crossRow.item.name,
+            item_kind: "prepped",
+            is_menu_item: false,
+            each_grams: crossRow.item.each_grams ?? null,
+            base_item_id: null,
+            user_id: "",
+          } as Item)
+        : gf
+          ? ({
+              id: itemId,
+              name: gf.name,
+              item_kind: "prepped",
+              is_menu_item: false,
+              each_grams: gf.each_grams ?? null,
+              base_item_id: null,
+              user_id: "",
+            } as Item)
+          : null);
     if (!item) {
       return 0; // エラーではなく0を返す（バリデーションで処理）
     }
@@ -1728,7 +2311,7 @@ export default function CostPage() {
   // Yieldをグラムに変換
   const convertYieldToGrams = (
     yieldAmount: number,
-    yieldUnit: string
+    yieldUnit: string,
   ): number => {
     if (yieldUnit === "each") {
       // Yieldが"each"の場合、グラムに変換できない
@@ -1748,7 +2331,7 @@ export default function CostPage() {
   // リアルタイム計算: パーセンテージを計算
   const calculatePercentages = (
     price: number | null | undefined,
-    item: PreppedItem
+    item: PreppedItem,
   ) => {
     if (!price || price <= 0) {
       return { laborPercent: null, cogPercent: null, lcogPercent: null };
@@ -1784,7 +2367,7 @@ export default function CostPage() {
   };
 
   const calculateTotalIngredientsGrams = (
-    recipeLines: RecipeLine[]
+    recipeLines: RecipeLine[],
   ): number => {
     let totalGrams = 0;
 
@@ -1796,12 +2379,62 @@ export default function CostPage() {
       const grams = convertToGrams(
         line.unit,
         line.quantity,
-        line.child_item_id
+        line.child_item_id,
       );
       totalGrams += grams;
     }
 
     return totalGrams;
+  };
+
+  /**
+   * 保存時に items.each_grams に書き込む値。
+   * 明示入力があればそれを使い、空なら材料総グラム ÷ finish 個数（placeholder と同じ）を使う。
+   * 算出不能（0 以下・非有限）のときは null（従来どおり DB は未設定のまま）。
+   */
+  const resolveEachGramsForPersist = (item: PreppedItem): number | null => {
+    if (item.proceed_yield_unit !== "each") {
+      return null;
+    }
+    const explicit = item.each_grams;
+    if (explicit != null && explicit > 0 && Number.isFinite(explicit)) {
+      return explicit;
+    }
+    const totalGrams = calculateTotalIngredientsGrams(item.recipe_lines);
+    const yieldAmount = item.proceed_yield_amount || 1;
+    if (!Number.isFinite(yieldAmount) || yieldAmount <= 0) {
+      return null;
+    }
+    const auto = totalGrams / yieldAmount;
+    if (!Number.isFinite(auto) || auto <= 0) {
+      return null;
+    }
+    return auto;
+  };
+
+  /**
+   * prepped を材料行の Cost に使う $/g。子の COG+労務（= breakdown の total）で按分し、ヘッダの $/kg と整合させる。
+   */
+  const preppedBreakdownCostPerGramForIngredientLine = (
+    breakdown:
+      | {
+          food_cost_per_gram: number;
+          labor_cost_per_gram: number;
+          total_cost_per_gram: number;
+        }
+      | undefined,
+  ): number | null => {
+    if (!breakdown) return null;
+    if (
+      breakdown.total_cost_per_gram != null &&
+      Number.isFinite(breakdown.total_cost_per_gram)
+    ) {
+      return breakdown.total_cost_per_gram;
+    }
+    const sum =
+      (breakdown.food_cost_per_gram ?? 0) +
+      (breakdown.labor_cost_per_gram ?? 0);
+    return Number.isFinite(sum) ? sum : null;
   };
 
   // Save処理（内部実装用）
@@ -1850,7 +2483,7 @@ export default function CostPage() {
           proceed_yield_unit: item.proceed_yield_unit,
         });
         const totalIngredientsGrams = calculateTotalIngredientsGrams(
-          item.recipe_lines
+          item.recipe_lines,
         );
 
         if (item.proceed_yield_unit === "each") {
@@ -1871,11 +2504,11 @@ export default function CostPage() {
           if (totalYieldGrams > totalIngredientsGrams) {
             const itemDisplayName = getItemDisplayName(item, baseItems);
             const errorMessage = `"${itemDisplayName}"のeach_grams (${eachGrams.toFixed(
-              2
+              2,
             )}g) × yield_amount (${yieldAmount}) = ${totalYieldGrams.toFixed(
-              2
+              2,
             )}g が材料の総合計（${totalIngredientsGrams.toFixed(
-              2
+              2,
             )}g）を超えています。each_grams × yield_amountは材料の総合計以下である必要があります。`;
 
             if (validationMode === "block") {
@@ -1889,7 +2522,7 @@ export default function CostPage() {
                 itemName: itemDisplayName,
               });
               const confirmed = window.confirm(
-                `${errorMessage}\n\nContinue saving anyway?`
+                `${errorMessage}\n\nContinue saving anyway?`,
               );
               console.log("[DEBUG] notifyモード: ユーザー応答（each）", {
                 itemId: item.id,
@@ -1907,13 +2540,13 @@ export default function CostPage() {
           // Yieldが質量単位（"g"または"kg"など）の場合
           const yieldGrams = convertYieldToGrams(
             item.proceed_yield_amount,
-            item.proceed_yield_unit
+            item.proceed_yield_unit,
           );
 
           if (yieldGrams < 0) {
             const itemDisplayName = getItemDisplayName(item, baseItems);
             alert(
-              `"${itemDisplayName}"のProceed単位が無効です。バリデーションをスキップします。`
+              `"${itemDisplayName}"のProceed単位が無効です。バリデーションをスキップします。`,
             );
             continue;
           }
@@ -1923,9 +2556,9 @@ export default function CostPage() {
             const errorMessage = `"${itemDisplayName}"のProceed（${
               item.proceed_yield_amount
             } ${item.proceed_yield_unit} = ${yieldGrams.toFixed(
-              2
+              2,
             )}g）が材料の総合計（${totalIngredientsGrams.toFixed(
-              2
+              2,
             )}g）を超えています。Proceedは材料の総合計以下である必要があります。`;
 
             if (validationMode === "block") {
@@ -1938,10 +2571,10 @@ export default function CostPage() {
                 {
                   itemId: item.id,
                   itemName: itemDisplayName,
-                }
+                },
               );
               const confirmed = window.confirm(
-                `${errorMessage}\n\nContinue saving anyway?`
+                `${errorMessage}\n\nContinue saving anyway?`,
               );
               console.log("[DEBUG] notifyモード: ユーザー応答（質量単位）", {
                 itemId: item.id,
@@ -2135,10 +2768,7 @@ export default function CostPage() {
             proceed_yield_amount: item.proceed_yield_amount,
             proceed_yield_unit: item.proceed_yield_unit,
             notes: item.notes || null,
-            each_grams:
-              item.proceed_yield_unit === "each"
-                ? item.each_grams || null
-                : null,
+            each_grams: resolveEachGramsForPersist(item),
             wholesale: item.wholesale || null,
             retail: item.retail || null,
           });
@@ -2173,6 +2803,12 @@ export default function CostPage() {
           // 更新
           // 元のアイテムを取得（変更検出用）
           const originalItem = originalItems.find((oi) => oi.id === item.id);
+
+          const eachGramsForPayload = resolveEachGramsForPersist(item);
+          const eachGramsPersistMismatch =
+            !!originalItem &&
+            item.proceed_yield_unit === "each" &&
+            (originalItem.each_grams ?? null) !== (eachGramsForPayload ?? null);
 
           // アイテムのフィールドが変更されたかチェック
           const itemFieldsChanged =
@@ -2227,7 +2863,7 @@ export default function CostPage() {
               if (!line.id) continue; // IDが存在しない場合はスキップ
               // 元のレシピラインと比較して変更があるかチェック
               const originalLine = originalItem?.recipe_lines.find(
-                (ol) => ol.id === line.id
+                (ol) => ol.id === line.id,
               );
               if (originalLine) {
                 const lineChanged =
@@ -2284,7 +2920,12 @@ export default function CostPage() {
 
           // アイテムのフィールドが変更された、またはレシピラインが変更された場合のみ更新
           // （レシピラインが変更された場合、cycle detectionを実行するために更新が必要）
-          if (itemFieldsChanged || recipeLinesChanged) {
+          // each_grams が未設定のまま DB とずれているだけのときも更新し、オート値を永続化する
+          if (
+            itemFieldsChanged ||
+            recipeLinesChanged ||
+            eachGramsPersistMismatch
+          ) {
             // アイテム更新を配列に追加（レシピライン更新後に実行）
             itemsToUpdate.push({
               id: item.id,
@@ -2295,10 +2936,7 @@ export default function CostPage() {
                 proceed_yield_amount: item.proceed_yield_amount,
                 proceed_yield_unit: item.proceed_yield_unit,
                 notes: item.notes || null,
-                each_grams:
-                  item.proceed_yield_unit === "each"
-                    ? item.each_grams || null
-                    : null,
+                each_grams: eachGramsForPayload,
                 wholesale: item.wholesale || null,
                 retail: item.retail || null,
               },
@@ -2330,7 +2968,7 @@ export default function CostPage() {
           } catch (deleteError) {
             console.error(
               `Failed to delete newly created item ${itemId}:`,
-              deleteError
+              deleteError,
             );
             // 削除失敗はログに記録するが、エラーは再スローしない
           }
@@ -2352,19 +2990,29 @@ export default function CostPage() {
             } catch (recipeError) {
               console.error(
                 "Failed to fetch recipes after error:",
-                recipeError
+                recipeError,
               );
             }
           }
 
           // コストbreakdownを取得
-          let errorRecoveryBreakdown: Record<string, { food_cost_per_gram: number; labor_cost_per_gram: number; total_cost_per_gram: number }> = {};
+          let errorRecoveryBreakdown: Record<
+            string,
+            {
+              food_cost_per_gram: number;
+              labor_cost_per_gram: number;
+              total_cost_per_gram: number;
+            }
+          > = {};
           try {
             const breakdownResult = await costAPI.getCostsBreakdown();
             errorRecoveryBreakdown = breakdownResult.costs;
             setCostBreakdown(breakdownResult.costs);
           } catch (costError) {
-            console.error("Failed to fetch cost breakdown after error:", costError);
+            console.error(
+              "Failed to fetch cost breakdown after error:",
+              costError,
+            );
           }
 
           // アイテムデータを構築
@@ -2395,7 +3043,8 @@ export default function CostPage() {
                 })),
                 notes: item.notes || "",
                 isExpanded: false,
-                cost_per_gram: errorRecoveryBreakdown[item.id]?.total_cost_per_gram,
+                cost_per_gram:
+                  errorRecoveryBreakdown[item.id]?.total_cost_per_gram,
                 each_grams: item.each_grams || null,
               };
             });
@@ -2459,7 +3108,14 @@ export default function CostPage() {
       }
 
       // コストのbreakdownを取得（calculate_item_costs_with_breakdownを使用）
-      let saveBreakdownData: Record<string, { food_cost_per_gram: number; labor_cost_per_gram: number; total_cost_per_gram: number }> = {};
+      let saveBreakdownData: Record<
+        string,
+        {
+          food_cost_per_gram: number;
+          labor_cost_per_gram: number;
+          total_cost_per_gram: number;
+        }
+      > = {};
       try {
         const breakdownResult = await costAPI.getCostsBreakdown();
         saveBreakdownData = breakdownResult.costs;
@@ -2559,7 +3215,7 @@ export default function CostPage() {
 
     const isExpanding = !item.isExpanded;
     setItems(
-      items.map((i) => (i.id === id ? { ...i, isExpanded: !i.isExpanded } : i))
+      items.map((i) => (i.id === id ? { ...i, isExpanded: !i.isExpanded } : i)),
     );
 
     if (isExpanding && !item.isNew) {
@@ -2593,10 +3249,12 @@ export default function CostPage() {
   const handleItemChange = (
     id: string,
     field: keyof PreppedItem,
-    value: string | number | boolean | null
+    value: string | number | boolean | null,
   ) => {
     setItems(
-      items.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+      items.map((item) =>
+        item.id === id ? { ...item, [field]: value } : item,
+      ),
     );
   };
 
@@ -2606,8 +3264,8 @@ export default function CostPage() {
       items.map((item) =>
         item.id === id
           ? { ...item, isMarkedForDeletion: !item.isMarkedForDeletion }
-          : item
-      )
+          : item,
+      ),
     );
   };
 
@@ -2619,7 +3277,24 @@ export default function CostPage() {
 
     const selectedItem = availableItems.find((i) => i.id === itemId);
     if (!selectedItem) {
-      return []; // Itemが見つからない場合は空配列
+      // 他テナントの cross-tenant prepped（availableItems に無い）
+      const crossRow = crossTenantAvailableItems.find(
+        ({ item: it }) => it.id === itemId,
+      );
+      if (crossRow) {
+        if (crossRow.item.proceed_yield_unit === "each") {
+          return [...MASS_UNITS_ORDERED, "each"];
+        }
+        return MASS_UNITS_ORDERED;
+      }
+      const gf = grandfatheredIngredientLabels[itemId];
+      if (gf) {
+        if (gf.proceed_yield_unit === "each") {
+          return [...MASS_UNITS_ORDERED, "each"];
+        }
+        return MASS_UNITS_ORDERED;
+      }
+      return [];
     }
 
     // Prepped Itemの場合
@@ -2642,7 +3317,7 @@ export default function CostPage() {
 
       // base_itemを取得
       const baseItem = baseItems.find(
-        (b) => b.id === selectedItem.base_item_id
+        (b) => b.id === selectedItem.base_item_id,
       );
       if (!baseItem) {
         return MASS_UNITS_ORDERED; // デフォルトは質量単位のみ
@@ -2650,7 +3325,7 @@ export default function CostPage() {
 
       // vendor_productを取得（purchase_unitを取得するため）
       const vendorProduct = vendorProducts.find(
-        (vp) => vp.base_item_id === selectedItem.base_item_id
+        (vp) => vp.base_item_id === selectedItem.base_item_id,
       );
       if (!vendorProduct) {
         return MASS_UNITS_ORDERED; // デフォルトは質量単位のみ
@@ -2687,7 +3362,7 @@ export default function CostPage() {
     itemId: string,
     lineId: string,
     field: keyof RecipeLine,
-    value: string | number | null
+    value: string | number | null,
   ) => {
     setItems(
       items.map((item) =>
@@ -2701,14 +3376,14 @@ export default function CostPage() {
                   // child_item_idが変更された場合、unitとspecific_childをリセット
                   if (field === "child_item_id") {
                     const availableUnits = getAvailableUnitsForItem(
-                      value as string
+                      value as string,
                     );
                     // 利用可能な単位の最初のものをデフォルトとして設定
                     updatedLine.unit =
                       availableUnits.length > 0 ? availableUnits[0] : "g";
                     // specific_childを設定: Raw Itemなら"lowest"、Prepped Itemならnull
                     const selectedItem = availableItems.find(
-                      (i) => i.id === value
+                      (i) => i.id === value,
                     );
                     updatedLine.specific_child =
                       selectedItem?.item_kind === "raw" ? "lowest" : null;
@@ -2719,8 +3394,8 @@ export default function CostPage() {
                 return line;
               }),
             }
-          : item
-      )
+          : item,
+      ),
     );
   };
 
@@ -2737,11 +3412,11 @@ export default function CostPage() {
                       ...line,
                       isMarkedForDeletion: !line.isMarkedForDeletion,
                     }
-                  : line
+                  : line,
               ),
             }
-          : item
-      )
+          : item,
+      ),
     );
   };
 
@@ -2790,7 +3465,7 @@ export default function CostPage() {
   // 利用可能なvendor_productsを取得（child_item_idがrawの場合）
   const getAvailableVendorProducts = (
     childItemId: string,
-    currentSpecificChild?: string | null
+    currentSpecificChild?: string | null,
   ): VendorProduct[] => {
     if (!childItemId) return [];
 
@@ -2850,13 +3525,13 @@ export default function CostPage() {
   // vendor_productの1kgあたりのコストを計算（gあたりのコスト × 1000）
   const calculateCostPerKg = (
     vendorProduct: VendorProduct,
-    childItem: Item
+    childItem: Item,
   ): number | null => {
     try {
       if (
         !vendorProduct.purchase_unit ||
         !vendorProduct.purchase_quantity ||
-        !vendorProduct.purchase_cost
+        !vendorProduct.current_price
       ) {
         return null;
       }
@@ -2865,7 +3540,7 @@ export default function CostPage() {
       const multiplier = MASS_UNIT_CONVERSIONS[vendorProduct.purchase_unit];
       if (multiplier) {
         const grams = vendorProduct.purchase_quantity * multiplier;
-        const costPerGram = vendorProduct.purchase_cost / grams;
+        const costPerGram = vendorProduct.current_price / grams;
         return costPerGram * 1000; // kgあたりのコスト
       }
 
@@ -2905,7 +3580,7 @@ export default function CostPage() {
         return null;
       }
 
-      const costPerGram = vendorProduct.purchase_cost / grams;
+      const costPerGram = vendorProduct.current_price / grams;
       return costPerGram * 1000; // kgあたりのコスト
     } catch {
       return null;
@@ -2932,8 +3607,8 @@ export default function CostPage() {
                 },
               ],
             }
-          : item
-      )
+          : item,
+      ),
     );
   };
 
@@ -2955,8 +3630,8 @@ export default function CostPage() {
                 },
               ],
             }
-          : item
-      )
+          : item,
+      ),
     );
   };
 
@@ -3027,15 +3702,165 @@ export default function CostPage() {
     };
   }, [loading, isEditModeCosting, activeMode, searchTerm, typeFilter]);
 
+  // ingredient 行の選択中アイテムから種別を導出する
+  const deriveIngredientType = (
+    childItemId: string | null | undefined,
+  ): "raw" | "prepped" | "cross-tenant" => {
+    if (!childItemId) return "raw";
+    if (crossTenantAvailableItems.some(({ item }) => item.id === childItemId))
+      return "cross-tenant";
+    if (grandfatheredIngredientLabels[childItemId]) return "cross-tenant";
+    const found = availableItems.find((i) => i.id === childItemId);
+    return found?.item_kind === "prepped" ? "prepped" : "raw";
+  };
+
+  // 明示的なラジオ選択を優先し、なければ現在の child_item_id から導出する
+  const getIngredientTypeForLine = (
+    lineId: string,
+    childItemId: string | null | undefined,
+  ): "raw" | "prepped" | "cross-tenant" =>
+    ingredientTypeByLine.get(lineId) ?? deriveIngredientType(childItemId);
+
+  const isHiddenOrUnavailableIngredient = (
+    childItemId: string | null | undefined,
+  ): boolean => {
+    if (!childItemId) return false;
+    const ownItemExists = availableItems.some((i) => i.id === childItemId);
+    if (ownItemExists) return false;
+    const crossItemVisible = crossTenantAvailableItems.some(
+      ({ item }) => item.id === childItemId,
+    );
+    return !crossItemVisible;
+  };
+
+  const crossTenantItemIdSet = useMemo(
+    () => new Set(crossTenantAvailableItems.map(({ item }) => item.id)),
+    [crossTenantAvailableItems],
+  );
+
+  useEffect(() => {
+    if (!selectedTenantId || loading) return;
+    if (
+      crossTenantItemIdSet.size === 0 &&
+      Object.keys(grandfatheredIngredientLabels).length === 0
+    )
+      return;
+
+    const missingIds: string[] = [];
+    for (const item of items) {
+      for (const line of item.recipe_lines) {
+        if (line.line_type !== "ingredient") continue;
+        if (line.isMarkedForDeletion) continue;
+        if (!line.child_item_id) continue;
+        const needsBreakdownChild =
+          crossTenantItemIdSet.has(line.child_item_id) ||
+          !!grandfatheredIngredientLabels[line.child_item_id];
+        if (!needsBreakdownChild) continue;
+        if (costBreakdown[line.child_item_id]) continue;
+        if (missingBreakdownInFlightRef.current.has(line.child_item_id)) continue;
+        if (missingBreakdownResolvedRef.current.has(line.child_item_id)) continue;
+        missingIds.push(line.child_item_id);
+      }
+    }
+
+    if (missingIds.length === 0) return;
+    const uniqueMissingIds = [...new Set(missingIds)];
+    uniqueMissingIds.forEach((id) => missingBreakdownInFlightRef.current.add(id));
+
+    let cancelled = false;
+    costAPI
+      .getCostsBreakdownMissing(uniqueMissingIds)
+      .then((result) => {
+        if (cancelled) return;
+        const patch = result.costs ?? {};
+        setCostBreakdown((prev) => ({ ...prev, ...patch }));
+        // 返ってきたIDは解決済みとして再リクエストしない。
+        Object.keys(patch).forEach((id) =>
+          missingBreakdownResolvedRef.current.add(id),
+        );
+        // 返ってこなかったIDもこのセッションでは再試行しない（意図的な非再試行ポリシー）。
+        uniqueMissingIds
+          .filter((id) => !(id in patch))
+          .forEach((id) => missingBreakdownResolvedRef.current.add(id));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.error("Failed to backfill missing cross-tenant breakdown:", error);
+        }
+      })
+      .finally(() => {
+        uniqueMissingIds.forEach((id) =>
+          missingBreakdownInFlightRef.current.delete(id),
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    items,
+    costBreakdown,
+    crossTenantItemIdSet,
+    grandfatheredIngredientLabels,
+    selectedTenantId,
+    loading,
+  ]);
+
   // availableItemsをSearchableSelect用の形式に変換
   // Ingredient選択用のフィルタリング関数
-  const getAvailableItemsForSelect = (currentChildItemId?: string) => {
+  // typeFilter: ラジオボタンで選択された種別。未指定なら全件（後方互換）
+  const getAvailableItemsForSelect = (
+    currentChildItemId?: string,
+    typeFilter?: "raw" | "prepped" | "cross-tenant",
+    ownerTenantFilter?: string, // "all" or tenantId（cross-tenant 時のみ使用）
+  ) => {
+    // cross-tenant のみ
+    if (typeFilter === "cross-tenant") {
+      const filtered =
+        ownerTenantFilter && ownerTenantFilter !== "all"
+          ? crossTenantAvailableItems.filter(
+              ({ item }) => item.tenant_id === ownerTenantFilter,
+            )
+          : crossTenantAvailableItems;
+      const baseOptions = filtered.map(({ item, ownerTenantName }) => ({
+        id: item.id,
+        name: item.name ?? "",
+        subLabel: ownerTenantName,
+        deprecated: !!item.deprecated,
+        disabled: !!(
+          item.deprecated &&
+          item.id !== currentChildItemId
+        ),
+      }));
+      if (
+        currentChildItemId &&
+        grandfatheredIngredientLabels[currentChildItemId] &&
+        !baseOptions.some((o) => o.id === currentChildItemId)
+      ) {
+        const gf = grandfatheredIngredientLabels[currentChildItemId];
+        const ownerTenantName =
+          contextTenants.find((t) => t.id === gf.tenant_id)?.name ??
+          gf.tenant_id;
+        baseOptions.push({
+          id: currentChildItemId,
+          name: (gf.name ?? "").trim() || "—",
+          subLabel: ownerTenantName,
+          deprecated: false,
+          disabled: true,
+        });
+      }
+      return baseOptions;
+    }
+
     return availableItems
       .filter((item) => {
+        // 種別フィルタ
+        if (typeFilter && item.item_kind !== typeFilter) return false;
+
         // Raw itemの場合、vendor productが存在するかチェック
         if (item.item_kind === "raw" && item.base_item_id) {
           const hasActiveVendorProduct = vendorProducts.some(
-            (vp) => vp.base_item_id === item.base_item_id && !vp.deprecated
+            (vp) => vp.base_item_id === item.base_item_id && !vp.deprecated,
           );
 
           // アクティブなvendor productがない場合
@@ -3069,7 +3894,22 @@ export default function CostPage() {
           item.id === currentChildItemId
         ),
         deprecated: !!item.deprecated,
-      }));
+      }))
+      .concat(
+        // typeFilter 未指定のとき（後方互換）のみ cross-tenant を連結
+        !typeFilter
+          ? crossTenantAvailableItems.map(({ item, ownerTenantName }) => ({
+              id: item.id,
+              name: item.name ?? "",
+              subLabel: ownerTenantName,
+              deprecated: !!item.deprecated,
+              disabled: !!(
+                item.deprecated &&
+                item.id !== currentChildItemId
+              ),
+            }))
+          : [],
+      );
   };
 
   // laborRolesをSearchableSelect用の形式に変換
@@ -3080,8 +3920,12 @@ export default function CostPage() {
 
   // 検索・フィルター処理
   const filteredItems = items.filter((item) => {
-    // Access ControlモードではPrepped Itemsのみ表示
-    if (activeMode === "access-control" && item.item_kind !== "prepped") {
+    // Access Control / Cross-tenant Access Control モードでは Prepped Items のみ表示
+    if (
+      (activeMode === "access-control" ||
+        activeMode === "cross-tenant-access-control") &&
+      item.item_kind !== "prepped"
+    ) {
       return false;
     }
     // 検索（Name）
@@ -3164,8 +4008,8 @@ export default function CostPage() {
                   activeMode === "costing"
                     ? "border-blue-500 text-blue-600"
                     : isDark
-                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                      ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
                 }`}
               >
                 Costing
@@ -3176,11 +4020,23 @@ export default function CostPage() {
                   activeMode === "access-control"
                     ? "border-blue-500 text-blue-600"
                     : isDark
-                    ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                      ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
                 }`}
               >
                 Access Control
+              </button>
+              <button
+                onClick={() => handleModeChange("cross-tenant-access-control")}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeMode === "cross-tenant-access-control"
+                    ? "border-blue-500 text-blue-600"
+                    : isDark
+                      ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
+              >
+                Cross-tenant Access Control
               </button>
             </nav>
           </div>
@@ -3196,8 +4052,8 @@ export default function CostPage() {
                   !isEditModeCosting
                     ? "bg-green-600 text-white hover:bg-green-700"
                     : isDark
-                    ? "bg-slate-700 text-slate-400 cursor-not-allowed"
-                    : "bg-gray-300 text-gray-400 cursor-not-allowed"
+                      ? "bg-slate-700 text-slate-400 cursor-not-allowed"
+                      : "bg-gray-300 text-gray-400 cursor-not-allowed"
                 }`}
               >
                 <Plus className="w-5 h-5" />
@@ -3263,6 +4119,40 @@ export default function CostPage() {
                     Cancel
                   </button>
                 </>
+              ) : activeMode === "cross-tenant-access-control" ? (
+                // Cross-tenant Access ControlモードのEdit/Save/Cancel
+                isEditModeCrossTenant ? (
+                  <>
+                    <button
+                      onClick={handleCrossTenantSaveClick}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px]"
+                    >
+                      <Save className="w-5 h-5" />
+                      Save
+                    </button>
+                    <button
+                      onClick={handleCrossTenantCancelClick}
+                      className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
+                        isDark
+                          ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                          : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                      }`}
+                    >
+                      <X className="w-5 h-5" />
+                      Cancel
+                    </button>
+                  </>
+                ) : isTenantAdminOrDirector ? (
+                  <button
+                    onClick={handleCrossTenantEditClick}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px]"
+                  >
+                    <Edit className="w-5 h-5" />
+                    Edit
+                  </button>
+                ) : (
+                  <div className="min-w-[100px]"></div>
+                )
               ) : (
                 <button
                   onClick={handleAccessControlEditClick}
@@ -3377,6 +4267,8 @@ export default function CostPage() {
             baseItems={baseItems}
             laborRoles={laborRoles}
             vendors={vendors}
+            crossTenantAvailableItems={crossTenantAvailableItems}
+            grandfatheredIngredientLabels={grandfatheredIngredientLabels}
             getAvailableItemsForSelect={getAvailableItemsForSelect}
             getAvailableVendorProducts={getAvailableVendorProducts}
             getAvailableUnitsForItem={getAvailableUnitsForItem}
@@ -3436,6 +4328,28 @@ export default function CostPage() {
                         style={{ width: "250px" }}
                       >
                         Access Control
+                      </th>
+                    </>
+                  ) : activeMode === "cross-tenant-access-control" ? (
+                    // Cross-tenant Access Controlモード: Name, Sharing
+                    <>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider sticky left-0 z-30 ${
+                          isDark
+                            ? "bg-slate-700 text-slate-300"
+                            : "bg-gray-50 text-gray-500"
+                        }`}
+                        style={{ width: "300px" }}
+                      >
+                        Name
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "400px" }}
+                      >
+                        Sharing
                       </th>
                     </>
                   ) : (
@@ -3508,8 +4422,8 @@ export default function CostPage() {
                                 costUnit === "g"
                                   ? "font-semibold"
                                   : isDark
-                                  ? "text-slate-500"
-                                  : "text-gray-400"
+                                    ? "text-slate-500"
+                                    : "text-gray-400"
                               }`}
                             >
                               g
@@ -3541,8 +4455,8 @@ export default function CostPage() {
                               eachMode
                                 ? "bg-blue-500 text-white font-semibold"
                                 : isDark
-                                ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                                  ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                                  : "bg-gray-200 text-gray-700 hover:bg-gray-300"
                             }`}
                           >
                             each
@@ -3648,8 +4562,8 @@ export default function CostPage() {
                           ? "bg-blue-900"
                           : "bg-blue-100"
                         : isDark
-                        ? "bg-blue-800"
-                        : "bg-blue-50"
+                          ? "bg-blue-800"
+                          : "bg-blue-50"
                       : "";
 
                   // 展開色を取得（新規追加アイテムは除外）
@@ -3684,12 +4598,12 @@ export default function CostPage() {
                                 ? "bg-red-900"
                                 : "bg-red-50"
                               : isDark
-                              ? hoveredItemId === item.id
-                                ? "bg-slate-700"
-                                : "hover:bg-slate-700"
-                              : hoveredItemId === item.id
-                              ? "bg-gray-50"
-                              : "hover:bg-gray-50"
+                                ? hoveredItemId === item.id
+                                  ? "bg-slate-700"
+                                  : "hover:bg-slate-700"
+                                : hoveredItemId === item.id
+                                  ? "bg-gray-50"
+                                  : "hover:bg-gray-50"
                           } transition-colors`}
                           onMouseEnter={() => setHoveredItemId(item.id)}
                           onMouseLeave={() => setHoveredItemId(null)}
@@ -3707,12 +4621,12 @@ export default function CostPage() {
                                   ? "bg-red-900/30"
                                   : "bg-red-50"
                                 : isDark
-                                ? hoveredItemId === item.id
-                                  ? "bg-slate-700"
-                                  : "bg-slate-800 group-hover:bg-slate-700"
-                                : hoveredItemId === item.id
-                                ? "bg-gray-50"
-                                : "bg-white group-hover:bg-gray-50"
+                                  ? hoveredItemId === item.id
+                                    ? "bg-slate-700"
+                                    : "bg-slate-800 group-hover:bg-slate-700"
+                                  : hoveredItemId === item.id
+                                    ? "bg-gray-50"
+                                    : "bg-white group-hover:bg-gray-50"
                             } ${isDark ? "text-slate-100" : "text-gray-900"}`}
                             style={{
                               width: "300px",
@@ -3789,7 +4703,7 @@ export default function CostPage() {
                                       onChange={() =>
                                         handleShareChangePending(
                                           item.id,
-                                          "hide"
+                                          "hide",
                                         )
                                       }
                                       disabled={!isEditModeAccessControl}
@@ -3825,7 +4739,7 @@ export default function CostPage() {
                                       onChange={() =>
                                         handleShareChangePending(
                                           item.id,
-                                          "view-only"
+                                          "view-only",
                                         )
                                       }
                                       disabled={!isEditModeAccessControl}
@@ -3856,17 +4770,17 @@ export default function CostPage() {
                                           share !== undefined &&
                                           share.allowed_actions.length === 2 &&
                                           share.allowed_actions.includes(
-                                            "read"
+                                            "read",
                                           ) &&
                                           share.allowed_actions.includes(
-                                            "update"
+                                            "update",
                                           )
                                         );
                                       })()}
                                       onChange={() =>
                                         handleShareChangePending(
                                           item.id,
-                                          "editable"
+                                          "editable",
                                         )
                                       }
                                       disabled={!isEditModeAccessControl}
@@ -3876,13 +4790,13 @@ export default function CostPage() {
                                     <span className="text-xs">Edit</span>
                                   </label>
                                 </div>
-                                {/* 責任者選択ドロップダウン（Adminのみ、常に表示） */}
-                                {userRole === "admin" && (
+                                {/* 責任者選択ドロップダウン（Admin / Director のみ、常に表示） */}
+                                {isTenantAdminOrDirector && (
                                   <div className="ml-2">
                                     <select
                                       value={
                                         pendingResponsibleUserChanges.get(
-                                          item.id
+                                          item.id,
                                         ) ||
                                         item.responsible_user_id ||
                                         ""
@@ -3893,7 +4807,7 @@ export default function CostPage() {
                                             const next = new Map(prev);
                                             next.set(item.id, e.target.value);
                                             return next;
-                                          }
+                                          },
                                         );
                                       }}
                                       disabled={!isEditModeAccessControl}
@@ -3938,6 +4852,249 @@ export default function CostPage() {
                             )}
                           </td>
                         </tr>
+                      ) : activeMode === "cross-tenant-access-control" ? (
+                        // Cross-tenant Access Controlモード
+                        <tr
+                          className={`${
+                            isDark
+                              ? hoveredItemId === item.id
+                                ? "bg-slate-700"
+                                : "hover:bg-slate-700"
+                              : hoveredItemId === item.id
+                                ? "bg-gray-50"
+                                : "hover:bg-gray-50"
+                          } transition-colors`}
+                          onMouseEnter={() => setHoveredItemId(item.id)}
+                          onMouseLeave={() => setHoveredItemId(null)}
+                        >
+                          {/* Name */}
+                          <td
+                            className={`px-6 whitespace-nowrap sticky left-0 z-30 transition-colors ${
+                              isDark
+                                ? hoveredItemId === item.id
+                                  ? "bg-slate-700"
+                                  : "bg-slate-800 group-hover:bg-slate-700"
+                                : hoveredItemId === item.id
+                                  ? "bg-gray-50"
+                                  : "bg-white group-hover:bg-gray-50"
+                            } ${isDark ? "text-slate-100" : "text-gray-900"}`}
+                            style={{
+                              width: "300px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                              verticalAlign: "top",
+                            }}
+                          >
+                            <div className="text-sm font-medium">
+                              {getItemDisplayName(item, baseItems)}
+                            </div>
+                          </td>
+
+                          {/* Sharing 設定 */}
+                          <td
+                            className={`px-6 text-left ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                            style={{
+                              width: "400px",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            {isTenantAdminOrDirector &&
+                              (() => {
+                                const shares =
+                                  crossTenantShares.get(item.id) ?? [];
+                                const hasActiveCompany = shares.some(
+                                  (s) =>
+                                    s.target_type === "company" &&
+                                    s.allowed_actions.includes("read"),
+                                );
+                                const hasActiveTenant = shares.some(
+                                  (s) =>
+                                    s.target_type === "tenant" &&
+                                    s.allowed_actions.includes("read"),
+                                );
+                                const pending = pendingCrossTenantChanges.get(
+                                  item.id,
+                                );
+                                const isShareRowLoading =
+                                  loadingCrossTenantShares &&
+                                  pending === undefined &&
+                                  shares.length === 0;
+                                const isHideChecked =
+                                  pending !== undefined
+                                    ? pending === "hide"
+                                    : isShareRowLoading
+                                      ? false
+                                    : !hasActiveCompany && !hasActiveTenant;
+                                const isCompanyChecked =
+                                  pending !== undefined
+                                    ? pending === "company"
+                                    : isShareRowLoading
+                                      ? false
+                                    : hasActiveCompany;
+                                const isTenantChecked =
+                                  pending !== undefined
+                                    ? pending === "tenant"
+                                    : isShareRowLoading
+                                      ? false
+                                    : !hasActiveCompany && hasActiveTenant;
+
+                                // "tenant" モードの選択済みテナントID
+                                const specificTenantIds =
+                                  pendingSpecificTenantIds.get(item.id) ??
+                                  (isTenantChecked
+                                    ? shares
+                                        .filter(
+                                          (s) =>
+                                            s.target_type === "tenant" &&
+                                            s.allowed_actions.includes("read"),
+                                        )
+                                        .map((s) => s.target_id)
+                                    : []);
+
+                                // 同じ company の他テナント一覧
+                                const otherTenants = contextTenants.filter(
+                                  (t) => t.id !== selectedTenantId,
+                                );
+
+                                return (
+                                  <div
+                                    className="flex flex-col gap-2"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {isShareRowLoading && (
+                                      <div
+                                        className={`text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}
+                                      >
+                                        Loading…
+                                      </div>
+                                    )}
+                                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                      {/* Hide */}
+                                      <label
+                                        className={`flex items-center gap-1 cursor-pointer shrink-0 ${!isEditModeCrossTenant ? "opacity-60" : ""}`}
+                                      >
+                                        <input
+                                          type="radio"
+                                          name={`cross-tenant-${item.id}`}
+                                          checked={isHideChecked}
+                                          onChange={() =>
+                                            handleCrossTenantChangePending(
+                                              item.id,
+                                              "hide",
+                                            )
+                                          }
+                                          disabled={!isEditModeCrossTenant}
+                                          className="w-3 h-3 accent-blue-500"
+                                        />
+                                        <span className="text-xs whitespace-nowrap">
+                                          Hide
+                                        </span>
+                                      </label>
+                                      {/* Company-wide */}
+                                      <label
+                                        className={`flex items-center gap-1 cursor-pointer shrink-0 ${!isEditModeCrossTenant ? "opacity-60" : ""}`}
+                                      >
+                                        <input
+                                          type="radio"
+                                          name={`cross-tenant-${item.id}`}
+                                          checked={isCompanyChecked}
+                                          onChange={() =>
+                                            handleCrossTenantChangePending(
+                                              item.id,
+                                              "company",
+                                            )
+                                          }
+                                          disabled={
+                                            !isEditModeCrossTenant ||
+                                            !!item.deprecated
+                                          }
+                                          className="w-3 h-3 accent-blue-500"
+                                        />
+                                        <span className="text-xs whitespace-nowrap">
+                                          Company-wide
+                                        </span>
+                                      </label>
+                                      {/* Specific tenants + 右隣にテナント一覧（編集時・選択時のみ） */}
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                        <label
+                                          className={`flex items-center gap-1 cursor-pointer shrink-0 ${!isEditModeCrossTenant ? "opacity-60" : ""}`}
+                                        >
+                                          <input
+                                            type="radio"
+                                            name={`cross-tenant-${item.id}`}
+                                            checked={isTenantChecked}
+                                            onChange={() =>
+                                              handleCrossTenantChangePending(
+                                                item.id,
+                                                "tenant",
+                                              )
+                                            }
+                                            disabled={
+                                              !isEditModeCrossTenant ||
+                                              !!item.deprecated
+                                            }
+                                            className="w-3 h-3 accent-blue-500"
+                                          />
+                                          <span className="text-xs whitespace-nowrap">
+                                            Specific tenants
+                                          </span>
+                                        </label>
+                                        {isEditModeCrossTenant &&
+                                          isTenantChecked && (
+                                            <div
+                                              className={`flex flex-col items-start gap-1 min-w-0 max-h-40 overflow-y-auto border-l-2 pl-2 ml-0.5 ${isDark ? "border-slate-600" : "border-gray-200"}`}
+                                            >
+                                              {otherTenants.length === 0 ? (
+                                                <span
+                                                  className={`text-xs ${isDark ? "text-slate-400" : "text-gray-400"}`}
+                                                >
+                                                  No other tenants in this
+                                                  company
+                                                </span>
+                                              ) : (
+                                                otherTenants.map((t) => (
+                                                  <label
+                                                    key={t.id}
+                                                    className="flex items-center gap-1 cursor-pointer w-full min-w-0"
+                                                  >
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={specificTenantIds.includes(
+                                                        t.id,
+                                                      )}
+                                                      onChange={(e) =>
+                                                        handleCrossTenantToggleSpecificTenant(
+                                                          item.id,
+                                                          t.id,
+                                                          e.target.checked,
+                                                        )
+                                                      }
+                                                      disabled={
+                                                        !isEditModeCrossTenant ||
+                                                        !!item.deprecated
+                                                      }
+                                                      className="w-3 h-3 accent-blue-500"
+                                                    />
+                                                    <span className="text-xs whitespace-nowrap">
+                                                      {t.name}
+                                                    </span>
+                                                  </label>
+                                                ))
+                                              )}
+                                            </div>
+                                          )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                          </td>
+                        </tr>
                       ) : (
                         // Costingモード: 既存のテーブル行
                         <tr
@@ -3947,10 +5104,10 @@ export default function CostPage() {
                                 ? "bg-red-900"
                                 : "bg-red-50"
                               : isNewItem
-                              ? newItemBgClass
-                              : expandedBgClass
-                              ? expandedBgClass
-                              : ""
+                                ? newItemBgClass
+                                : expandedBgClass
+                                  ? expandedBgClass
+                                  : ""
                           } ${
                             !isNewItem && !expandedBgClass
                               ? isDark
@@ -3958,8 +5115,8 @@ export default function CostPage() {
                                   ? "bg-slate-700"
                                   : "hover:bg-slate-700"
                                 : hoveredItemId === item.id
-                                ? "bg-gray-50"
-                                : "hover:bg-gray-50"
+                                  ? "bg-gray-50"
+                                  : "hover:bg-gray-50"
                               : ""
                           } cursor-pointer transition-colors group ${
                             item.isExpanded ? "!border-b-0" : ""
@@ -4019,16 +5176,16 @@ export default function CostPage() {
                                   ? "bg-red-900/30"
                                   : "bg-red-50"
                                 : isNewItem
-                                ? newItemBgClass
-                                : expandedBgClass
-                                ? expandedBgClass
-                                : isDark
-                                ? hoveredItemId === item.id
-                                  ? "bg-slate-700"
-                                  : "bg-slate-800 group-hover:bg-slate-700 peer-hover:bg-slate-700"
-                                : hoveredItemId === item.id
-                                ? "bg-gray-50"
-                                : "bg-white group-hover:bg-gray-50 peer-hover:bg-gray-50"
+                                  ? newItemBgClass
+                                  : expandedBgClass
+                                    ? expandedBgClass
+                                    : isDark
+                                      ? hoveredItemId === item.id
+                                        ? "bg-slate-700"
+                                        : "bg-slate-800 group-hover:bg-slate-700 peer-hover:bg-slate-700"
+                                      : hoveredItemId === item.id
+                                        ? "bg-gray-50"
+                                        : "bg-white group-hover:bg-gray-50 peer-hover:bg-gray-50"
                             } ${isDark ? "text-slate-100" : "text-gray-900"}`}
                             style={{
                               width: "180px",
@@ -4054,7 +5211,7 @@ export default function CostPage() {
                                     handleItemChange(
                                       item.id,
                                       "name",
-                                      e.target.value
+                                      e.target.value,
                                     )
                                   }
                                   className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
@@ -4103,7 +5260,7 @@ export default function CostPage() {
                                       title={`Affected by deprecated ingredient${
                                         item.deprecated
                                           ? ` (since ${new Date(
-                                              item.deprecated
+                                              item.deprecated,
                                             ).toLocaleDateString()})`
                                           : ""
                                       }`}
@@ -4124,8 +5281,8 @@ export default function CostPage() {
                                         }`}
                                       />
                                     )}
-                                  {/* 共有設定ラジオボタン（Admin向け、Prepped Itemsのみ、Costingモードでは非表示） */}
-                                  {userRole === "admin" &&
+                                  {/* 共有設定ラジオボタン（Admin / Director 向け、Prepped Itemsのみ、Costingモードでは非表示） */}
+                                  {isTenantAdminOrDirector &&
                                     item.item_kind === "prepped" &&
                                     activeMode === "costing" && (
                                       <div
@@ -4166,7 +5323,7 @@ export default function CostPage() {
                                     handleItemChange(
                                       item.id,
                                       "is_menu_item",
-                                      e.target.value === "menu"
+                                      e.target.value === "menu",
                                     )
                                   }
                                   className={`w-full text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors ${
@@ -4234,8 +5391,8 @@ export default function CostPage() {
                                       yieldAmountInputs.has(item.id)
                                         ? yieldAmountInputs.get(item.id)!
                                         : item.proceed_yield_amount === 0
-                                        ? ""
-                                        : String(item.proceed_yield_amount)
+                                          ? ""
+                                          : String(item.proceed_yield_amount)
                                     }
                                     onChange={(e) => {
                                       const value = e.target.value;
@@ -4261,7 +5418,7 @@ export default function CostPage() {
                                       handleItemChange(
                                         item.id,
                                         "proceed_yield_amount",
-                                        numValue
+                                        numValue,
                                       );
                                       // 入力中の文字列をクリア
                                       setYieldAmountInputs((prev) => {
@@ -4294,7 +5451,7 @@ export default function CostPage() {
                                       handleItemChange(
                                         item.id,
                                         "proceed_yield_unit",
-                                        e.target.value
+                                        e.target.value,
                                       )
                                     }
                                     className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
@@ -4330,10 +5487,10 @@ export default function CostPage() {
                                           eachGramsInputs.has(item.id)
                                             ? eachGramsInputs.get(item.id)!
                                             : item.each_grams === null ||
-                                              item.each_grams === undefined ||
-                                              item.each_grams === 0
-                                            ? ""
-                                            : String(item.each_grams)
+                                                item.each_grams === undefined ||
+                                                item.each_grams === 0
+                                              ? ""
+                                              : String(item.each_grams)
                                         }
                                         onChange={(e) => {
                                           const value = e.target.value;
@@ -4359,7 +5516,7 @@ export default function CostPage() {
                                           handleItemChange(
                                             item.id,
                                             "each_grams",
-                                            numValue
+                                            numValue,
                                           );
                                           // 入力中の文字列をクリア
                                           setEachGramsInputs((prev) => {
@@ -4371,14 +5528,14 @@ export default function CostPage() {
                                         placeholder={(() => {
                                           const totalIngredientsGrams =
                                             calculateTotalIngredientsGrams(
-                                              item.recipe_lines
+                                              item.recipe_lines,
                                             );
                                           const yieldAmount =
                                             item.proceed_yield_amount || 1;
                                           const defaultEachGrams =
                                             totalIngredientsGrams / yieldAmount;
                                           return `Auto (${defaultEachGrams.toFixed(
-                                            2
+                                            2,
                                           )}g)`;
                                         })()}
                                         className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
@@ -4438,7 +5595,7 @@ export default function CostPage() {
                                           (() => {
                                             const totalIngredientsGrams =
                                               calculateTotalIngredientsGrams(
-                                                item.recipe_lines
+                                                item.recipe_lines,
                                               );
                                             const yieldAmount =
                                               item.proceed_yield_amount || 1;
@@ -4448,7 +5605,7 @@ export default function CostPage() {
                                             );
                                           })();
                                         return `(${eachGrams.toFixed(
-                                          2
+                                          2,
                                         )}g / each)`;
                                       })()}
                                     </span>
@@ -4486,8 +5643,13 @@ export default function CostPage() {
                                 {(() => {
                                   const breakdown = costBreakdown[item.id];
                                   if (!breakdown) return "-";
-                                  const cogPerGram = breakdown.food_cost_per_gram;
-                                  if (cogPerGram === undefined || cogPerGram === null) return "-";
+                                  const cogPerGram =
+                                    breakdown.food_cost_per_gram;
+                                  if (
+                                    cogPerGram === undefined ||
+                                    cogPerGram === null
+                                  )
+                                    return "-";
                                   if (
                                     eachMode &&
                                     item.proceed_yield_unit === "each" &&
@@ -4530,8 +5692,13 @@ export default function CostPage() {
                                 {(() => {
                                   const breakdown = costBreakdown[item.id];
                                   if (!breakdown) return "-";
-                                  const laborPerGram = breakdown.labor_cost_per_gram;
-                                  if (laborPerGram === undefined || laborPerGram === null) return "-";
+                                  const laborPerGram =
+                                    breakdown.labor_cost_per_gram;
+                                  if (
+                                    laborPerGram === undefined ||
+                                    laborPerGram === null
+                                  )
+                                    return "-";
                                   if (
                                     eachMode &&
                                     item.proceed_yield_unit === "each" &&
@@ -4575,24 +5742,30 @@ export default function CostPage() {
                                   const breakdown = costBreakdown[item.id];
                                   if (!breakdown) {
                                     // costBreakdownがない場合は、従来のitem.cost_per_gramを使用（フォールバック）
-                                    if (item.cost_per_gram === undefined) return "-";
+                                    if (item.cost_per_gram === undefined)
+                                      return "-";
                                     if (
                                       eachMode &&
-                                    item.proceed_yield_unit === "each" &&
-                                    item.each_grams
+                                      item.proceed_yield_unit === "each" &&
+                                      item.each_grams
                                     ) {
                                       return `$${(
                                         item.cost_per_gram * item.each_grams
                                       ).toFixed(2)}/each`;
                                     }
                                     return costUnit === "g"
-                                    ? `$${item.cost_per_gram.toFixed(6)}/g`
-                                    : `$${(item.cost_per_gram * 1000).toFixed(
-                                        2
+                                      ? `$${item.cost_per_gram.toFixed(6)}/g`
+                                      : `$${(item.cost_per_gram * 1000).toFixed(
+                                          2,
                                         )}/kg`;
                                   }
-                                  const totalCostPerGram = breakdown.total_cost_per_gram;
-                                  if (totalCostPerGram === undefined || totalCostPerGram === null) return "-";
+                                  const totalCostPerGram =
+                                    breakdown.total_cost_per_gram;
+                                  if (
+                                    totalCostPerGram === undefined ||
+                                    totalCostPerGram === null
+                                  )
+                                    return "-";
                                   if (
                                     eachMode &&
                                     item.proceed_yield_unit === "each" &&
@@ -4635,16 +5808,17 @@ export default function CostPage() {
                                     wholesaleInputs.has(item.id)
                                       ? wholesaleInputs.get(item.id)!
                                       : item.wholesale === null ||
-                                        item.wholesale === undefined
-                                      ? ""
-                                      : eachMode &&
-                                        item.proceed_yield_unit === "each" &&
-                                        item.each_grams
-                                      ? String(
-                                          (item.wholesale / 1000) *
+                                          item.wholesale === undefined
+                                        ? ""
+                                        : eachMode &&
+                                            item.proceed_yield_unit ===
+                                              "each" &&
                                             item.each_grams
-                                        ) // $/kg → $/each
-                                      : String(item.wholesale)
+                                          ? String(
+                                              (item.wholesale / 1000) *
+                                                item.each_grams,
+                                            ) // $/kg → $/each
+                                          : String(item.wholesale)
                                   }
                                   onChange={(e) => {
                                     const value = e.target.value;
@@ -4681,7 +5855,7 @@ export default function CostPage() {
                                     handleItemChange(
                                       item.id,
                                       "wholesale",
-                                      numValue
+                                      numValue,
                                     );
                                     // 入力中の文字列をクリア
                                     setWholesaleInputs((prev) => {
@@ -4763,26 +5937,27 @@ export default function CostPage() {
                                 {(() => {
                                   // 入力中の値があればそれを使用、なければ既存の値を使用
                                   const currentWholesale = wholesaleInputs.has(
-                                    item.id
+                                    item.id,
                                   )
                                     ? (() => {
                                         const value = wholesaleInputs.get(
-                                          item.id
+                                          item.id,
                                         )!;
                                         return value === "" || value === "."
                                           ? null
                                           : parseFloat(value) || null;
                                       })()
                                     : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams &&
-                                      item.wholesale !== null &&
-                                      item.wholesale !== undefined
-                                    ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
-                                    : item.wholesale;
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams &&
+                                        item.wholesale !== null &&
+                                        item.wholesale !== undefined
+                                      ? (item.wholesale / 1000) *
+                                        item.each_grams // $/kg → $/each
+                                      : item.wholesale;
                                   const { laborPercent } = calculatePercentages(
                                     currentWholesale,
-                                    item
+                                    item,
                                   );
                                   return laborPercent !== null
                                     ? `${laborPercent.toFixed(2)}%`
@@ -4820,26 +5995,27 @@ export default function CostPage() {
                                 {(() => {
                                   // 入力中の値があればそれを使用、なければ既存の値を使用
                                   const currentWholesale = wholesaleInputs.has(
-                                    item.id
+                                    item.id,
                                   )
                                     ? (() => {
                                         const value = wholesaleInputs.get(
-                                          item.id
+                                          item.id,
                                         )!;
                                         return value === "" || value === "."
                                           ? null
                                           : parseFloat(value) || null;
                                       })()
                                     : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams &&
-                                      item.wholesale !== null &&
-                                      item.wholesale !== undefined
-                                    ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
-                                    : item.wholesale;
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams &&
+                                        item.wholesale !== null &&
+                                        item.wholesale !== undefined
+                                      ? (item.wholesale / 1000) *
+                                        item.each_grams // $/kg → $/each
+                                      : item.wholesale;
                                   const { cogPercent } = calculatePercentages(
                                     currentWholesale,
-                                    item
+                                    item,
                                   );
                                   return cogPercent !== null
                                     ? `${cogPercent.toFixed(2)}%`
@@ -4877,26 +6053,27 @@ export default function CostPage() {
                                 {(() => {
                                   // 入力中の値があればそれを使用、なければ既存の値を使用
                                   const currentWholesale = wholesaleInputs.has(
-                                    item.id
+                                    item.id,
                                   )
                                     ? (() => {
                                         const value = wholesaleInputs.get(
-                                          item.id
+                                          item.id,
                                         )!;
                                         return value === "" || value === "."
                                           ? null
                                           : parseFloat(value) || null;
                                       })()
                                     : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams &&
-                                      item.wholesale !== null &&
-                                      item.wholesale !== undefined
-                                    ? (item.wholesale / 1000) * item.each_grams // $/kg → $/each
-                                    : item.wholesale;
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams &&
+                                        item.wholesale !== null &&
+                                        item.wholesale !== undefined
+                                      ? (item.wholesale / 1000) *
+                                        item.each_grams // $/kg → $/each
+                                      : item.wholesale;
                                   const { lcogPercent } = calculatePercentages(
                                     currentWholesale,
-                                    item
+                                    item,
                                   );
                                   return lcogPercent !== null
                                     ? `${lcogPercent.toFixed(2)}%`
@@ -4933,15 +6110,17 @@ export default function CostPage() {
                                     retailInputs.has(item.id)
                                       ? retailInputs.get(item.id)!
                                       : item.retail === null ||
-                                        item.retail === undefined
-                                      ? ""
-                                      : eachMode &&
-                                        item.proceed_yield_unit === "each" &&
-                                        item.each_grams
-                                      ? String(
-                                          (item.retail / 1000) * item.each_grams
-                                        ) // $/kg → $/each
-                                      : String(item.retail)
+                                          item.retail === undefined
+                                        ? ""
+                                        : eachMode &&
+                                            item.proceed_yield_unit ===
+                                              "each" &&
+                                            item.each_grams
+                                          ? String(
+                                              (item.retail / 1000) *
+                                                item.each_grams,
+                                            ) // $/kg → $/each
+                                          : String(item.retail)
                                   }
                                   onChange={(e) => {
                                     const value = e.target.value;
@@ -4978,7 +6157,7 @@ export default function CostPage() {
                                     handleItemChange(
                                       item.id,
                                       "retail",
-                                      numValue
+                                      numValue,
                                     );
                                     // 入力中の文字列をクリア
                                     setRetailInputs((prev) => {
@@ -5060,26 +6239,26 @@ export default function CostPage() {
                                 {(() => {
                                   // 入力中の値があればそれを使用、なければ既存の値を使用
                                   const currentRetail = retailInputs.has(
-                                    item.id
+                                    item.id,
                                   )
                                     ? (() => {
                                         const value = retailInputs.get(
-                                          item.id
+                                          item.id,
                                         )!;
                                         return value === "" || value === "."
                                           ? null
                                           : parseFloat(value) || null;
                                       })()
                                     : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams &&
-                                      item.retail !== null &&
-                                      item.retail !== undefined
-                                    ? (item.retail / 1000) * item.each_grams // $/kg → $/each
-                                    : item.retail;
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams &&
+                                        item.retail !== null &&
+                                        item.retail !== undefined
+                                      ? (item.retail / 1000) * item.each_grams // $/kg → $/each
+                                      : item.retail;
                                   const { laborPercent } = calculatePercentages(
                                     currentRetail,
-                                    item
+                                    item,
                                   );
                                   return laborPercent !== null
                                     ? `${laborPercent.toFixed(2)}%`
@@ -5117,26 +6296,26 @@ export default function CostPage() {
                                 {(() => {
                                   // 入力中の値があればそれを使用、なければ既存の値を使用
                                   const currentRetail = retailInputs.has(
-                                    item.id
+                                    item.id,
                                   )
                                     ? (() => {
                                         const value = retailInputs.get(
-                                          item.id
+                                          item.id,
                                         )!;
                                         return value === "" || value === "."
                                           ? null
                                           : parseFloat(value) || null;
                                       })()
                                     : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams &&
-                                      item.retail !== null &&
-                                      item.retail !== undefined
-                                    ? (item.retail / 1000) * item.each_grams // $/kg → $/each
-                                    : item.retail;
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams &&
+                                        item.retail !== null &&
+                                        item.retail !== undefined
+                                      ? (item.retail / 1000) * item.each_grams // $/kg → $/each
+                                      : item.retail;
                                   const { cogPercent } = calculatePercentages(
                                     currentRetail,
-                                    item
+                                    item,
                                   );
                                   return cogPercent !== null
                                     ? `${cogPercent.toFixed(2)}%`
@@ -5174,26 +6353,26 @@ export default function CostPage() {
                                 {(() => {
                                   // 入力中の値があればそれを使用、なければ既存の値を使用
                                   const currentRetail = retailInputs.has(
-                                    item.id
+                                    item.id,
                                   )
                                     ? (() => {
                                         const value = retailInputs.get(
-                                          item.id
+                                          item.id,
                                         )!;
                                         return value === "" || value === "."
                                           ? null
                                           : parseFloat(value) || null;
                                       })()
                                     : eachMode &&
-                                      item.proceed_yield_unit === "each" &&
-                                      item.each_grams &&
-                                      item.retail !== null &&
-                                      item.retail !== undefined
-                                    ? (item.retail / 1000) * item.each_grams // $/kg → $/each
-                                    : item.retail;
+                                        item.proceed_yield_unit === "each" &&
+                                        item.each_grams &&
+                                        item.retail !== null &&
+                                        item.retail !== undefined
+                                      ? (item.retail / 1000) * item.each_grams // $/kg → $/each
+                                      : item.retail;
                                   const { lcogPercent } = calculatePercentages(
                                     currentRetail,
-                                    item
+                                    item,
                                   );
                                   return lcogPercent !== null
                                     ? `${lcogPercent.toFixed(2)}%`
@@ -5251,14 +6430,14 @@ export default function CostPage() {
                             isNewItem
                               ? newItemBgClass
                               : expandedBgClass
-                              ? expandedBgClass
-                              : isDark
-                              ? hoveredItemId === item.id
-                                ? "bg-slate-700"
-                                : "hover:bg-slate-700 peer-hover:bg-slate-700"
-                              : hoveredItemId === item.id
-                              ? "bg-gray-50"
-                              : "hover:bg-gray-50 peer-hover:bg-gray-50"
+                                ? expandedBgClass
+                                : isDark
+                                  ? hoveredItemId === item.id
+                                    ? "bg-slate-700"
+                                    : "hover:bg-slate-700 peer-hover:bg-slate-700"
+                                  : hoveredItemId === item.id
+                                    ? "bg-gray-50"
+                                    : "hover:bg-gray-50 peer-hover:bg-gray-50"
                           }`}
                           onMouseEnter={() =>
                             !isNewItem &&
@@ -5277,14 +6456,14 @@ export default function CostPage() {
                               isNewItem
                                 ? newItemBgClass
                                 : expandedBgClass
-                                ? expandedBgClass
-                                : isDark
-                                ? hoveredItemId === item.id
-                                  ? "bg-slate-700"
-                                  : "bg-slate-800 peer-hover:bg-slate-700"
-                                : hoveredItemId === item.id
-                                ? "bg-gray-50"
-                                : "bg-white peer-hover:bg-gray-50"
+                                  ? expandedBgClass
+                                  : isDark
+                                    ? hoveredItemId === item.id
+                                      ? "bg-slate-700"
+                                      : "bg-slate-800 peer-hover:bg-slate-700"
+                                    : hoveredItemId === item.id
+                                      ? "bg-gray-50"
+                                      : "bg-white peer-hover:bg-gray-50"
                             }`}
                             style={{
                               width: "100%",
@@ -5320,7 +6499,7 @@ export default function CostPage() {
                                       >
                                         Total:{" "}
                                         {calculateTotalIngredientsGrams(
-                                          item.recipe_lines
+                                          item.recipe_lines,
                                         ).toFixed(2)}{" "}
                                         g
                                       </span>
@@ -5405,7 +6584,7 @@ export default function CostPage() {
                                     {item.recipe_lines
                                       .filter(
                                         (line) =>
-                                          line.line_type === "ingredient"
+                                          line.line_type === "ingredient",
                                       )
                                       .map((line) => (
                                         <tr
@@ -5415,30 +6594,183 @@ export default function CostPage() {
                                               ? "bg-red-50"
                                               : ""
                                           }
-                                          style={{
-                                            height: "52px",
-                                            minHeight: "52px",
-                                            maxHeight: "52px",
-                                          }}
                                         >
                                           <td className="px-4 py-2">
                                             {isEditModeCosting &&
                                             activeMode === "costing" ? (
-                                              <SearchableSelect
-                                                options={getAvailableItemsForSelect(
-                                                  line.child_item_id
+                                              <>
+                                                {/* アイテム種別ラジオボタン */}
+                                                <div className="flex items-center gap-2 mb-1 flex-wrap">
+                                                  {(
+                                                    [
+                                                      "raw",
+                                                      "prepped",
+                                                      "cross-tenant",
+                                                    ] as const
+                                                  ).map((type) => {
+                                                    const currentType =
+                                                      getIngredientTypeForLine(
+                                                        line.id,
+                                                        line.child_item_id,
+                                                      );
+                                                    return (
+                                                      <div
+                                                        key={type}
+                                                        className="flex items-center gap-1"
+                                                      >
+                                                        <label className="flex items-center gap-1 cursor-pointer">
+                                                          <input
+                                                            type="radio"
+                                                            name={`ingredient-type-inline-${line.id}`}
+                                                            checked={
+                                                              currentType ===
+                                                              type
+                                                            }
+                                                            onChange={() => {
+                                                              if (
+                                                                currentType !==
+                                                                type
+                                                              ) {
+                                                                setIngredientTypeByLine(
+                                                                  (prev) =>
+                                                                    new Map(
+                                                                      prev,
+                                                                    ).set(
+                                                                      line.id,
+                                                                      type,
+                                                                    ),
+                                                                );
+                                                                handleRecipeLineChange(
+                                                                  item.id,
+                                                                  line.id,
+                                                                  "child_item_id",
+                                                                  "",
+                                                                );
+                                                                if (
+                                                                  type !==
+                                                                  "cross-tenant"
+                                                                ) {
+                                                                  setInlineCrossTenantFilterByLine(
+                                                                    (prev) => {
+                                                                      const next =
+                                                                        new Map(
+                                                                          prev,
+                                                                        );
+                                                                      next.delete(
+                                                                        line.id,
+                                                                      );
+                                                                      return next;
+                                                                    },
+                                                                  );
+                                                                }
+                                                              }
+                                                            }}
+                                                            className="w-3 h-3 accent-blue-500"
+                                                          />
+                                                          <span
+                                                            className={`text-xs ${isDark ? "text-slate-300" : "text-gray-600"}`}
+                                                          >
+                                                            {type === "raw"
+                                                              ? "Base Item"
+                                                              : type ===
+                                                                  "prepped"
+                                                                ? "Prepped Item"
+                                                                : "Other tenant item"}
+                                                          </span>
+                                                        </label>
+                                                        {type ===
+                                                          "cross-tenant" &&
+                                                          currentType ===
+                                                            "cross-tenant" &&
+                                                          crossTenantOwnerTenants.length >
+                                                            0 && (
+                                                            <select
+                                                              value={
+                                                                inlineCrossTenantFilterByLine.get(
+                                                                  line.id,
+                                                                ) ?? "all"
+                                                              }
+                                                              onChange={(e) =>
+                                                                setInlineCrossTenantFilterByLine(
+                                                                  (prev) =>
+                                                                    new Map(
+                                                                      prev,
+                                                                    ).set(
+                                                                      line.id,
+                                                                      e.target
+                                                                        .value,
+                                                                    ),
+                                                                )
+                                                              }
+                                                              className={`text-xs border rounded px-1 py-0.5 ${isDark ? "bg-slate-700 border-slate-600 text-slate-300" : "bg-white border-gray-300 text-gray-700"}`}
+                                                            >
+                                                              <option value="all">
+                                                                All
+                                                              </option>
+                                                              {crossTenantOwnerTenants.map(
+                                                                (t) => (
+                                                                  <option
+                                                                    key={t.id}
+                                                                    value={t.id}
+                                                                  >
+                                                                    {t.name}
+                                                                  </option>
+                                                                ),
+                                                              )}
+                                                            </select>
+                                                          )}
+                                                      </div>
+                                                    );
+                                                  })}
+                                                </div>
+                                                <SearchableSelect
+                                                  options={getAvailableItemsForSelect(
+                                                    line.child_item_id,
+                                                    getIngredientTypeForLine(
+                                                      line.id,
+                                                      line.child_item_id,
+                                                    ),
+                                                    inlineCrossTenantFilterByLine.get(
+                                                      line.id,
+                                                    ) ?? "all",
+                                                  )}
+                                                  value={
+                                                    line.child_item_id || ""
+                                                  }
+                                                  onChange={(value) => {
+                                                    handleRecipeLineChange(
+                                                      item.id,
+                                                      line.id,
+                                                      "child_item_id",
+                                                      value,
+                                                    );
+                                                    setIngredientTypeByLine(
+                                                      (prev) =>
+                                                        new Map(prev).set(
+                                                          line.id,
+                                                          deriveIngredientType(
+                                                            value,
+                                                          ),
+                                                        ),
+                                                    );
+                                                  }}
+                                                  placeholder="Select item..."
+                                                />
+                                                {isHiddenOrUnavailableIngredient(
+                                                  line.child_item_id,
+                                                ) && (
+                                                  <div
+                                                    className={`mt-1 text-xs ${
+                                                      isDark
+                                                        ? "text-amber-300"
+                                                        : "text-amber-700"
+                                                    }`}
+                                                  >
+                                                    Hidden by owner (existing
+                                                    line remains valid)
+                                                  </div>
                                                 )}
-                                                value={line.child_item_id || ""}
-                                                onChange={(value) =>
-                                                  handleRecipeLineChange(
-                                                    item.id,
-                                                    line.id,
-                                                    "child_item_id",
-                                                    value
-                                                  )
-                                                }
-                                                placeholder="Select item..."
-                                              />
+                                              </>
                                             ) : (
                                               <div
                                                 className={`text-sm ${
@@ -5447,10 +6779,91 @@ export default function CostPage() {
                                                     : "text-gray-900"
                                                 }`}
                                               >
-                                                {availableItems.find(
-                                                  (i) =>
-                                                    i.id === line.child_item_id
-                                                )?.name || "-"}
+                                                {(() => {
+                                                  const ownItem =
+                                                    availableItems.find(
+                                                      (i) =>
+                                                        i.id ===
+                                                        line.child_item_id,
+                                                    );
+                                                  if (ownItem) {
+                                                    return (
+                                                      getItemDisplayName(
+                                                        ownItem,
+                                                        baseItems,
+                                                      ) || "-"
+                                                    );
+                                                  }
+                                                  const crossItem =
+                                                    crossTenantAvailableItems.find(
+                                                      ({ item: ci }) =>
+                                                        ci.id ===
+                                                        line.child_item_id,
+                                                    );
+                                                  if (crossItem) {
+                                                    const label =
+                                                      crossItem.item.name?.trim() ||
+                                                      "-";
+                                                    return (
+                                                      <span>
+                                                        {label}{" "}
+                                                        <span
+                                                          className={`text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}
+                                                        >
+                                                          {
+                                                            crossItem.ownerTenantName
+                                                          }
+                                                        </span>
+                                                      </span>
+                                                    );
+                                                  }
+                                                  const gfLabel =
+                                                    line.child_item_id
+                                                      ? grandfatheredIngredientLabels[
+                                                          line.child_item_id
+                                                        ]
+                                                      : undefined;
+                                                  if (gfLabel) {
+                                                    const ownerTenantName =
+                                                      contextTenants.find(
+                                                        (t) =>
+                                                          t.id ===
+                                                          gfLabel.tenant_id,
+                                                      )?.name ?? gfLabel.tenant_id;
+                                                    return (
+                                                      <span>
+                                                        {gfLabel.name?.trim() ||
+                                                          "—"}{" "}
+                                                        <span
+                                                          className={`text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}
+                                                        >
+                                                          {ownerTenantName}
+                                                        </span>
+                                                      </span>
+                                                    );
+                                                  }
+                                                  if (
+                                                    isHiddenOrUnavailableIngredient(
+                                                      line.child_item_id,
+                                                    )
+                                                  ) {
+                                                    return (
+                                                      <span>
+                                                        Unavailable item
+                                                        <span
+                                                          className={`ml-2 text-xs ${
+                                                            isDark
+                                                              ? "text-amber-300"
+                                                              : "text-amber-700"
+                                                          }`}
+                                                        >
+                                                          Hidden by owner
+                                                        </span>
+                                                      </span>
+                                                    );
+                                                  }
+                                                  return "-";
+                                                })()}
                                               </div>
                                             )}
                                           </td>
@@ -5460,14 +6873,14 @@ export default function CostPage() {
                                               const childItem =
                                                 availableItems.find(
                                                   (i) =>
-                                                    i.id === line.child_item_id
+                                                    i.id === line.child_item_id,
                                                 );
                                               const isRawItem =
                                                 childItem?.item_kind === "raw";
                                               const availableVendorProducts =
                                                 getAvailableVendorProducts(
                                                   line.child_item_id || "",
-                                                  line.specific_child
+                                                  line.specific_child,
                                                 );
 
                                               if (!isRawItem) {
@@ -5499,7 +6912,7 @@ export default function CostPage() {
                                                             item.id,
                                                             line.id,
                                                             "specific_child",
-                                                            "lowest"
+                                                            "lowest",
                                                           )
                                                         }
                                                         className="w-4 h-4"
@@ -5529,7 +6942,7 @@ export default function CostPage() {
                                                               line.id,
                                                               "specific_child",
                                                               availableVendorProducts[0]
-                                                                .id
+                                                                .id,
                                                             );
                                                           }
                                                         }}
@@ -5552,7 +6965,7 @@ export default function CostPage() {
                                                               item.id,
                                                               line.id,
                                                               "specific_child",
-                                                              e.target.value
+                                                              e.target.value,
                                                             )
                                                           }
                                                           className={`px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
@@ -5570,7 +6983,7 @@ export default function CostPage() {
                                                                 vendors.find(
                                                                   (v) =>
                                                                     v.id ===
-                                                                    vp.vendor_id
+                                                                    vp.vendor_id,
                                                                 );
                                                               const vendorName =
                                                                 vendor?.name ||
@@ -5583,20 +6996,20 @@ export default function CostPage() {
                                                                 availableItems.find(
                                                                   (i) =>
                                                                     i.id ===
-                                                                    line.child_item_id
+                                                                    line.child_item_id,
                                                                 );
                                                               const costPerKg =
                                                                 childItem
                                                                   ? calculateCostPerKg(
                                                                       vp,
-                                                                      childItem
+                                                                      childItem,
                                                                     )
                                                                   : null;
                                                               const costDisplay =
                                                                 costPerKg !==
                                                                 null
                                                                   ? `    $${costPerKg.toFixed(
-                                                                      2
+                                                                      2,
                                                                     )}/kg`
                                                                   : "";
                                                               const isDeprecated =
@@ -5627,7 +7040,7 @@ export default function CostPage() {
                                                                   {costDisplay}
                                                                 </option>
                                                               );
-                                                            }
+                                                            },
                                                           )}
                                                         </select>
                                                       )}
@@ -5657,14 +7070,14 @@ export default function CostPage() {
                                                     availableVendorProducts.find(
                                                       (vp) =>
                                                         vp.id ===
-                                                        line.specific_child
+                                                        line.specific_child,
                                                     );
                                                   const vendor =
                                                     selectedVendorProduct
                                                       ? vendors.find(
                                                           (v) =>
                                                             v.id ===
-                                                            selectedVendorProduct.vendor_id
+                                                            selectedVendorProduct.vendor_id,
                                                         )
                                                       : null;
                                                   const vendorName =
@@ -5677,20 +7090,20 @@ export default function CostPage() {
                                                     availableItems.find(
                                                       (i) =>
                                                         i.id ===
-                                                        line.child_item_id
+                                                        line.child_item_id,
                                                     );
                                                   const costPerKg =
                                                     childItem &&
                                                     selectedVendorProduct
                                                       ? calculateCostPerKg(
                                                           selectedVendorProduct,
-                                                          childItem
+                                                          childItem,
                                                         )
                                                       : null;
                                                   const costDisplay =
                                                     costPerKg !== null
                                                       ? `    $${costPerKg.toFixed(
-                                                          2
+                                                          2,
                                                         )}/kg`
                                                       : "";
                                                   return (
@@ -5711,7 +7124,7 @@ export default function CostPage() {
                                                         const apiLine =
                                                           item.recipe_lines.find(
                                                             (rl) =>
-                                                              rl.id === line.id
+                                                              rl.id === line.id,
                                                           );
                                                         if (
                                                           apiLine &&
@@ -5745,12 +7158,12 @@ export default function CostPage() {
                                                 value={
                                                   quantityInputs.has(line.id)
                                                     ? quantityInputs.get(
-                                                        line.id
+                                                        line.id,
                                                       )!
                                                     : line.quantity === 0 ||
-                                                      !line.quantity
-                                                    ? ""
-                                                    : String(line.quantity)
+                                                        !line.quantity
+                                                      ? ""
+                                                      : String(line.quantity)
                                                 }
                                                 onChange={(e) => {
                                                   const value = e.target.value;
@@ -5763,14 +7176,14 @@ export default function CostPage() {
                                                     setQuantityInputs(
                                                       (prev) => {
                                                         const newMap = new Map(
-                                                          prev
+                                                          prev,
                                                         );
                                                         newMap.set(
                                                           line.id,
-                                                          value
+                                                          value,
                                                         );
                                                         return newMap;
-                                                      }
+                                                      },
                                                     );
                                                   }
                                                   // マッチしない場合は何もしない（前の値を保持）
@@ -5787,12 +7200,12 @@ export default function CostPage() {
                                                     item.id,
                                                     line.id,
                                                     "quantity",
-                                                    numValue
+                                                    numValue,
                                                   );
                                                   // 入力中の文字列をクリア
                                                   setQuantityInputs((prev) => {
                                                     const newMap = new Map(
-                                                      prev
+                                                      prev,
                                                     );
                                                     newMap.delete(line.id);
                                                     return newMap;
@@ -5827,7 +7240,7 @@ export default function CostPage() {
                                                     item.id,
                                                     line.id,
                                                     "unit",
-                                                    e.target.value
+                                                    e.target.value,
                                                   )
                                                 }
                                                 className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
@@ -5840,7 +7253,7 @@ export default function CostPage() {
                                                 {(() => {
                                                   const availableUnits =
                                                     getAvailableUnitsForItem(
-                                                      line.child_item_id || ""
+                                                      line.child_item_id || "",
                                                     );
                                                   // Itemが選択されていない場合は空のオプションを表示
                                                   if (
@@ -5855,22 +7268,34 @@ export default function CostPage() {
                                                   return availableUnits.map(
                                                     (unit) => {
                                                       // eachの場合、選択されたアイテムのeach_gramsを確認
-                                                      let isEachDisabled =
-                                                        false;
+                                                      let isEachDisabled = false;
                                                       if (
                                                         unit === "each" &&
                                                         line.child_item_id
                                                       ) {
-                                                        const selectedItem =
-                                                          availableItems.find(
-                                                            (i) =>
-                                                              i.id ===
-                                                              line.child_item_id
+                                                        const crossRow =
+                                                          crossTenantAvailableItems.find(
+                                                            ({ item: it }) =>
+                                                              it.id ===
+                                                              line.child_item_id,
                                                           );
+                                                        const gfEach =
+                                                          grandfatheredIngredientLabels[
+                                                            line.child_item_id
+                                                          ];
+                                                        const eachGrams =
+                                                          crossRow
+                                                            ? crossRow.item
+                                                                .each_grams
+                                                            : availableItems.find(
+                                                                (i) =>
+                                                                  i.id ===
+                                                                  line.child_item_id,
+                                                              )?.each_grams ??
+                                                              gfEach?.each_grams;
                                                         isEachDisabled =
-                                                          !selectedItem?.each_grams ||
-                                                          selectedItem.each_grams ===
-                                                            0;
+                                                          !eachGrams ||
+                                                          eachGrams === 0;
                                                       }
 
                                                       return (
@@ -5891,7 +7316,7 @@ export default function CostPage() {
                                                             " (setup required)"}
                                                         </option>
                                                       );
-                                                    }
+                                                    },
                                                   );
                                                 })()}
                                               </select>
@@ -5928,11 +7353,50 @@ export default function CostPage() {
                                                 );
                                               }
 
-                                              const childItem =
+                                              const ownChild =
                                                 availableItems.find(
                                                   (i) =>
-                                                    i.id === line.child_item_id
+                                                    i.id === line.child_item_id,
                                                 );
+                                              const crossChildRow =
+                                                crossTenantAvailableItems.find(
+                                                  ({ item: it }) =>
+                                                    it.id ===
+                                                    line.child_item_id,
+                                                );
+                                              const gfChild = line.child_item_id
+                                                ? grandfatheredIngredientLabels[
+                                                    line.child_item_id
+                                                  ]
+                                                : undefined;
+                                              const childItem: Item | null =
+                                                ownChild ??
+                                                (crossChildRow
+                                                  ? ({
+                                                      id: crossChildRow.item.id,
+                                                      name: crossChildRow.item
+                                                        .name,
+                                                      item_kind: "prepped",
+                                                      is_menu_item: false,
+                                                      each_grams:
+                                                        crossChildRow.item
+                                                          .each_grams ?? null,
+                                                      base_item_id: null,
+                                                      user_id: "",
+                                                    } as Item)
+                                                  : gfChild
+                                                    ? ({
+                                                        id: line.child_item_id!,
+                                                        name: gfChild.name,
+                                                        item_kind: "prepped",
+                                                        is_menu_item: false,
+                                                        each_grams:
+                                                          gfChild.each_grams ??
+                                                          null,
+                                                        base_item_id: null,
+                                                        user_id: "",
+                                                      } as Item)
+                                                    : null);
                                               if (!childItem) {
                                                 return (
                                                   <div
@@ -5951,36 +7415,40 @@ export default function CostPage() {
                                                 convertToGrams(
                                                   line.unit,
                                                   line.quantity,
-                                                  line.child_item_id
+                                                  line.child_item_id,
                                                 );
 
                                               let costPerGram: number | null =
                                                 null;
 
-                                              if (childItem.item_kind === "raw") {
+                                              if (
+                                                childItem.item_kind === "raw"
+                                              ) {
                                                 // Raw Itemの場合
                                                 const availableVendorProducts =
                                                   getAvailableVendorProducts(
                                                     line.child_item_id || "",
-                                                    line.specific_child
+                                                    line.specific_child,
                                                   );
 
-                                                let selectedVendorProduct:
-                                                  | VendorProduct
-                                                  | null = null;
+                                                let selectedVendorProduct: VendorProduct | null =
+                                                  null;
 
                                                 if (
-                                                  line.specific_child === null ||
-                                                  line.specific_child === "lowest"
+                                                  line.specific_child ===
+                                                    null ||
+                                                  line.specific_child ===
+                                                    "lowest"
                                                 ) {
                                                   // Lowestを選択している場合、最低価格のvendor_productを探す
-                                                  let lowestCost: number | null =
-                                                    null;
+                                                  let lowestCost:
+                                                    | number
+                                                    | null = null;
                                                   for (const vp of availableVendorProducts) {
                                                     const costPerKg =
                                                       calculateCostPerKg(
                                                         vp,
-                                                        childItem
+                                                        childItem,
                                                       );
                                                     if (
                                                       costPerKg !== null &&
@@ -5988,7 +7456,8 @@ export default function CostPage() {
                                                         costPerKg < lowestCost)
                                                     ) {
                                                       lowestCost = costPerKg;
-                                                      selectedVendorProduct = vp;
+                                                      selectedVendorProduct =
+                                                        vp;
                                                     }
                                                   }
                                                 } else {
@@ -5997,7 +7466,7 @@ export default function CostPage() {
                                                     availableVendorProducts.find(
                                                       (vp) =>
                                                         vp.id ===
-                                                        line.specific_child
+                                                        line.specific_child,
                                                     ) || null;
                                                 }
 
@@ -6005,7 +7474,7 @@ export default function CostPage() {
                                                   const costPerKg =
                                                     calculateCostPerKg(
                                                       selectedVendorProduct,
-                                                      childItem
+                                                      childItem,
                                                     );
                                                   if (costPerKg !== null) {
                                                     // costPerKgは$/kgなので、$/gに変換
@@ -6014,15 +7483,13 @@ export default function CostPage() {
                                                   }
                                                 }
                                               } else {
-                                                // Prepped Itemの場合
-                                                const breakdown =
-                                                  costBreakdown[
-                                                    line.child_item_id
-                                                  ];
-                                                if (breakdown) {
-                                                  costPerGram =
-                                                    breakdown.food_cost_per_gram;
-                                                }
+                                                // Prepped Itemの場合（食品＋労務の $/g）
+                                                costPerGram =
+                                                  preppedBreakdownCostPerGramForIngredientLine(
+                                                    costBreakdown[
+                                                      line.child_item_id
+                                                    ],
+                                                  );
                                               }
 
                                               if (
@@ -6065,7 +7532,7 @@ export default function CostPage() {
                                                   onClick={() =>
                                                     handleRecipeLineDeleteClick(
                                                       item.id,
-                                                      line.id
+                                                      line.id,
                                                     )
                                                   }
                                                   className={`p-2 rounded-md transition-colors ${
@@ -6109,8 +7576,9 @@ export default function CostPage() {
                                           const ingredientLines =
                                             item.recipe_lines.filter(
                                               (line) =>
-                                                line.line_type === "ingredient" &&
-                                                !line.isMarkedForDeletion
+                                                line.line_type ===
+                                                  "ingredient" &&
+                                                !line.isMarkedForDeletion,
                                             );
 
                                           for (const line of ingredientLines) {
@@ -6122,11 +7590,50 @@ export default function CostPage() {
                                               continue;
                                             }
 
-                                            const childItem =
+                                            const ownChildFooter =
                                               availableItems.find(
                                                 (i) =>
-                                                  i.id === line.child_item_id
+                                                  i.id === line.child_item_id,
                                               );
+                                            const crossChildFooter =
+                                              crossTenantAvailableItems.find(
+                                                ({ item: it }) =>
+                                                  it.id === line.child_item_id,
+                                              );
+                                            const gfFooter = line.child_item_id
+                                              ? grandfatheredIngredientLabels[
+                                                  line.child_item_id
+                                                ]
+                                              : undefined;
+                                            const childItem: Item | null =
+                                              ownChildFooter ??
+                                              (crossChildFooter
+                                                ? ({
+                                                    id: crossChildFooter.item
+                                                      .id,
+                                                    name: crossChildFooter.item
+                                                      .name,
+                                                    item_kind: "prepped",
+                                                    is_menu_item: false,
+                                                    each_grams:
+                                                      crossChildFooter.item
+                                                        .each_grams ?? null,
+                                                    base_item_id: null,
+                                                    user_id: "",
+                                                  } as Item)
+                                                : gfFooter
+                                                  ? ({
+                                                      id: line.child_item_id!,
+                                                      name: gfFooter.name,
+                                                      item_kind: "prepped",
+                                                      is_menu_item: false,
+                                                      each_grams:
+                                                        gfFooter.each_grams ??
+                                                        null,
+                                                      base_item_id: null,
+                                                      user_id: "",
+                                                    } as Item)
+                                                  : null);
                                             if (!childItem) {
                                               continue;
                                             }
@@ -6135,25 +7642,22 @@ export default function CostPage() {
                                               convertToGrams(
                                                 line.unit,
                                                 line.quantity,
-                                                line.child_item_id
+                                                line.child_item_id,
                                               );
 
                                             let costPerGram: number | null =
                                               null;
 
-                                            if (
-                                              childItem.item_kind === "raw"
-                                            ) {
+                                            if (childItem.item_kind === "raw") {
                                               // Raw Itemの場合
                                               const availableVendorProducts =
                                                 getAvailableVendorProducts(
                                                   line.child_item_id || "",
-                                                  line.specific_child
+                                                  line.specific_child,
                                                 );
 
-                                              let selectedVendorProduct:
-                                                | VendorProduct
-                                                | null = null;
+                                              let selectedVendorProduct: VendorProduct | null =
+                                                null;
 
                                               if (
                                                 line.specific_child === null ||
@@ -6166,7 +7670,7 @@ export default function CostPage() {
                                                   const costPerKg =
                                                     calculateCostPerKg(
                                                       vp,
-                                                      childItem
+                                                      childItem,
                                                     );
                                                   if (
                                                     costPerKg !== null &&
@@ -6183,7 +7687,7 @@ export default function CostPage() {
                                                   availableVendorProducts.find(
                                                     (vp) =>
                                                       vp.id ===
-                                                      line.specific_child
+                                                      line.specific_child,
                                                   ) || null;
                                               }
 
@@ -6191,7 +7695,7 @@ export default function CostPage() {
                                                 const costPerKg =
                                                   calculateCostPerKg(
                                                     selectedVendorProduct,
-                                                    childItem
+                                                    childItem,
                                                   );
                                                 if (costPerKg !== null) {
                                                   // costPerKgは$/kgなので、$/gに変換
@@ -6200,15 +7704,13 @@ export default function CostPage() {
                                                 }
                                               }
                                             } else {
-                                              // Prepped Itemの場合
-                                              const breakdown =
-                                                costBreakdown[
-                                                  line.child_item_id
-                                                ];
-                                              if (breakdown) {
-                                                costPerGram =
-                                                  breakdown.food_cost_per_gram;
-                                              }
+                                              // Prepped Itemの場合（食品＋労務の $/g）
+                                              costPerGram =
+                                                preppedBreakdownCostPerGramForIngredientLine(
+                                                  costBreakdown[
+                                                    line.child_item_id
+                                                  ],
+                                                );
                                             }
 
                                             if (
@@ -6314,7 +7816,7 @@ export default function CostPage() {
                                   >
                                     {item.recipe_lines
                                       .filter(
-                                        (line) => line.line_type === "labor"
+                                        (line) => line.line_type === "labor",
                                       )
                                       .map((line) => (
                                         <tr
@@ -6324,11 +7826,6 @@ export default function CostPage() {
                                               ? "bg-red-50"
                                               : ""
                                           }
-                                          style={{
-                                            height: "52px",
-                                            minHeight: "52px",
-                                            maxHeight: "52px",
-                                          }}
                                         >
                                           <td className="px-4 py-2">
                                             {isEditModeCosting &&
@@ -6340,7 +7837,7 @@ export default function CostPage() {
                                                     item.id,
                                                     line.id,
                                                     "labor_role",
-                                                    e.target.value
+                                                    e.target.value,
                                                   )
                                                 }
                                                 className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
@@ -6371,7 +7868,7 @@ export default function CostPage() {
                                               >
                                                 {laborRoles.find(
                                                   (r) =>
-                                                    r.name === line.labor_role
+                                                    r.name === line.labor_role,
                                                 )?.name || "-"}
                                               </div>
                                             )}
@@ -6385,11 +7882,11 @@ export default function CostPage() {
                                                 value={
                                                   minutesInputs.has(line.id)
                                                     ? minutesInputs.get(
-                                                        line.id
+                                                        line.id,
                                                       )!
                                                     : line.minutes === 0
-                                                    ? ""
-                                                    : line.minutes || ""
+                                                      ? ""
+                                                      : line.minutes || ""
                                                 }
                                                 onChange={(e) => {
                                                   const value = e.target.value;
@@ -6401,11 +7898,11 @@ export default function CostPage() {
                                                   ) {
                                                     setMinutesInputs((prev) => {
                                                       const newMap = new Map(
-                                                        prev
+                                                        prev,
                                                       );
                                                       newMap.set(
                                                         line.id,
-                                                        value
+                                                        value,
                                                       );
                                                       return newMap;
                                                     });
@@ -6424,12 +7921,12 @@ export default function CostPage() {
                                                     item.id,
                                                     line.id,
                                                     "minutes",
-                                                    numValue
+                                                    numValue,
                                                   );
                                                   // 入力中の文字列をクリア
                                                   setMinutesInputs((prev) => {
                                                     const newMap = new Map(
-                                                      prev
+                                                      prev,
                                                     );
                                                     newMap.delete(line.id);
                                                     return newMap;
@@ -6476,9 +7973,13 @@ export default function CostPage() {
                                               }
 
                                               const laborRole = laborRoles.find(
-                                                (r) => r.name === line.labor_role
+                                                (r) =>
+                                                  r.name === line.labor_role,
                                               );
-                                              if (!laborRole || !laborRole.hourly_wage) {
+                                              if (
+                                                !laborRole ||
+                                                !laborRole.hourly_wage
+                                              ) {
                                                 return (
                                                   <div
                                                     className={`text-sm ${
@@ -6516,7 +8017,7 @@ export default function CostPage() {
                                                   onClick={() =>
                                                     handleRecipeLineDeleteClick(
                                                       item.id,
-                                                      line.id
+                                                      line.id,
                                                     )
                                                   }
                                                   className={`p-2 rounded-md transition-colors ${
@@ -6561,7 +8062,7 @@ export default function CostPage() {
                                             item.recipe_lines.filter(
                                               (line) =>
                                                 line.line_type === "labor" &&
-                                                !line.isMarkedForDeletion
+                                                !line.isMarkedForDeletion,
                                             );
 
                                           for (const line of laborLines) {
@@ -6574,7 +8075,7 @@ export default function CostPage() {
                                             }
 
                                             const laborRole = laborRoles.find(
-                                              (r) => r.name === line.labor_role
+                                              (r) => r.name === line.labor_role,
                                             );
                                             if (
                                               !laborRole ||

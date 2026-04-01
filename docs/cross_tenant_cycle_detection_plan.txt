@@ -1,0 +1,175 @@
+クロステナント Cycle Detection 計画（設計メモ）
+=============================================
+
+目的
+----
+共有された他テナントの prepped item を材料にできる状況でも、依存関係の循環（例: A→B→A）を検出し、
+単一テナントの cycle detection と同様に「保存時にエラーで止める」ことを目的とする。
+
+また、共有の read 条件を満たさないクロステナント辺（Type B）は「閉路」とは別の明確なエラーで保存を止める。
+別テナントの子が prepped ではない ingredient 参照も、閉路・Type B とは別メッセージで保存を止める。
+
+本メモでやらないこと（初回の範囲）
+----------------------------------
+- cycle detection を DB の RPC に移すことはしない（今回の範囲外）
+- 原価計算ロジック（calculate_item_costs_with_breakdown の SQL）の変更はしない
+- access control（Cedar 等）の再設計はしない
+- GET /cross-tenant-item-shares/available と原価 seed の「コード共通化・一本リファクタ」はしない
+  （リスク回避のため。cycle 側は seed と同じ意味の条件を TypeScript で再現する）
+- backend/src/services/cycle-detection.ts の checkCyclesForItems はルートから未使用のため、
+  本マイルストーンでは変更しない（必要なら将来の整理タスク）
+
+決定事項（実装の前提）
+--------------------
+1) viewer tenant（編集主体）
+   - HTTP リクエストあたり viewer は 1 つに固定する。
+   - 通常は選択中テナント（例: selected_tenant_id / テナント文脈ヘッダ）と一致させる。
+   - POST /recipe-lines/batch を含む保存 API は「当該テナント向けの一括保存」が契約。payload 内で
+     recipe_lines.tenant_id が viewer と一致しない行が混ざる場合は想定外として拒否（400 等）でよい。
+
+2) 共有判定（越境してこの材料を辿っていいか）
+   - 正規の意味論は calculate_item_costs_with_breakdown の cross-tenant seed ブロック
+     （supabase/migrations/20260324110000_calculate_item_costs_with_breakdown_cross_tenant.sql 内の
+     temp_ct_foreign_needed を満たす EXISTS）に合わせる。
+   - マイグレーションコメントどおり、これは GET /cross-tenant-item-shares/available の read 条件と
+     意図上同等。実装は TS で上記 EXISTS と同じ条件を再現する。
+   - foreign 子は prepped のみを越境辺として辿る対象とする（seed と同じ）。
+
+3) Type A / Type B
+   - Type A: 許可されたクロステナント辺（child が prepped かつ seed 相当の read 共有）→ DFS で辿り、
+     閉路検出の対象とする。
+   - Type B: tenant 不一致かつ child が prepped だが read 共有が無い → 辿らず、閉路とは別の 400 で止める。
+
+4) 別テナントの子が prepped でない場合
+   - parent と child の tenant_id が異なり、かつ child が prepped ではない ingredient 参照は、
+     本プロダクトでは越境材料として扱わない。探索で無視するだけにせず、保存を拒否し、
+     閉路・Type B とは区別できる 400 メッセージを返す。
+
+5) 探索の深さ上限
+   - クロステナント cycle 探索専用の「辿る深さの上限」は設けない。
+   - 原価 RPC の p_call_depth（例: 8）は別用途であり、本件とは切り離す。
+
+6) 保存経路で「いつ cross 版を使うか」
+   - 常にクロステナント対応の探索（例: checkCycleCrossTenant）を用いる。
+   - グラフが単一テナントのみで完結する場合でも同じ入口を使い、結果は既存 checkCycle と同等になる
+     ように実装する。既存 checkCycle() 関数のセマンティクス自体は変えず、呼び出しを差し替える想定。
+
+現状（ベースライン）
+--------------------
+既存 cycle detection:
+- backend/src/services/cycle-detection.ts: checkCycle(itemId, tenantIds, ...)
+  - DFS + visited セット
+  - items / recipe_lines を tenant_id IN tenantIds で取得して辿る
+  - tenantIds 範囲で item が取れない場合は SKIP（return）するため、クロステナントの辺は見落とし得る
+呼び出し元（checkCycle を直接呼ぶのは次の 4 ブロックのみ）:
+- backend/src/routes/recipe-lines.ts:
+  - POST /（単発作成）1 箇所
+  - PUT /:id（ingredient で child 変更時）1 箇所
+  - POST /batch 1 箇所
+- backend/src/routes/items.ts: PUT/PATCH 等の update 経路（prepped かつ ingredient 行あり）1 箇所
+
+クロステナントで循環を見落とす理由
+----------------------------------
+クロステナントの依存グラフでは、parent の tenant_id と child の tenant_id が異なる「辺」が出現する。
+しかし現行の checkCycle は req.user.tenant_ids の範囲内しかノード/辺を取得できないため、
+外側のノード/辺に到達できず探索が途中で止まり、偽陰性（false negative）になり得る。
+
+目標の挙動
+----------
+- レシピラインの保存（create/update/batch）および items 更新経路で、共有で参照可能な foreign prepped を
+  含めた依存グラフに循環がある場合は、API が 400 を返して保存を拒否する（既存 cycle に近いメッセージ）。
+- Type B（共有なしの prepped foreign）: 閉路とは別の明確な 400。
+- 別テナント・非 prepped の子: 閉路・Type B とは別の明確な 400。
+
+設計原則
+--------
+1) 既存 checkCycle() の実装は残し、単一テナント時の期待結果と新入口の結果を一致させる（回帰の比較基準）
+2) 上記 4 ブロックすべてで新入口（クロステナント対応 DFS）のみを呼ぶ（決定事項 6）
+3) 探索は 1 手ではなく、子→孫→ひ孫…まで深く辿る（既存と同じ DFS）
+4) クロステナント辺は Type A のみ辿る
+5) Type B・別テナント非 prepped は辿らず、それぞれ専用の 400 で止める（決定事項 3・4）
+
+用語
+----
+- ノード: item（items.id）
+- 辺: ingredient の recipe line（recipe_lines.parent_item_id -> recipe_lines.child_item_id）
+- 単一テナント辺: parent.tenant_id == child.tenant_id
+- クロステナント辺: parent.tenant_id != child.tenant_id
+- viewer: 編集・保存の文脈テナント（リクエストあたり 1 つ）
+- Type A: child が prepped で、viewer から seed 相当の read 共有がある越境辺
+- Type B: tenant 不一致、child は prepped だが read 共有が無い参照
+- 別テナント・非 prepped: tenant 不一致だが child が prepped ではない ingredient 参照（本件では不許可）
+
+計画：クロステナント版 cycle detection を追加実装（コードベース）
+--------------------------------------------------------------
+Step 1: 新しいサービスを追加
+- 新規ファイル例: backend/src/services/cycle-detection-cross-tenant.ts（名称は調整可）
+- export: checkCycleCrossTenant(...)（viewerTenantId を含むシグネチャは実装時に確定）
+- 内部で共有判定は seed の EXISTS と同じ論理を TS で実装（DB に問い合わせる場合は同等結果になること）
+
+Step 2: クロステナント探索で必要なデータ
+- 開始コンテキスト:
+  - viewer tenant_id（決定事項 1）
+  - user_id（必要なら認可に使用）
+- 各 itemId で必要:
+  - item.tenant_id と item_kind
+  - ingredient recipe lines（parent_item_id=itemId, line_type='ingredient'）
+- 各 child での判断:
+  - parent.tenant_id == child.tenant_id → 常に辿る（既存と同様）
+  - tenant 不一致:
+    - child が prepped でない → 辿らず、決定事項 4 のエラーで保存拒否（探索のどの段階で検出してもよいが一貫させる）
+    - child が prepped で seed 相当の共有あり → 辿る（Type A）
+    - child が prepped で共有なし → 辿らず Type B エラー
+
+実装メモ: recipe_lines の取り方（新関数を書くときの注意）
+--------------------------------------------------------
+- 越境辺を「辿っていいか」の判定には viewer を使う（決定事項 1・2）。viewer は変えない。
+- いま DFS で見ている親 item を X とする。X の ingredient 行を DB から取るとき、
+  recipe_lines を常に tenant_id = viewer だけで絞ると、次のような行を取りこぼし得る:
+  - 例: viewer はテナント A。X がテナント B の共有 prepped のとき、X の子となる材料行は
+    多くの場合 recipe_lines.tenant_id = B で保持されている（B 側で編集されたレシピ）。
+  - A だけで絞ると X の「中身」に降りられず、閉路検出が偽陰性になり得る。
+- 安全な方針: 親 X の材料行は parent_item_id = X（かつ line_type=ingredient）を基準に取り、
+  tenant フィルタが必要なら items.tenant_id（X のホームテナント）に合わせる。
+  （既存 checkCycle が tenantIds だけで行を取っていたのが越境で破綻しうる点の、実装側の踏み台。）
+
+Step 3: sharing 条件（実装チェックリスト）
+- cross_tenant_item_shares と company_tenants の結び（閲覧テナントが cts.company_id に属する）
+- cts.item_id = child.id, cts.owner_tenant_id = child.tenant_id
+- 'read' = ANY (cts.allowed_actions)
+- target: (target_type=company かつ target_id = company_id::text) または
+  (target_type=tenant かつ target_id = viewer::text)
+- 参照: migrations/20260324110000_calculate_item_costs_with_breakdown_cross_tenant.sql
+  temp_ct_foreign_needed の EXISTS ブロック
+
+Step 4: 呼び出し箇所（すべて必須）
+次の 4 箇所で、既存 checkCycle の代わりに checkCycleCrossTenant（仮称）を常に呼ぶ。
+1) backend/src/routes/recipe-lines.ts — POST /batch
+2) backend/src/routes/recipe-lines.ts — POST /
+3) backend/src/routes/recipe-lines.ts — PUT /:id（ingredient で child 変更時）
+4) backend/src/routes/items.ts — prepped 更新で ingredient 行がある場合の cycle チェック
+
+recipe-lines は 1 ファイル内に 3 ブロック、items に 1 ブロックある（合計 4）。
+
+Step 5: パフォーマンス
+- クエリが増えやすいため、item / recipe_lines の取得と sharing 判定を itemId・(viewer, childId) で
+  メモ化するなどの最適化を検討する。
+- cycle 専用の深さ上限は設けない（決定事項 5）。visited による無限ループ防止は従来どおり。
+
+Step 6: エラーメッセージ / UX
+- 閉路: 400、既存 cycle error に近い文言。
+- Type B: 400、閉路と区別できる文言（例: 共有されていない他テナント材料を参照している）。
+- 別テナント・非 prepped: 400、上記と区別できる文言（例: 他テナント材料は prepped の共有のみ許可）。
+
+Step 7: テスト（本番有効化の前提）
+- クロステナントでも閉路が無いケース（OK）
+- A→B→A の単純閉路（NG・cycle メッセージ）
+- 長い鎖での閉路（NG）
+- sharing を満たさない prepped foreign は Type B で保存拒否（閉路と誤認しない）
+- 別テナント・非 prepped の子は保存拒否（専用メッセージ）
+- 単一テナントのみのグラフでは既存 checkCycle と同じ成否になること（回帰）
+
+任意（未着手でも可）
+--------------------
+- feature flag による段階導入
+- raw のクロステナント材料を将来対象にするか（現決定は prepped のみが越境の辿り対象）

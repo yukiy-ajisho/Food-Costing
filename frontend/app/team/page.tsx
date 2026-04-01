@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { apiRequest } from "@/lib/api";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useCompany, type Company } from "@/contexts/CompanyContext";
@@ -15,11 +15,12 @@ import {
   Mail,
   Plus,
   Building2,
+  Store,
 } from "lucide-react";
 
 interface TenantMember {
   user_id: string;
-  role: "admin" | "manager" | "staff";
+  role: "admin" | "director" | "manager" | "staff";
   member_since: string;
   name?: string;
   email?: string;
@@ -38,7 +39,7 @@ interface TenantWithMembers {
 interface Invitation {
   id: string;
   email: string;
-  role: "manager" | "staff";
+  role: "director" | "manager" | "staff";
   tenant_id: string;
   status: "pending" | "accepted" | "expired" | "canceled";
   email_status?: "delivered" | "failed" | null;
@@ -86,13 +87,6 @@ export default function TeamPage() {
     TenantWithMembers[]
   >([]);
   const [loading, setLoading] = useState(true);
-  const [editingTenantId, setEditingTenantId] = useState<string | null>(null);
-  const [editedTenantNames, setEditedTenantNames] = useState<
-    Map<string, string>
-  >(new Map());
-  const [savingTenantIds, setSavingTenantIds] = useState<Set<string>>(
-    new Set(),
-  );
   const [showInviteForm, setShowInviteForm] = useState<Map<string, boolean>>(
     new Map(),
   );
@@ -100,9 +94,19 @@ export default function TeamPage() {
     new Map(),
   );
   const [inviteRole, setInviteRole] = useState<
-    Map<string, "manager" | "staff">
+    Map<string, "director" | "manager" | "staff">
   >(new Map());
   const [sendingInvite, setSendingInvite] = useState<Set<string>>(new Set());
+  /** テナントごとにメンバーのロール編集モード（Edit で表示切替） */
+  const [editingTenantMembers, setEditingTenantMembers] = useState<Set<string>>(
+    new Set(),
+  );
+  const [memberRoleDrafts, setMemberRoleDrafts] = useState<
+    Map<string, Map<string, TenantMember["role"]>>
+  >(new Map());
+  const [savingMemberEdits, setSavingMemberEdits] = useState<Set<string>>(
+    new Set(),
+  );
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loadingInvitations, setLoadingInvitations] = useState(false);
   const [showCreateTenantModal, setShowCreateTenantModal] = useState(false);
@@ -124,6 +128,52 @@ export default function TeamPage() {
   const [sendingInviteDirector, setSendingInviteDirector] = useState(false);
 
   const isDark = theme === "dark";
+
+  const selectedCompanyLabel = useMemo(() => {
+    if (!selectedCompanyId) return null;
+    return (
+      companies.find((c) => c.id === selectedCompanyId)?.company_name ?? null
+    );
+  }, [companies, selectedCompanyId]);
+
+  const tenantPayloadInSync =
+    tenantsWithMembers.length > 0 &&
+    tenantsWithMembers[0].id === teamSelectedTenantId;
+  const selectedTenantDetail = tenantPayloadInSync
+    ? tenantsWithMembers[0]
+    : undefined;
+  const selectedTenantDisplayName =
+    selectedTenantDetail?.name ??
+    companyTenants.find((t) => t.id === teamSelectedTenantId)?.name ??
+    "";
+
+  /** Team ページ: Company / Tenant で共通のセクション枠 */
+  const teamSectionShell = `rounded-xl border overflow-hidden shadow-sm ${
+    isDark ? "bg-slate-800/95 border-slate-600" : "bg-white border-gray-200"
+  }`;
+  const companyAccentBar = isDark
+    ? "bg-gradient-to-r from-violet-600 to-indigo-500"
+    : "bg-gradient-to-r from-violet-500 to-indigo-500";
+  const tenantAccentBar = isDark
+    ? "bg-gradient-to-r from-teal-600 to-emerald-600"
+    : "bg-gradient-to-r from-teal-500 to-emerald-500";
+  /** Invite director / New company / New tenant などプライマリの青ボタン */
+  const teamPrimaryBlueButtonClass = `flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium shrink-0 ${
+    isDark
+      ? "bg-blue-600 hover:bg-blue-700 text-white"
+      : "bg-blue-500 hover:bg-blue-600 text-white"
+  }`;
+  /** Edit / Cancel などセカンダリのアウトラインボタン */
+  const teamOutlineActionButtonClass = `flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium shrink-0 ${
+    isDark
+      ? "bg-slate-600 hover:bg-slate-500 text-slate-100 border border-slate-500"
+      : "bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-200"
+  }`;
+  const dashedEmptyClass = `rounded-lg border-2 border-dashed p-8 text-center text-sm ${
+    isDark
+      ? "border-slate-600 text-slate-400 bg-slate-900/20"
+      : "border-gray-300 text-gray-600 bg-gray-50/50"
+  }`;
 
   // 選択した会社のメンバー一覧を取得
   useEffect(() => {
@@ -204,10 +254,6 @@ export default function TeamPage() {
         };
 
         setTenantsWithMembers([tenantWithMembers]);
-
-        const namesMap = new Map<string, string>();
-        namesMap.set(tenantWithMembers.id, tenantWithMembers.name);
-        setEditedTenantNames(namesMap);
       } catch (error) {
         console.error("Failed to fetch team data:", error);
       } finally {
@@ -310,7 +356,9 @@ export default function TeamPage() {
         created_at: newTenant.created_at,
         role: newTenant.role,
         company_id: selectedCompanyId,
-        company_name: companies.find((c) => c.id === selectedCompanyId)?.company_name ?? null,
+        company_name:
+          companies.find((c) => c.id === selectedCompanyId)?.company_name ??
+          null,
       });
       setTeamSelectedTenantId(newTenant.id);
       setShowCreateTenantModal(false);
@@ -368,7 +416,9 @@ export default function TeamPage() {
       setCompanyInvitations(data.invitations ?? []);
     } catch (error: unknown) {
       const apiError = error as { details?: string; error?: string };
-      alert(apiError.details || apiError.error || "Failed to cancel invitation");
+      alert(
+        apiError.details || apiError.error || "Failed to cancel invitation",
+      );
     }
   };
 
@@ -388,54 +438,25 @@ export default function TeamPage() {
     return "delivered"; // フォールバック
   };
 
-  // テナント名を保存
-  const handleSaveTenantName = async (tenantId: string) => {
-    const editedName = editedTenantNames.get(tenantId);
-    if (!editedName || !editedName.trim()) return;
-
-    try {
-      setSavingTenantIds((prev) => new Set(prev).add(tenantId));
-      const updatedTenant = await apiRequest<{
-        id: string;
-        name: string;
-        type: string;
-        created_at: string;
-      }>(
-        `/tenants/${tenantId}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ name: editedName.trim() }),
-        },
-        tenantId,
-      );
-
-      // テナント情報を更新
-      setTenantsWithMembers((prev) =>
-        prev.map((tenant) =>
-          tenant.id === tenantId
-            ? { ...tenant, name: updatedTenant.name }
-            : tenant,
-        ),
-      );
-      setEditingTenantId(null);
-    } catch (error) {
-      console.error("Failed to update tenant name:", error);
-      alert("Failed to update tenant name");
-    } finally {
-      setSavingTenantIds((prev) => {
-        const next = new Set(prev);
-        next.delete(tenantId);
-        return next;
-      });
+  const getCompanyInvitationDisplayStatus = (
+    invitation: CompanyInvitationRow,
+  ): string => {
+    if (invitation.status === "accepted") return "accepted";
+    if (invitation.status === "expired") return "expired";
+    if (invitation.status === "canceled") return "canceled";
+    if (invitation.status === "pending") {
+      if (invitation.email_status === "failed") return "failed";
+      return "delivered";
     }
+    return "delivered";
   };
 
-  // メンバーの役割を変更
+  // メンバーの役割を変更（成功時 true）
   const handleChangeMemberRole = async (
     tenantId: string,
     userId: string,
-    newRole: "admin" | "manager" | "staff",
-  ) => {
+    newRole: "admin" | "director" | "manager" | "staff",
+  ): Promise<boolean> => {
     try {
       await apiRequest(
         `/tenants/${tenantId}/members/${userId}/role`,
@@ -446,7 +467,6 @@ export default function TeamPage() {
         tenantId,
       );
 
-      // メンバー一覧を更新
       setTenantsWithMembers((prev) =>
         prev.map((tenant) =>
           tenant.id === tenantId
@@ -459,10 +479,25 @@ export default function TeamPage() {
             : tenant,
         ),
       );
+      return true;
     } catch (error) {
       console.error("Failed to change member role:", error);
       alert("Failed to change member role");
+      return false;
     }
+  };
+
+  const cancelEditingTenantMembers = (tenantId: string) => {
+    setEditingTenantMembers((prev) => {
+      const next = new Set(prev);
+      next.delete(tenantId);
+      return next;
+    });
+    setMemberRoleDrafts((prev) => {
+      const next = new Map(prev);
+      next.delete(tenantId);
+      return next;
+    });
   };
 
   // メンバーを削除
@@ -480,20 +515,89 @@ export default function TeamPage() {
         tenantId,
       );
 
-      // メンバー一覧を更新
-      setTenantsWithMembers((prev) =>
-        prev.map((tenant) =>
+      setTenantsWithMembers((prev) => {
+        const next = prev.map((tenant) =>
           tenant.id === tenantId
             ? {
                 ...tenant,
                 members: tenant.members.filter((m) => m.user_id !== userId),
               }
             : tenant,
-        ),
-      );
+        );
+        const t = next.find((x) => x.id === tenantId);
+        if (t?.members.length === 0) {
+          queueMicrotask(() => cancelEditingTenantMembers(tenantId));
+        }
+        return next;
+      });
+      setMemberRoleDrafts((prev) => {
+        const draft = prev.get(tenantId);
+        if (!draft) return prev;
+        const nextDraft = new Map(draft);
+        nextDraft.delete(userId);
+        const next = new Map(prev);
+        next.set(tenantId, nextDraft);
+        return next;
+      });
     } catch (error) {
       console.error("Failed to remove member:", error);
       alert("Failed to remove member");
+    }
+  };
+
+  const beginEditingTenantMembers = (
+    tenantId: string,
+    members: TenantMember[],
+  ) => {
+    setEditingTenantMembers((prev) => new Set(prev).add(tenantId));
+    setMemberRoleDrafts((prev) => {
+      const next = new Map(prev);
+      const draft = new Map<string, TenantMember["role"]>();
+      for (const m of members) {
+        draft.set(m.user_id, m.role);
+      }
+      next.set(tenantId, draft);
+      return next;
+    });
+  };
+
+  const setMemberRoleDraft = (
+    tenantId: string,
+    userId: string,
+    role: TenantMember["role"],
+  ) => {
+    setMemberRoleDrafts((prev) => {
+      const next = new Map(prev);
+      const draft = new Map(next.get(tenantId) ?? []);
+      draft.set(userId, role);
+      next.set(tenantId, draft);
+      return next;
+    });
+  };
+
+  const saveTenantMemberEdits = async (tenantId: string) => {
+    const tenant = tenantsWithMembers.find((t) => t.id === tenantId);
+    const draft = memberRoleDrafts.get(tenantId);
+    if (!tenant || !draft) {
+      cancelEditingTenantMembers(tenantId);
+      return;
+    }
+    setSavingMemberEdits((prev) => new Set(prev).add(tenantId));
+    try {
+      for (const m of tenant.members) {
+        const desired = draft.get(m.user_id);
+        if (desired != null && desired !== m.role) {
+          const ok = await handleChangeMemberRole(tenantId, m.user_id, desired);
+          if (!ok) return;
+        }
+      }
+      cancelEditingTenantMembers(tenantId);
+    } finally {
+      setSavingMemberEdits((prev) => {
+        const next = new Set(prev);
+        next.delete(tenantId);
+        return next;
+      });
     }
   };
 
@@ -565,215 +669,236 @@ export default function TeamPage() {
   return (
     <div className="p-8">
       <div className="max-w-4xl mx-auto space-y-8">
-        {/* Company 階層: 会社一覧・選択・会社配下テナント一覧・テナント追加 */}
-        <div
-          className={`p-6 rounded-lg ${
-            isDark ? "bg-slate-800" : "bg-white"
-          }`}
-        >
-          <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-            <Building2 className="h-5 w-5" />
-            Companies
-          </h2>
-          {companyLoading ? (
-            <div
-              className={
-                isDark ? "text-slate-400" : "text-gray-500"
-              }
-            >
-              Loading...
-            </div>
-          ) : companies.length === 0 ? (
-            <div className="space-y-4">
-              <p
-                className={
-                  isDark ? "text-slate-300" : "text-gray-600"
-                }
-              >
-                Create a company to manage tenants (stores or locations).
-              </p>
+        {/* Company カードの外: 追加用アクション */}
+        <div className="space-y-3">
+          {companies.length > 0 ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
+                type="button"
                 onClick={() => setShowCreateCompanyModal(true)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                  isDark
-                    ? "bg-blue-600 hover:bg-blue-700 text-white"
-                    : "bg-blue-500 hover:bg-blue-600 text-white"
-                }`}
+                className={teamPrimaryBlueButtonClass}
               >
                 <Plus className="h-4 w-4" />
-                Create Company
+                New company
               </button>
             </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <label
-                  className={`text-sm font-medium ${
-                    isDark ? "text-slate-300" : "text-gray-700"
-                  }`}
-                >
-                  Select company:
-                </label>
-                <select
-                  value={selectedCompanyId ?? ""}
-                  onChange={(e) =>
-                    setSelectedCompanyId(
-                      e.target.value ? e.target.value : null,
-                    )
-                  }
-                  className={`px-3 py-2 rounded border ${
-                    isDark
-                      ? "bg-slate-600 border-slate-500 text-slate-200"
-                      : "bg-white border-gray-300 text-gray-900"
-                  }`}
-                >
-                  <option value="">—</option>
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.company_name}
-                    </option>
-                  ))}
-                </select>
+          ) : null}
+          {/* Company（親会社・ディレクター・配下ロケーション） */}
+          <div className={teamSectionShell}>
+            <div className={`h-1 w-full ${companyAccentBar}`} aria-hidden />
+            <div className="p-6 space-y-6">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 min-w-0">
+              <h2
+                className={`text-xl font-semibold flex items-center gap-2 shrink-0 ${
+                  isDark ? "text-slate-100" : "text-gray-900"
+                }`}
+              >
+                <Building2
+                  className="h-5 w-5 shrink-0 text-violet-500"
+                  aria-hidden
+                />
+                Company
+              </h2>
+              {companies.length > 0 ? (
+                <div className="flex flex-1 items-center justify-end min-w-0">
+                  <div className="flex items-center gap-3 min-w-0 max-w-full">
+                    <div
+                      className={`h-px w-10 sm:w-14 shrink-0 ${
+                        isDark ? "bg-slate-600" : "bg-gray-300"
+                      }`}
+                      aria-hidden
+                    />
+                    <span
+                      className={`text-lg sm:text-xl font-semibold text-center truncate max-w-[min(100%,20rem)] ${
+                        selectedCompanyLabel
+                          ? isDark
+                            ? "text-slate-100"
+                            : "text-gray-900"
+                          : isDark
+                            ? "text-slate-500"
+                            : "text-gray-500"
+                      }`}
+                    >
+                      {selectedCompanyLabel ?? "Select in header"}
+                    </span>
+                    <div
+                      className={`h-px w-10 sm:w-14 shrink-0 ${
+                        isDark ? "bg-slate-600" : "bg-gray-300"
+                      }`}
+                      aria-hidden
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            {companies.length === 0 ? (
+              <div className="space-y-4">
+                <p className={isDark ? "text-slate-300" : "text-gray-600"}>
+                  Create a company to manage tenants (stores or locations).
+                </p>
                 <button
                   onClick={() => setShowCreateCompanyModal(true)}
-                  className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm ${
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
                     isDark
-                      ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
-                      : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                      ? "bg-blue-600 hover:bg-blue-700 text-white"
+                      : "bg-blue-500 hover:bg-blue-600 text-white"
                   }`}
                 >
                   <Plus className="h-4 w-4" />
-                  New company
+                  Create Company
                 </button>
               </div>
-              {selectedCompanyId && (
-                <div className="mt-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`text-sm font-medium ${
-                        isDark ? "text-slate-300" : "text-gray-700"
+            ) : (
+              <div className="space-y-6">
+                {selectedCompanyId && (
+                  <div className="space-y-6">
+                    <div
+                      className={`p-6 rounded-lg ${
+                        isDark ? "bg-slate-800" : "bg-white"
                       }`}
                     >
-                      Tenants under this company
-                    </span>
-                    <button
-                      onClick={() => setShowCreateTenantModal(true)}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                        isDark
-                          ? "bg-blue-600 hover:bg-blue-700 text-white"
-                          : "bg-blue-500 hover:bg-blue-600 text-white"
-                      }`}
-                    >
-                      <Plus className="h-4 w-4" />
-                      Add Tenant
-                    </button>
-                  </div>
-                  {companyTenants.length === 0 ? (
-                    <p
-                      className={`text-sm ${
-                        isDark ? "text-slate-400" : "text-gray-500"
-                      }`}
-                    >
-                      No tenants yet. Click &quot;Add Tenant&quot; to create one.
-                    </p>
-                  ) : (
-                    <ul
-                      className={`list-disc list-inside space-y-1 text-sm ${
-                        isDark ? "text-slate-300" : "text-gray-700"
-                      }`}
-                    >
-                      {companyTenants.map((t) => (
-                        <li key={t.id}>
-                          {t.name}{" "}
-                          <span className="capitalize opacity-80">
-                            ({t.type})
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {/* Company directors: members + invitations */}
-                  <div className="mt-6 pt-4 border-t border-slate-600/50 space-y-4">
-                    <h3
-                      className={`text-sm font-semibold ${
-                        isDark ? "text-slate-300" : "text-gray-700"
-                      }`}
-                    >
-                      Company directors
-                    </h3>
-                    {loadingCompanyMembers ? (
-                      <p
-                        className={`text-sm ${
-                          isDark ? "text-slate-400" : "text-gray-500"
+                      <h2
+                        className={`text-xl font-semibold mb-4 ${
+                          isDark ? "text-slate-100" : "text-gray-900"
                         }`}
                       >
-                        Loading members...
-                      </p>
-                    ) : (
-                      <ul
-                        className={`text-sm space-y-1 ${
-                          isDark ? "text-slate-300" : "text-gray-700"
-                        }`}
-                      >
-                        {companyMembers.length === 0 ? (
-                          <li>No members</li>
-                        ) : (
-                          companyMembers.map((m) => (
-                            <li key={m.user_id}>
-                              {m.display_name || m.email || m.user_id}{" "}
-                              <span
-                                className={`text-xs ${
-                                  isDark ? "text-slate-500" : "text-gray-500"
+                        Team Members ({companyMembers.length})
+                      </h2>
+                      {loadingCompanyMembers ? (
+                        <div
+                          className={`text-center py-8 ${
+                            isDark ? "text-slate-400" : "text-gray-500"
+                          }`}
+                        >
+                          Loading...
+                        </div>
+                      ) : companyMembers.length === 0 ? (
+                        <div
+                          className={`text-center py-8 ${
+                            isDark ? "text-slate-400" : "text-gray-500"
+                          }`}
+                        >
+                          No members found
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {companyMembers.map((m) => {
+                            const roleText =
+                              m.role === "company_admin"
+                                ? "Admin"
+                                : m.role === "director"
+                                  ? "Director"
+                                  : m.role;
+                            return (
+                              <div
+                                key={m.user_id}
+                                className={`flex items-center justify-between p-4 rounded-lg ${
+                                  isDark ? "bg-slate-700" : "bg-gray-50"
                                 }`}
                               >
-                                ({m.role === "company_admin" ? "Admin" : "Director"})
-                              </span>
-                            </li>
-                          ))
-                        )}
-                      </ul>
-                    )}
-                    {loadingCompanyInvitations ? (
-                      <p
-                        className={`text-sm ${
-                          isDark ? "text-slate-400" : "text-gray-500"
-                        }`}
-                      >
-                        Loading invitations...
-                      </p>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between gap-2">
-                          <span
-                            className={`text-sm ${
-                              isDark ? "text-slate-400" : "text-gray-600"
+                                <div className="flex items-center gap-4 min-w-0">
+                                  <div
+                                    className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                                      isDark ? "bg-slate-600" : "bg-gray-200"
+                                    }`}
+                                  >
+                                    <User className="h-6 w-6" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div
+                                      className={`font-medium ${
+                                        isDark
+                                          ? "text-slate-100"
+                                          : "text-gray-900"
+                                      }`}
+                                    >
+                                      {m.display_name || m.email || "User"}
+                                    </div>
+                                    {m.email && m.display_name ? (
+                                      <div
+                                        className={`text-sm ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-500"
+                                        }`}
+                                      >
+                                        {m.email}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-4 shrink-0">
+                                  <span
+                                    className={`px-3 py-1 rounded text-sm font-medium capitalize ${
+                                      m.role === "company_admin" ||
+                                      m.role === "director"
+                                        ? "bg-red-100 text-red-800"
+                                        : "bg-gray-100 text-gray-800"
+                                    }`}
+                                  >
+                                    {roleText}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div
+                      className={`p-6 rounded-lg ${
+                        isDark ? "bg-slate-800" : "bg-white"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <h2
+                          className={`text-xl font-semibold ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          Invitations ({companyInvitations.length})
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (showInviteDirectorForm) {
+                              setShowInviteDirectorForm(false);
+                              setInviteDirectorEmail("");
+                            } else {
+                              setShowInviteDirectorForm(true);
+                            }
+                          }}
+                          className={teamPrimaryBlueButtonClass}
+                        >
+                          <UserPlus className="h-4 w-4" />
+                          {showInviteDirectorForm
+                            ? "Cancel"
+                            : "Invite director"}
+                        </button>
+                      </div>
+                      {showInviteDirectorForm ? (
+                        <div
+                          className={`mb-6 p-4 rounded-lg ${
+                            isDark ? "bg-slate-700" : "bg-gray-50"
+                          }`}
+                        >
+                          <h3
+                            className={`text-lg font-medium mb-4 ${
+                              isDark ? "text-slate-100" : "text-gray-900"
                             }`}
                           >
-                            Pending invitations
-                          </span>
-                          {!showInviteDirectorForm ? (
-                            <button
-                              onClick={() => setShowInviteDirectorForm(true)}
-                              className={`flex items-center gap-1 px-3 py-1.5 rounded text-sm font-medium ${
-                                isDark
-                                  ? "bg-blue-600 hover:bg-blue-700 text-white"
-                                  : "bg-blue-500 hover:bg-blue-600 text-white"
-                              }`}
-                            >
-                              <UserPlus className="h-4 w-4" />
-                              Invite director
-                            </button>
-                          ) : null}
-                        </div>
-                        {showInviteDirectorForm ? (
+                            Send invitation
+                          </h3>
                           <div className="flex flex-wrap items-center gap-2">
                             <input
                               type="email"
                               value={inviteDirectorEmail}
                               onChange={(e) =>
-                                setInviteDirectorEmail(e.target.value)}
+                                setInviteDirectorEmail(e.target.value)
+                              }
                               placeholder="Email address"
-                              className={`px-3 py-2 rounded border text-sm ${
+                              className={`min-w-[200px] flex-1 px-3 py-2 rounded border text-sm ${
                                 isDark
                                   ? "bg-slate-600 border-slate-500 text-slate-200"
                                   : "bg-white border-gray-300 text-gray-900"
@@ -781,12 +906,13 @@ export default function TeamPage() {
                               disabled={sendingInviteDirector}
                             />
                             <button
+                              type="button"
                               onClick={handleInviteDirector}
                               disabled={
                                 sendingInviteDirector ||
                                 !inviteDirectorEmail.trim()
                               }
-                              className={`px-3 py-2 rounded text-sm font-medium ${
+                              className={`px-4 py-2 rounded-lg text-sm font-medium ${
                                 isDark
                                   ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-600"
                                   : "bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-400"
@@ -795,12 +921,13 @@ export default function TeamPage() {
                               {sendingInviteDirector ? "Sending..." : "Send"}
                             </button>
                             <button
+                              type="button"
                               onClick={() => {
                                 setShowInviteDirectorForm(false);
                                 setInviteDirectorEmail("");
                               }}
                               disabled={sendingInviteDirector}
-                              className={`px-3 py-2 rounded text-sm ${
+                              className={`px-4 py-2 rounded-lg text-sm font-medium ${
                                 isDark
                                   ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
                                   : "bg-gray-200 hover:bg-gray-300 text-gray-700"
@@ -809,126 +936,822 @@ export default function TeamPage() {
                               Cancel
                             </button>
                           </div>
-                        ) : null}
-                        {companyInvitations.filter(
-                          (i) => i.status === "pending",
-                        ).length === 0 ? (
-                          <p
-                            className={`text-sm ${
-                              isDark ? "text-slate-500" : "text-gray-500"
-                            }`}
-                          >
-                            No pending invitations.
-                          </p>
-                        ) : (
-                          <ul
-                            className={`text-sm space-y-1 ${
-                              isDark ? "text-slate-300" : "text-gray-700"
-                            }`}
-                          >
-                            {companyInvitations
-                              .filter((i) => i.status === "pending")
-                              .map((inv) => (
-                                <li
-                                  key={inv.id}
-                                  className="flex items-center gap-2"
-                                >
-                                  <Mail className="h-4 w-4 shrink-0" />
-                                  {inv.email} — expires{" "}
-                                  {new Date(inv.expires_at).toLocaleDateString()}
-                                  <button
-                                    onClick={() =>
-                                      handleCancelCompanyInvitation(inv.id)}
-                                    className={`p-1 rounded ${
-                                      isDark
-                                        ? "hover:bg-slate-600 text-red-300"
-                                        : "hover:bg-gray-200 text-red-600"
+                        </div>
+                      ) : null}
+                      {loadingCompanyInvitations ? (
+                        <div
+                          className={`text-center py-8 ${
+                            isDark ? "text-slate-400" : "text-gray-500"
+                          }`}
+                        >
+                          Loading...
+                        </div>
+                      ) : companyInvitations.length === 0 ? (
+                        <div
+                          className={`text-center py-8 ${
+                            isDark ? "text-slate-400" : "text-gray-500"
+                          }`}
+                        >
+                          No invitations found
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {companyInvitations.map((invitation) => {
+                            const displayStatus =
+                              getCompanyInvitationDisplayStatus(invitation);
+                            return (
+                              <div
+                                key={invitation.id}
+                                className={`flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 rounded-lg ${
+                                  isDark ? "bg-slate-700" : "bg-gray-50"
+                                }`}
+                              >
+                                <div className="flex items-center gap-4 min-w-0">
+                                  <div
+                                    className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                                      isDark ? "bg-slate-600" : "bg-gray-200"
                                     }`}
-                                    title="Cancel invitation"
                                   >
-                                    <X className="h-4 w-4" />
-                                  </button>
-                                </li>
-                              ))}
-                          </ul>
-                        )}
-                      </>
-                    )}
+                                    <Mail className="h-6 w-6" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div
+                                      className={`font-medium ${
+                                        isDark
+                                          ? "text-slate-100"
+                                          : "text-gray-900"
+                                      }`}
+                                    >
+                                      {invitation.email}
+                                    </div>
+                                    <div
+                                      className={`text-sm mt-1 ${
+                                        isDark
+                                          ? "text-slate-400"
+                                          : "text-gray-500"
+                                      }`}
+                                    >
+                                      Sent:{" "}
+                                      {new Date(
+                                        invitation.created_at,
+                                      ).toLocaleDateString()}
+                                    </div>
+                                    <div
+                                      className={`text-xs mt-1 ${
+                                        isDark
+                                          ? "text-slate-400"
+                                          : "text-gray-500"
+                                      }`}
+                                    >
+                                      Expires:{" "}
+                                      {new Date(
+                                        invitation.expires_at,
+                                      ).toLocaleDateString()}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 shrink-0 sm:justify-end">
+                                  {displayStatus === "accepted" && (
+                                    <span
+                                      className={`px-3 py-1 rounded text-sm font-medium ${
+                                        isDark
+                                          ? "bg-green-900 text-green-200"
+                                          : "bg-green-100 text-green-800"
+                                      }`}
+                                    >
+                                      Accepted
+                                    </span>
+                                  )}
+                                  {displayStatus === "expired" && (
+                                    <span
+                                      className={`px-3 py-1 rounded text-sm font-medium ${
+                                        isDark
+                                          ? "bg-gray-700 text-gray-300"
+                                          : "bg-gray-100 text-gray-800"
+                                      }`}
+                                    >
+                                      Expired
+                                    </span>
+                                  )}
+                                  {displayStatus === "canceled" && (
+                                    <span
+                                      className={`px-3 py-1 rounded text-sm font-medium ${
+                                        isDark
+                                          ? "bg-red-900 text-red-200"
+                                          : "bg-red-100 text-red-800"
+                                      }`}
+                                    >
+                                      Canceled
+                                    </span>
+                                  )}
+                                  {displayStatus === "failed" && (
+                                    <span
+                                      className={`px-3 py-1 rounded text-sm font-medium ${
+                                        isDark
+                                          ? "bg-red-900 text-red-200"
+                                          : "bg-red-100 text-red-800"
+                                      }`}
+                                    >
+                                      Failed
+                                    </span>
+                                  )}
+                                  {invitation.status === "pending" ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleCancelCompanyInvitation(
+                                          invitation.id,
+                                        )
+                                      }
+                                      className="p-2 text-red-600 hover:text-red-700"
+                                      title="Cancel invitation"
+                                    >
+                                      <X className="h-5 w-5" />
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div
+                      className={`p-6 rounded-lg ${
+                        isDark ? "bg-slate-800" : "bg-white"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <h2
+                          className={`text-xl font-semibold ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          Tenants ({companyTenants.length})
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => setShowCreateTenantModal(true)}
+                          className={teamPrimaryBlueButtonClass}
+                        >
+                          <Plus className="h-4 w-4" />
+                          New tenant
+                        </button>
+                      </div>
+                      {companyTenants.length === 0 ? (
+                        <div
+                          className={`text-center py-8 text-sm ${
+                            isDark ? "text-slate-400" : "text-gray-500"
+                          }`}
+                        >
+                          No tenants yet. Use <strong>New tenant</strong> to
+                          create one.
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {companyTenants.map((t) => (
+                            <div
+                              key={t.id}
+                              className={`flex items-center gap-4 p-4 rounded-lg ${
+                                isDark ? "bg-slate-700" : "bg-gray-50"
+                              }`}
+                            >
+                              <div
+                                className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                                  isDark ? "bg-slate-600" : "bg-gray-200"
+                                }`}
+                                aria-hidden
+                              >
+                                <Store className="h-5 w-5 opacity-90" />
+                              </div>
+                              <div className="min-w-0">
+                                <div
+                                  className={`font-medium ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
+                                >
+                                  {t.name}
+                                </div>
+                                <div
+                                  className={`text-sm mt-1 capitalize ${
+                                    isDark ? "text-slate-400" : "text-gray-500"
+                                  }`}
+                                >
+                                  {t.type}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
+            )}
             </div>
-          )}
+          </div>
         </div>
 
-        {!selectedCompanyId ? (
-          <div
-            className={`p-6 rounded-lg text-center ${
-              isDark ? "bg-slate-800 text-slate-300" : "bg-white text-gray-600"
-            }`}
-          >
-            Select a company above to manage tenant members.
-          </div>
-        ) : companyTenants.length === 0 ? (
-          <div
-            className={`p-6 rounded-lg text-center ${
-              isDark ? "bg-slate-800 text-slate-300" : "bg-white text-gray-600"
-            }`}
-          >
-            No tenants in this company. Add a tenant above to manage members.
-          </div>
-        ) : (
-          <>
-            {/* Team ページ内のテナントセレクター（選択した会社に属するテナントのみ表示） */}
-            <div
-              className={`p-6 rounded-lg ${
-                isDark ? "bg-slate-800" : "bg-white"
-              }`}
-            >
-              <h2 className="text-xl font-semibold mb-4">Manage tenant members</h2>
-              <div className="flex flex-wrap items-center gap-2">
-                <label
-                  className={`text-sm font-medium ${
-                    isDark ? "text-slate-300" : "text-gray-700"
-                  }`}
-                >
-                  Select tenant:
-                </label>
-                <select
-                  value={teamSelectedTenantId ?? ""}
-                  onChange={(e) =>
-                    setTeamSelectedTenantId(
-                      e.target.value ? e.target.value : null,
-                    )
-                  }
-                  className={`px-3 py-2 rounded border ${
-                    isDark
-                      ? "bg-slate-600 border-slate-500 text-slate-200"
-                      : "bg-white border-gray-300 text-gray-900"
-                  }`}
-                >
-                  {companyTenants.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+        {/* Tenant（店舗／ロケーションのメンバー・招待） */}
+        <div className={teamSectionShell}>
+          <div className={`h-1 w-full ${tenantAccentBar}`} aria-hidden />
+          <div className="p-6 space-y-6">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 min-w-0">
+              <h2
+                className={`text-xl font-semibold flex items-center gap-2 shrink-0 ${
+                  isDark ? "text-slate-100" : "text-gray-900"
+                }`}
+              >
+                <Store className="h-5 w-5 shrink-0 text-teal-500" aria-hidden />
+                Tenant
+              </h2>
+              {selectedCompanyId && companyTenants.length > 0 ? (
+                <div className="flex flex-1 items-center justify-end min-w-0">
+                  <div className="flex items-center gap-3 min-w-0 max-w-full">
+                    <div
+                      className={`h-px w-10 sm:w-14 shrink-0 ${
+                        isDark ? "bg-slate-600" : "bg-gray-300"
+                      }`}
+                      aria-hidden
+                    />
+                    <span
+                      className={`text-lg sm:text-xl font-semibold text-center truncate max-w-[min(100%,20rem)] ${
+                        teamSelectedTenantId &&
+                        !(loading && !tenantPayloadInSync) &&
+                        selectedTenantDisplayName
+                          ? isDark
+                            ? "text-slate-100"
+                            : "text-gray-900"
+                          : isDark
+                            ? "text-slate-500"
+                            : "text-gray-500"
+                      }`}
+                    >
+                      {!teamSelectedTenantId
+                        ? "Select in header"
+                        : loading && !tenantPayloadInSync
+                          ? "Loading…"
+                          : selectedTenantDisplayName || "—"}
+                    </span>
+                    <div
+                      className={`h-px w-10 sm:w-14 shrink-0 ${
+                        isDark ? "bg-slate-600" : "bg-gray-300"
+                      }`}
+                      aria-hidden
+                    />
+                  </div>
+                </div>
+              ) : null}
             </div>
 
-            {loading && teamSelectedTenantId ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="text-lg">Loading tenant...</div>
+            {!selectedCompanyId ? (
+              <div className={dashedEmptyClass}>
+                <p>
+                  Select a <strong>company</strong> in the{" "}
+                  <strong>header</strong> first.
+                </p>
               </div>
-            ) : null}
+            ) : companyTenants.length === 0 ? (
+              <div className={dashedEmptyClass}>
+                <p>
+                  This company has no tenants yet. Use{" "}
+                  <strong>New tenant</strong> in the <strong>Tenants</strong>{" "}
+                  section under Company above, then choose a{" "}
+                  <strong>tenant</strong> in the header.
+                </p>
+              </div>
+            ) : (
+              <>
+                {loading && teamSelectedTenantId ? (
+                  <div
+                    className={`flex items-center justify-center min-h-[8rem] rounded-lg border text-sm ${
+                      isDark
+                        ? "border-slate-600 text-slate-400"
+                        : "border-gray-200 text-gray-500"
+                    }`}
+                  >
+                    Loading tenant…
+                  </div>
+                ) : null}
 
-            {!loading && teamSelectedTenantId && tenantsWithMembers.length === 0 ? (
-              <div className="flex items-center justify-center h-32">
-                <div className="text-lg">No tenant data</div>
-              </div>
-            ) : null}
-          </>
-        )}
+                {!loading &&
+                teamSelectedTenantId &&
+                tenantsWithMembers.length === 0 ? (
+                  <div
+                    className={`flex items-center justify-center min-h-[8rem] rounded-lg border text-sm ${
+                      isDark
+                        ? "border-slate-600 text-slate-400"
+                        : "border-gray-200 text-gray-500"
+                    }`}
+                  >
+                    No data for this tenant yet.
+                  </div>
+                ) : null}
+              </>
+            )}
+
+            {companyTenants.length > 0 &&
+              tenantsWithMembers.map((tenant) => {
+                const isAdmin =
+                  tenant.role === "admin" || tenant.role === "director";
+
+                return (
+                  <div key={tenant.id} className="space-y-6">
+                    {/* チームメンバーセクション */}
+                    <div
+                      className={`p-6 rounded-lg ${
+                        isDark ? "bg-slate-800" : "bg-white"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                        <h2
+                          className={`text-xl font-semibold ${
+                            isDark ? "text-slate-100" : "text-gray-900"
+                          }`}
+                        >
+                          Team Members ({tenant.members.length})
+                        </h2>
+                        {isAdmin && tenant.members.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            {editingTenantMembers.has(tenant.id) ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void saveTenantMemberEdits(tenant.id)
+                                  }
+                                  disabled={savingMemberEdits.has(tenant.id)}
+                                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                                    isDark
+                                      ? "bg-green-600 hover:bg-green-700 text-white disabled:bg-slate-600"
+                                      : "bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-400"
+                                  }`}
+                                >
+                                  <Save className="h-4 w-4" />
+                                  {savingMemberEdits.has(tenant.id)
+                                    ? "Saving…"
+                                    : "Save"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    cancelEditingTenantMembers(tenant.id)
+                                  }
+                                  disabled={savingMemberEdits.has(tenant.id)}
+                                  className={teamOutlineActionButtonClass}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  beginEditingTenantMembers(
+                                    tenant.id,
+                                    tenant.members,
+                                  )
+                                }
+                                className={teamOutlineActionButtonClass}
+                              >
+                                <Edit className="h-4 w-4" />
+                                Edit
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      {tenant.members.length === 0 ? (
+                        <div
+                          className={`text-center py-8 ${
+                            isDark ? "text-slate-400" : "text-gray-500"
+                          }`}
+                        >
+                          No members found
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {tenant.members.map((member) => (
+                            <div
+                              key={member.user_id}
+                              className={`flex items-center justify-between p-4 rounded-lg ${
+                                isDark ? "bg-slate-700" : "bg-gray-50"
+                              }`}
+                            >
+                              <div className="flex items-center gap-4">
+                                <div
+                                  className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                                    isDark ? "bg-slate-600" : "bg-gray-200"
+                                  }`}
+                                >
+                                  <User className="h-6 w-6" />
+                                </div>
+                                <div>
+                                  <div
+                                    className={`font-medium ${
+                                      isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
+                                    }`}
+                                  >
+                                    {member.name || member.email || "User"}
+                                  </div>
+                                  {member.email && (
+                                    <div
+                                      className={`text-sm ${
+                                        isDark
+                                          ? "text-slate-400"
+                                          : "text-gray-500"
+                                      }`}
+                                    >
+                                      {member.email}
+                                    </div>
+                                  )}
+                                  <div
+                                    className={`text-xs mt-1 ${
+                                      isDark
+                                        ? "text-slate-400"
+                                        : "text-gray-500"
+                                    }`}
+                                  >
+                                    Member since:{" "}
+                                    {new Date(
+                                      member.member_since,
+                                    ).toLocaleDateString()}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-4">
+                                {isAdmin &&
+                                editingTenantMembers.has(tenant.id) &&
+                                memberRoleDrafts.has(tenant.id) ? (
+                                  <>
+                                    <select
+                                      value={
+                                        memberRoleDrafts
+                                          .get(tenant.id)
+                                          ?.get(member.user_id) ?? member.role
+                                      }
+                                      onChange={(e) =>
+                                        setMemberRoleDraft(
+                                          tenant.id,
+                                          member.user_id,
+                                          e.target
+                                            .value as TenantMember["role"],
+                                        )
+                                      }
+                                      disabled={savingMemberEdits.has(
+                                        tenant.id,
+                                      )}
+                                      className={`px-3 py-2 rounded border ${
+                                        isDark
+                                          ? "bg-slate-600 border-slate-500 text-slate-200"
+                                          : "bg-white border-gray-300 text-gray-900"
+                                      }`}
+                                    >
+                                      <option value="admin">Admin</option>
+                                      <option value="director">Director</option>
+                                      <option value="manager">Manager</option>
+                                      <option value="staff">Staff</option>
+                                    </select>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleRemoveMember(
+                                          tenant.id,
+                                          member.user_id,
+                                        )
+                                      }
+                                      disabled={savingMemberEdits.has(
+                                        tenant.id,
+                                      )}
+                                      className="p-2 text-red-600 hover:text-red-700 disabled:opacity-50"
+                                      title="Remove member"
+                                    >
+                                      <Trash2 className="h-5 w-5" />
+                                    </button>
+                                  </>
+                                ) : null}
+                                {(!isAdmin ||
+                                  !editingTenantMembers.has(tenant.id)) && (
+                                  <span
+                                    className={`px-3 py-1 rounded text-sm font-medium capitalize ${
+                                      member.role === "admin" ||
+                                      member.role === "director"
+                                        ? "bg-red-100 text-red-800"
+                                        : member.role === "manager"
+                                          ? "bg-blue-100 text-blue-800"
+                                          : "bg-gray-100 text-gray-800"
+                                    }`}
+                                  >
+                                    {member.role}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 招待一覧セクション（Admin / Director のみ） */}
+                    {isAdmin && (
+                      <div
+                        className={`p-6 rounded-lg ${
+                          isDark ? "bg-slate-800" : "bg-white"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                          <h2
+                            className={`text-xl font-semibold ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                          >
+                            Invitations ({invitations.length})
+                          </h2>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const newMap = new Map(showInviteForm);
+                              newMap.set(tenant.id, !newMap.get(tenant.id));
+                              setShowInviteForm(newMap);
+                              if (!newMap.get(tenant.id)) {
+                                const newEmailMap = new Map(inviteEmail);
+                                newEmailMap.delete(tenant.id);
+                                setInviteEmail(newEmailMap);
+                                const newRoleMap = new Map(inviteRole);
+                                newRoleMap.delete(tenant.id);
+                                setInviteRole(newRoleMap);
+                              } else {
+                                const newRoleMap = new Map(inviteRole);
+                                newRoleMap.set(tenant.id, "manager");
+                                setInviteRole(newRoleMap);
+                              }
+                            }}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                              isDark
+                                ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                : "bg-blue-500 hover:bg-blue-600 text-white"
+                            }`}
+                          >
+                            <UserPlus className="h-4 w-4" />
+                            {showInviteForm.get(tenant.id)
+                              ? "Cancel"
+                              : "Invite Member"}
+                          </button>
+                        </div>
+                        {showInviteForm.get(tenant.id) && (
+                          <div
+                            className={`mb-6 p-4 rounded-lg ${
+                              isDark ? "bg-slate-700" : "bg-gray-50"
+                            }`}
+                          >
+                            <h3
+                              className={`text-lg font-medium mb-4 ${
+                                isDark ? "text-slate-100" : "text-gray-900"
+                              }`}
+                            >
+                              Send invitation
+                            </h3>
+                            <div className="space-y-4">
+                              <div>
+                                <label
+                                  className={`block text-sm font-medium mb-2 ${
+                                    isDark ? "text-slate-300" : "text-gray-700"
+                                  }`}
+                                >
+                                  Email Address
+                                </label>
+                                <input
+                                  type="email"
+                                  value={inviteEmail.get(tenant.id) || ""}
+                                  onChange={(e) => {
+                                    const newMap = new Map(inviteEmail);
+                                    newMap.set(tenant.id, e.target.value);
+                                    setInviteEmail(newMap);
+                                  }}
+                                  placeholder="user@example.com"
+                                  className={`w-full px-3 py-2 rounded border ${
+                                    isDark
+                                      ? "bg-slate-600 border-slate-500 text-slate-200"
+                                      : "bg-white border-gray-300 text-gray-900"
+                                  }`}
+                                  disabled={sendingInvite.has(tenant.id)}
+                                />
+                              </div>
+                              <div>
+                                <label
+                                  className={`block text-sm font-medium mb-2 ${
+                                    isDark ? "text-slate-300" : "text-gray-700"
+                                  }`}
+                                >
+                                  Role
+                                </label>
+                                <select
+                                  value={inviteRole.get(tenant.id) || "manager"}
+                                  onChange={(e) => {
+                                    const newMap = new Map(inviteRole);
+                                    newMap.set(
+                                      tenant.id,
+                                      e.target.value as
+                                        | "director"
+                                        | "manager"
+                                        | "staff",
+                                    );
+                                    setInviteRole(newMap);
+                                  }}
+                                  className={`w-full px-3 py-2 rounded border ${
+                                    isDark
+                                      ? "bg-slate-600 border-slate-500 text-slate-200"
+                                      : "bg-white border-gray-300 text-gray-900"
+                                  }`}
+                                  disabled={sendingInvite.has(tenant.id)}
+                                >
+                                  <option value="director">Director</option>
+                                  <option value="manager">Manager</option>
+                                  <option value="staff">Staff</option>
+                                </select>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleSendInvite(tenant.id)}
+                                  disabled={sendingInvite.has(tenant.id)}
+                                  className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                                    isDark
+                                      ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-600"
+                                      : "bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-400"
+                                  }`}
+                                >
+                                  {sendingInvite.has(tenant.id) ? (
+                                    "Sending..."
+                                  ) : (
+                                    <>
+                                      <Mail className="h-4 w-4 inline mr-2" />
+                                      Send Invitation
+                                    </>
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const newMap = new Map(showInviteForm);
+                                    newMap.set(tenant.id, false);
+                                    setShowInviteForm(newMap);
+                                    const newEmailMap = new Map(inviteEmail);
+                                    newEmailMap.delete(tenant.id);
+                                    setInviteEmail(newEmailMap);
+                                    const newRoleMap = new Map(inviteRole);
+                                    newRoleMap.delete(tenant.id);
+                                    setInviteRole(newRoleMap);
+                                  }}
+                                  disabled={sendingInvite.has(tenant.id)}
+                                  className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                                    isDark
+                                      ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
+                                      : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                                  }`}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {loadingInvitations ? (
+                          <div
+                            className={`text-center py-8 ${
+                              isDark ? "text-slate-400" : "text-gray-500"
+                            }`}
+                          >
+                            Loading...
+                          </div>
+                        ) : invitations.length === 0 ? (
+                          <div
+                            className={`text-center py-8 ${
+                              isDark ? "text-slate-400" : "text-gray-500"
+                            }`}
+                          >
+                            No invitations found
+                          </div>
+                        ) : (
+                          <div className="space-y-4">
+                            {invitations.map((invitation) => {
+                              const displayStatus =
+                                getDisplayStatus(invitation);
+                              return (
+                                <div
+                                  key={invitation.id}
+                                  className={`flex items-center justify-between p-4 rounded-lg ${
+                                    isDark ? "bg-slate-700" : "bg-gray-50"
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-4">
+                                    <div
+                                      className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                                        isDark ? "bg-slate-600" : "bg-gray-200"
+                                      }`}
+                                    >
+                                      <Mail className="h-6 w-6" />
+                                    </div>
+                                    <div>
+                                      <div
+                                        className={`font-medium ${
+                                          isDark
+                                            ? "text-slate-100"
+                                            : "text-gray-900"
+                                        }`}
+                                      >
+                                        {invitation.email}
+                                      </div>
+                                      <div
+                                        className={`text-sm mt-1 ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-500"
+                                        }`}
+                                      >
+                                        Role:{" "}
+                                        <span className="capitalize">
+                                          {invitation.role}
+                                        </span>
+                                      </div>
+                                      <div
+                                        className={`text-xs mt-1 ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-500"
+                                        }`}
+                                      >
+                                        Sent:{" "}
+                                        {new Date(
+                                          invitation.created_at,
+                                        ).toLocaleDateString()}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-4">
+                                    {/* 統合ステータスのバッジ */}
+                                    {displayStatus === "accepted" && (
+                                      <span
+                                        className={`px-3 py-1 rounded text-sm font-medium ${
+                                          isDark
+                                            ? "bg-green-900 text-green-200"
+                                            : "bg-green-100 text-green-800"
+                                        }`}
+                                      >
+                                        Accepted
+                                      </span>
+                                    )}
+                                    {displayStatus === "expired" && (
+                                      <span
+                                        className={`px-3 py-1 rounded text-sm font-medium ${
+                                          isDark
+                                            ? "bg-gray-700 text-gray-300"
+                                            : "bg-gray-100 text-gray-800"
+                                        }`}
+                                      >
+                                        Expired
+                                      </span>
+                                    )}
+                                    {displayStatus === "canceled" && (
+                                      <span
+                                        className={`px-3 py-1 rounded text-sm font-medium ${
+                                          isDark
+                                            ? "bg-red-900 text-red-200"
+                                            : "bg-red-100 text-red-800"
+                                        }`}
+                                      >
+                                        Canceled
+                                      </span>
+                                    )}
+                                    {displayStatus === "failed" && (
+                                      <span
+                                        className={`px-3 py-1 rounded text-sm font-medium ${
+                                          isDark
+                                            ? "bg-red-900 text-red-200"
+                                            : "bg-red-100 text-red-800"
+                                        }`}
+                                      >
+                                        Failed
+                                      </span>
+                                    )}
+                                    {/* deliveredは表示しない（正常な状態） */}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+        </div>
 
         {/* Create Company Modal */}
         {showCreateCompanyModal && (
@@ -1103,535 +1926,6 @@ export default function TeamPage() {
             </div>
           </div>
         )}
-
-        {tenantsWithMembers.map((tenant) => {
-          const isAdmin = tenant.role === "admin";
-          const isEditing = editingTenantId === tenant.id;
-          const editedName = editedTenantNames.get(tenant.id) || tenant.name;
-          const isSaving = savingTenantIds.has(tenant.id);
-
-          return (
-            <div key={tenant.id} className="space-y-6">
-              {/* テナント情報セクション */}
-              <div
-                className={`p-6 rounded-lg ${
-                  isDark ? "bg-slate-800" : "bg-white"
-                }`}
-              >
-                <h2 className="text-xl font-semibold mb-4">{tenant.name}</h2>
-                <div className="space-y-4">
-                  <div>
-                    <label
-                      className={`text-sm font-medium ${
-                        isDark ? "text-slate-300" : "text-gray-700"
-                      }`}
-                    >
-                      Name
-                    </label>
-                    {isEditing ? (
-                      <div className="flex items-center gap-2 mt-1">
-                        <input
-                          type="text"
-                          value={editedName}
-                          onChange={(e) => {
-                            const newMap = new Map(editedTenantNames);
-                            newMap.set(tenant.id, e.target.value);
-                            setEditedTenantNames(newMap);
-                          }}
-                          className={`flex-1 px-3 py-2 rounded border ${
-                            isDark
-                              ? "bg-slate-700 border-slate-600 text-slate-200"
-                              : "bg-white border-gray-300 text-gray-900"
-                          }`}
-                          disabled={isSaving}
-                        />
-                        <button
-                          onClick={() => handleSaveTenantName(tenant.id)}
-                          disabled={isSaving}
-                          className="p-2 text-green-600 hover:text-green-700"
-                        >
-                          <Save className="h-5 w-5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            setEditingTenantId(null);
-                            const newMap = new Map(editedTenantNames);
-                            newMap.set(tenant.id, tenant.name);
-                            setEditedTenantNames(newMap);
-                          }}
-                          disabled={isSaving}
-                          className="p-2 text-gray-600 hover:text-gray-700"
-                        >
-                          <X className="h-5 w-5" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 mt-1">
-                        <span
-                          className={`text-lg ${
-                            isDark ? "text-slate-100" : "text-gray-900"
-                          }`}
-                        >
-                          {tenant.name}
-                        </span>
-                        {isAdmin && (
-                          <button
-                            onClick={() => setEditingTenantId(tenant.id)}
-                            className="p-1 text-gray-600 hover:text-gray-700"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <label
-                      className={`text-sm font-medium ${
-                        isDark ? "text-slate-300" : "text-gray-700"
-                      }`}
-                    >
-                      Type
-                    </label>
-                    <div
-                      className={`mt-1 text-lg capitalize ${
-                        isDark ? "text-slate-100" : "text-gray-900"
-                      }`}
-                    >
-                      {tenant.type}
-                    </div>
-                  </div>
-                  <div>
-                    <label
-                      className={`text-sm font-medium ${
-                        isDark ? "text-slate-300" : "text-gray-700"
-                      }`}
-                    >
-                      Your Role
-                    </label>
-                    <div
-                      className={`mt-1 capitalize ${
-                        isDark ? "text-slate-100" : "text-gray-900"
-                      }`}
-                    >
-                      {tenant.role}
-                    </div>
-                  </div>
-                  {tenant.created_at && (
-                    <div>
-                      <label
-                        className={`text-sm font-medium ${
-                          isDark ? "text-slate-300" : "text-gray-700"
-                        }`}
-                      >
-                        Created
-                      </label>
-                      <div
-                        className={`mt-1 ${
-                          isDark ? "text-slate-100" : "text-gray-900"
-                        }`}
-                      >
-                        {new Date(tenant.created_at).toLocaleDateString()}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* チームメンバーセクション */}
-              <div
-                className={`p-6 rounded-lg ${
-                  isDark ? "bg-slate-800" : "bg-white"
-                }`}
-              >
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-semibold">
-                    Team Members ({tenant.members.length})
-                  </h2>
-                  {isAdmin && (
-                    <button
-                      onClick={() => {
-                        const newMap = new Map(showInviteForm);
-                        newMap.set(tenant.id, !newMap.get(tenant.id));
-                        setShowInviteForm(newMap);
-                        // フォームを開く際にデフォルト値を設定
-                        if (!newMap.get(tenant.id)) {
-                          const newEmailMap = new Map(inviteEmail);
-                          newEmailMap.delete(tenant.id);
-                          setInviteEmail(newEmailMap);
-                          const newRoleMap = new Map(inviteRole);
-                          newRoleMap.delete(tenant.id);
-                          setInviteRole(newRoleMap);
-                        } else {
-                          const newRoleMap = new Map(inviteRole);
-                          newRoleMap.set(tenant.id, "manager");
-                          setInviteRole(newRoleMap);
-                        }
-                      }}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
-                        isDark
-                          ? "bg-blue-600 hover:bg-blue-700 text-white"
-                          : "bg-blue-500 hover:bg-blue-600 text-white"
-                      }`}
-                    >
-                      <UserPlus className="h-4 w-4" />
-                      {showInviteForm.get(tenant.id)
-                        ? "Cancel"
-                        : "Invite Member"}
-                    </button>
-                  )}
-                </div>
-                {isAdmin && showInviteForm.get(tenant.id) && (
-                  <div
-                    className={`mb-6 p-4 rounded-lg ${
-                      isDark ? "bg-slate-700" : "bg-gray-50"
-                    }`}
-                  >
-                    <h3 className="text-lg font-medium mb-4">
-                      Send Invitation
-                    </h3>
-                    <div className="space-y-4">
-                      <div>
-                        <label
-                          className={`block text-sm font-medium mb-2 ${
-                            isDark ? "text-slate-300" : "text-gray-700"
-                          }`}
-                        >
-                          Email Address
-                        </label>
-                        <input
-                          type="email"
-                          value={inviteEmail.get(tenant.id) || ""}
-                          onChange={(e) => {
-                            const newMap = new Map(inviteEmail);
-                            newMap.set(tenant.id, e.target.value);
-                            setInviteEmail(newMap);
-                          }}
-                          placeholder="user@example.com"
-                          className={`w-full px-3 py-2 rounded border ${
-                            isDark
-                              ? "bg-slate-600 border-slate-500 text-slate-200"
-                              : "bg-white border-gray-300 text-gray-900"
-                          }`}
-                          disabled={sendingInvite.has(tenant.id)}
-                        />
-                      </div>
-                      <div>
-                        <label
-                          className={`block text-sm font-medium mb-2 ${
-                            isDark ? "text-slate-300" : "text-gray-700"
-                          }`}
-                        >
-                          Role
-                        </label>
-                        <select
-                          value={inviteRole.get(tenant.id) || "manager"}
-                          onChange={(e) => {
-                            const newMap = new Map(inviteRole);
-                            newMap.set(
-                              tenant.id,
-                              e.target.value as "manager" | "staff",
-                            );
-                            setInviteRole(newMap);
-                          }}
-                          className={`w-full px-3 py-2 rounded border ${
-                            isDark
-                              ? "bg-slate-600 border-slate-500 text-slate-200"
-                              : "bg-white border-gray-300 text-gray-900"
-                          }`}
-                          disabled={sendingInvite.has(tenant.id)}
-                        >
-                          <option value="manager">Manager</option>
-                          <option value="staff">Staff</option>
-                        </select>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleSendInvite(tenant.id)}
-                          disabled={sendingInvite.has(tenant.id)}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium ${
-                            isDark
-                              ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-600"
-                              : "bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-400"
-                          }`}
-                        >
-                          {sendingInvite.has(tenant.id) ? (
-                            "Sending..."
-                          ) : (
-                            <>
-                              <Mail className="h-4 w-4 inline mr-2" />
-                              Send Invitation
-                            </>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => {
-                            const newMap = new Map(showInviteForm);
-                            newMap.set(tenant.id, false);
-                            setShowInviteForm(newMap);
-                            const newEmailMap = new Map(inviteEmail);
-                            newEmailMap.delete(tenant.id);
-                            setInviteEmail(newEmailMap);
-                            const newRoleMap = new Map(inviteRole);
-                            newRoleMap.delete(tenant.id);
-                            setInviteRole(newRoleMap);
-                          }}
-                          disabled={sendingInvite.has(tenant.id)}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium ${
-                            isDark
-                              ? "bg-slate-600 hover:bg-slate-700 text-slate-200"
-                              : "bg-gray-200 hover:bg-gray-300 text-gray-700"
-                          }`}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {tenant.members.length === 0 ? (
-                  <div
-                    className={`text-center py-8 ${
-                      isDark ? "text-slate-400" : "text-gray-500"
-                    }`}
-                  >
-                    No members found
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {tenant.members.map((member) => (
-                      <div
-                        key={member.user_id}
-                        className={`flex items-center justify-between p-4 rounded-lg ${
-                          isDark ? "bg-slate-700" : "bg-gray-50"
-                        }`}
-                      >
-                        <div className="flex items-center gap-4">
-                          <div
-                            className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                              isDark ? "bg-slate-600" : "bg-gray-200"
-                            }`}
-                          >
-                            <User className="h-6 w-6" />
-                          </div>
-                          <div>
-                            <div
-                              className={`font-medium ${
-                                isDark ? "text-slate-100" : "text-gray-900"
-                              }`}
-                            >
-                              {member.name || member.email || "User"}
-                            </div>
-                            {member.email && (
-                              <div
-                                className={`text-sm ${
-                                  isDark ? "text-slate-400" : "text-gray-500"
-                                }`}
-                              >
-                                {member.email}
-                              </div>
-                            )}
-                            <div
-                              className={`text-xs mt-1 ${
-                                isDark ? "text-slate-400" : "text-gray-500"
-                              }`}
-                            >
-                              Member since:{" "}
-                              {new Date(
-                                member.member_since,
-                              ).toLocaleDateString()}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          {isAdmin && (
-                            <>
-                              <select
-                                value={member.role}
-                                onChange={(e) =>
-                                  handleChangeMemberRole(
-                                    tenant.id,
-                                    member.user_id,
-                                    e.target.value as
-                                      | "admin"
-                                      | "manager"
-                                      | "staff",
-                                  )
-                                }
-                                className={`px-3 py-2 rounded border ${
-                                  isDark
-                                    ? "bg-slate-600 border-slate-500 text-slate-200"
-                                    : "bg-white border-gray-300 text-gray-900"
-                                }`}
-                              >
-                                <option value="admin">Admin</option>
-                                <option value="manager">Manager</option>
-                                <option value="staff">Staff</option>
-                              </select>
-                              <button
-                                onClick={() =>
-                                  handleRemoveMember(tenant.id, member.user_id)
-                                }
-                                className="p-2 text-red-600 hover:text-red-700"
-                                title="Remove member"
-                              >
-                                <Trash2 className="h-5 w-5" />
-                              </button>
-                            </>
-                          )}
-                          {!isAdmin && (
-                            <span
-                              className={`px-3 py-1 rounded text-sm font-medium capitalize ${
-                                member.role === "admin"
-                                  ? "bg-red-100 text-red-800"
-                                  : member.role === "manager"
-                                    ? "bg-blue-100 text-blue-800"
-                                    : "bg-gray-100 text-gray-800"
-                              }`}
-                            >
-                              {member.role}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* 招待一覧セクション（Adminのみ） */}
-              {isAdmin && (
-                <div
-                  className={`p-6 rounded-lg ${
-                    isDark ? "bg-slate-800" : "bg-white"
-                  }`}
-                >
-                  <h2 className="text-xl font-semibold mb-4">
-                    Invitations ({invitations.length})
-                  </h2>
-                  {loadingInvitations ? (
-                    <div
-                      className={`text-center py-8 ${
-                        isDark ? "text-slate-400" : "text-gray-500"
-                      }`}
-                    >
-                      Loading...
-                    </div>
-                  ) : invitations.length === 0 ? (
-                    <div
-                      className={`text-center py-8 ${
-                        isDark ? "text-slate-400" : "text-gray-500"
-                      }`}
-                    >
-                      No invitations found
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {invitations.map((invitation) => {
-                        const displayStatus = getDisplayStatus(invitation);
-                        return (
-                          <div
-                            key={invitation.id}
-                            className={`flex items-center justify-between p-4 rounded-lg ${
-                              isDark ? "bg-slate-700" : "bg-gray-50"
-                            }`}
-                          >
-                            <div className="flex items-center gap-4">
-                              <div
-                                className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                                  isDark ? "bg-slate-600" : "bg-gray-200"
-                                }`}
-                              >
-                                <Mail className="h-6 w-6" />
-                              </div>
-                              <div>
-                                <div
-                                  className={`font-medium ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                >
-                                  {invitation.email}
-                                </div>
-                                <div
-                                  className={`text-sm mt-1 ${
-                                    isDark ? "text-slate-400" : "text-gray-500"
-                                  }`}
-                                >
-                                  Role:{" "}
-                                  <span className="capitalize">
-                                    {invitation.role}
-                                  </span>
-                                </div>
-                                <div
-                                  className={`text-xs mt-1 ${
-                                    isDark ? "text-slate-400" : "text-gray-500"
-                                  }`}
-                                >
-                                  Sent:{" "}
-                                  {new Date(
-                                    invitation.created_at,
-                                  ).toLocaleDateString()}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                              {/* 統合ステータスのバッジ */}
-                              {displayStatus === "accepted" && (
-                                <span
-                                  className={`px-3 py-1 rounded text-sm font-medium ${
-                                    isDark
-                                      ? "bg-green-900 text-green-200"
-                                      : "bg-green-100 text-green-800"
-                                  }`}
-                                >
-                                  Accepted
-                                </span>
-                              )}
-                              {displayStatus === "expired" && (
-                                <span
-                                  className={`px-3 py-1 rounded text-sm font-medium ${
-                                    isDark
-                                      ? "bg-gray-700 text-gray-300"
-                                      : "bg-gray-100 text-gray-800"
-                                  }`}
-                                >
-                                  Expired
-                                </span>
-                              )}
-                              {displayStatus === "canceled" && (
-                                <span
-                                  className={`px-3 py-1 rounded text-sm font-medium ${
-                                    isDark
-                                      ? "bg-red-900 text-red-200"
-                                      : "bg-red-100 text-red-800"
-                                  }`}
-                                >
-                                  Canceled
-                                </span>
-                              )}
-                              {displayStatus === "failed" && (
-                                <span
-                                  className={`px-3 py-1 rounded text-sm font-medium ${
-                                    isDark
-                                      ? "bg-red-900 text-red-200"
-                                      : "bg-red-100 text-red-800"
-                                  }`}
-                                >
-                                  Failed
-                                </span>
-                              )}
-                              {/* deliveredは表示しない（正常な状態） */}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
       </div>
     </div>
   );

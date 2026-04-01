@@ -1,0 +1,190 @@
+================================================================================
+Employee Requirements — Jurisdiction 導入・会社スコープ・Status UI 改修 計画書
+================================================================================
+作成目的: 会話で整理したスコープ変更・DB・自動割当の廃止・UI 変更を、
+         実装・レビュー用に 1 ファイルにまとめる。
+注意: 本ファイルは計画書。未実装の仕様を含む。
+
+--------------------------------------------------------------------------------
+1. 背景・現状（コード・schema_dump ベース）
+--------------------------------------------------------------------------------
+
+1.1 user_requirements（従業員向け要件マスタ）
+  - created_by（users.id）で「誰が作ったか」を持つ。テーブル上は tenant_id なし。
+  - schema_dump のコメントは「テナントごと」だが、データモデルは作成者起点。
+
+1.2 従業員プール（Status の「人」一覧）
+  - GET /reminder-members: getAuthorizedTenantIds → その tenant_id の profiles を集め、
+    user_id を Set で一意化。
+  - authorizedTenantIds は「Cedar manage_members で許可された company → company_tenants →
+    tenant_id」由来（テナントの admin ロールを直接見るのではない）。
+  - **company_admin / company_director は company_members に所属し、profiles に行が無い
+    運用が前提**なら、上記一覧**には含まれない**（Current Status のテーブルにも出ない）。
+    人一覧は **profiles に居るユーザのみ**。
+
+1.3 新規要件作成時（POST /user-requirements）
+  - 作成後、authorizedTenantIds 配下の全 profiles の user_id に対し
+    user_requirement_assignments を一括 INSERT（全員割当）。
+
+1.4 profiles INSERT 時（データベース）
+  - トリガ: after_profiles_insert_assign_requirements（AFTER INSERT ON profiles）
+  - 関数: public.after_profiles_insert_assign_requirements()
+  - 新規 profile の tenant_id が属する会社の company_admin / company_director が作った
+    user_requirements すべてに対し、user_requirement_assignments を INSERT。
+  - ON CONFLICT (user_id, user_requirement_id) DO NOTHING。
+  - アプリが supabase.rpc でこの関数名を直呼びしているわけではない。トリガが主経路。
+
+1.5 その他テーブル
+  - mapping_user_requirements: 人×要件の履歴（発行日・期限）。据え置き。
+  - document_metadata_user_requirements: mapping にぶら下がるドキュメント。据え置き。
+
+--------------------------------------------------------------------------------
+2. ゴール（プロダクト要件の要約）
+--------------------------------------------------------------------------------
+
+2.1 スコープ
+  - 要件・管轄・割当の思考モデルを company 基準で明示する。
+  - 会社にぶら下がる全テナントのメンバーを従業員プールとし、同一ユーザーが複数
+    テナントにいても user_id 単位で一位（重複表示しない）。
+
+2.2 Jurisdiction（新規）
+  - ユーザーが作成するラベル（例: California）。テーブル名: jurisdictions。
+  - 人と管轄の対応: user_jurisdictions（旧案 user_employee_jurisdictions は使わない）。
+  - 要件作成時にプルダウンで jurisdiction を選択し、「その管轄に合う人」への割当
+    ロジックへつなぐ。
+
+2.3 自動「全員割当」の廃止
+  - 現状: (A) profiles INSERT トリガで「該当する全要件」へ assignment 追加
+          (B) POST user-requirements で「全メンバー」へ assignment 追加
+  - 方針: jurisdiction に基づく割当に置き換えるため、上記の「全員・全件」挙動は
+     止める（トリガ本体の差し替え or トリガ削除＋アプリ側同期、POST の一括 INSERT 削除）。
+
+2.4 Current Status（単一ビュー）
+  - 旧 UI の「Show by people / Show by requirements」切り替えおよび **Show by requirements
+    テーブルは廃止**してよい。レイアウトは**人が行・Upcoming が列の 1 パターンのみ**。
+  - 列構成: 縦＝人。横は requirements の多列をやめ、右に 1 列
+    「Upcoming requirement」（名称は実装時に確定可）。
+  - その人に割り当てられた requirement をすべてバッジ表示。
+    **バッジの文言は user_requirements.title の全文**（略さない）。
+    色: 緑＝期限内で問題なし、赤＝期限（deadline）超過。算出は既存ロジック流用想定。
+    **アクセシビリティ: 当面目を色だけに依存してよい**（追加の視覚手段は要件に含めない）。
+  - 一覧に載せる人の条件（両方満たす）:
+      (1) user_jurisdictions が 1 件以上（管轄未設定の人は一覧に出さない）
+      (2) 適用中の user_requirement_assignments が 1 件以上
+        （is_currently_assigned = true, deleted_at IS NULL, requirement 有効）
+
+2.4.1 画面上の会社コンテキスト
+  - **既存のヘッダー company プルダウン**で選択中の会社にスコープする。
+    jurisdictions の一覧・人とのマッチング、Current Status、API クエリは
+    **選択中 company** 基準。複数会社に所属する company_director 等は、
+    プルダウンで会社を切り替えて操作する（別途「どの会社か」の UI を二重に置かない）。
+
+2.4.2 空状態・オンボーディング（仕様として採用）
+  - 「空状態」＝オフィサーが Status や Jurisdiction タブを開いたとき、**まだデータが無いか、
+    フィルタ条件で 0 件**に見える画面のこと。
+  - 上記のとき**白紙だけにしない**。次の一手が分かる**短い説明文**と、必要なら
+    **Jurisdiction タブ／新規管轄ボタンへの誘導**を置く。
+  - 文言の例（実装時に調整可）:
+      「先に管轄を作成してください」
+      「従業員に管轄を割り当てると Status に表示されます」
+
+2.5 人名クリック → 詳細モーダル（Tenant 要件の詳細モーダルとは別）
+  - 表示: 本人名、その人の jurisdiction（複数可）、その下に割り当て requirement ごとに
+    ブロック（例: 「Driver license」見出しの下に、現行グリッドのセル相当の UI）。
+  - Edit ボタン: Edit モード時は現行セルの編集モードと同等の操作。
+  - Tenant/Company のライセンス詳細モーダル本体は変更しない。
+
+--------------------------------------------------------------------------------
+3. データベース設計（案）
+--------------------------------------------------------------------------------
+
+3.1 新規: jurisdictions
+  - id uuid PK
+  - company_id uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE
+  - name text NOT NULL（例: California）
+  - created_by uuid REFERENCES users(id)
+  - created_at, updated_at timestamptz
+  - 一意制約の例: UNIQUE (company_id, lower(trim(name))) ※実装時に確定
+
+3.2 新規: user_jurisdictions
+  - **PRIMARY KEY (company_id, user_id, jurisdiction_id)**（決定）
+  - company_id uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE
+  - user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE
+  - jurisdiction_id uuid NOT NULL REFERENCES jurisdictions(id) ON DELETE CASCADE
+  - created_at timestamptz
+  - 整合: jurisdiction_id が指す jurisdictions.company_id と **company_id は一致**させる
+    （CHECK またはトリガまたはアプリで担保）。
+
+3.3 既存変更: user_requirements
+  - company_id uuid NOT NULL REFERENCES companies(id)（既存データは移行戦略が必要）
+  - jurisdiction_id uuid NOT NULL REFERENCES jurisdictions(id)（同上）
+  - created_by は監査用に維持可
+  - コメントを「会社＋jurisdiction」に更新
+
+3.4 据え置き
+  - user_requirement_assignments: 列定義は維持。行の作られ方だけ変更。
+  - mapping_user_requirements, document_metadata_user_requirements: 変更なし想定。
+
+3.5 割当の作り方（案・実装時詳細化）
+  - 要件の jurisdiction_id が、ユーザの user_jurisdictions に含まれるとき、かつユーザが
+    会社の従業員プール（company 配下テナントの profiles の和・user_id 一意）にいるとき
+    assignment を作成／維持。
+  - jurisdictions や user_jurisdictions の変更、要件の jurisdiction 変更時に
+    再計算（バッチ、アプリ API、DB 関数のいずれか）。
+
+--------------------------------------------------------------------------------
+4. 自動割当を止める箇所（実装タスク対応表）
+--------------------------------------------------------------------------------
+
+4.1 DB: after_profiles_insert_assign_requirements
+  - 現状: profiles 毎の INSERT で employee requirement 向け assignments を自動生成。
+  - 方針: jurisdiction ベースに書き換え、または無効化（空関数＋トリガ残存は可だが意味を
+    コメントで明示）。「コード側で呼ばないでは止められない」点に注意。
+
+4.2 バックエンド: POST /user-requirements（user-requirements.ts）
+  - 現状: 全メンバー分の user_requirement_assignments を insert。
+  - 方針: ブロック削除または新ロジックへ差し替え。
+
+4.3 RPC との関係
+  - 当該割当は RPC ではなくトリガ＋Express が主体。calculate_item_costs 等の別 RPC と混同
+    しない。
+
+--------------------------------------------------------------------------------
+5. 既存データ移行・段階導入（検討リスト）
+--------------------------------------------------------------------------------
+
+  - user_requirements への company_id / jurisdiction_id 埋め（暫定 1 jurisdiction など）
+  - 既存 assignments と新ルールの整合（クリーンアップ方針）
+  - schema_dump.sql のワークフロー更新
+
+--------------------------------------------------------------------------------
+6. 認可（Cedar 等）
+--------------------------------------------------------------------------------
+
+  - 方針: **company_admin と company_director のみ**が jurisdiction・従業員要件の
+    管理操作（作成・更新・削除・割当に関わる API）を unified Cedar で許可する。
+    principal.company_role が上記のいずれかかつ、対象 resource の company_id が
+    当該ロールの会社と一致すること、など既存 Company スコープパターンに合わせる。
+  - 現状 employee requirement API は主に authorization-helpers。実装時に Cedar 判定へ
+    寄せるか併用するかはコード側で決める。
+
+--------------------------------------------------------------------------------
+7. 関連ドキュメント
+--------------------------------------------------------------------------------
+
+  - docs/employee_requirement_documents_design.txt（ドキュメント機能・R2）
+  - 本計画は Status・割当・管轄スコープにフォーカス。ドキュメントテーブル案は変更なし。
+
+--------------------------------------------------------------------------------
+8. 変更履歴（手動で追記）
+--------------------------------------------------------------------------------
+
+  - 初版: jurisdiction・会社スコープ・Status UI・自動割当停止箇所・トリガ説明を統合。
+  - 追記: Current Status の人リストは profiles 由来のため company_members のみのオフィサーは
+    対象外と明記。
+  - 追記: user_jurisdictions PK を (company_id, user_id, jurisdiction_id) に確定。
+    Show by requirements 廃止・単一ビュー。ヘッダー company プルダウンでコンテキスト決定。
+    バッジは title 全文・色のみで可。空状態時のオンボーディング文言・誘導を仕様採用。
+    Cedar は company_admin / company_director のみ管理操作。
+
+================================================================================

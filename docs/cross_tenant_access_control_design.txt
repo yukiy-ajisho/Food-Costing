@@ -1,0 +1,315 @@
+================================================================
+CROSS-TENANT ACCESS CONTROL 設計メモ
+最終更新: 2026-03-04
+================================================================
+
+----------------------------------------------------------------
+1. 概要・目的
+----------------------------------------------------------------
+
+【現在の機能】
+- cost ページに「Access Control」タブがある（テナント内 = intra-tenant）
+- prepped item を同じテナント内の role（manager, staff など）に対して
+  hide / view-only / editable の3段階で共有できる
+- DBテーブル: resource_shares
+
+【新機能の目的】
+- 同じ company に属する複数テナント間で prepped item を共有する
+- 例: 同じ会社に「パン屋」と「カレー屋」がある
+  → パン屋がカレー屋の「カレー（prepped item）」をレシピの材料として使いたい
+  → パン屋には「名前」と「コスト」だけが見える
+  → カレー屋の recipe_lines（labor, sub-ingredients など）は見えない
+- カレー屋がカレーのコストを変更したら、パン屋のカレーパンのコストも自動的に連動する
+
+----------------------------------------------------------------
+2. 用語
+----------------------------------------------------------------
+
+【既存機能】
+  英語名: Intra-tenant access control（テナント内 access control）
+  UIタブ名（現在）: "Access Control"
+
+【新機能】
+  英語名: Cross-tenant access control（テナント間 access control）
+  UIタブ名（新規）: "Cross-tenant Access Control"
+
+----------------------------------------------------------------
+3. 操作できるロール
+----------------------------------------------------------------
+
+以下のロールが cross-tenant の公開/非公開を設定できる：
+  - テナントの「admin」（そのテナントの prepped item のみ）
+  - テナントの「director」（そのテナントの prepped item のみ）
+  - company の「company_admin」（その company 配下の全テナントの prepped item）
+  - company の「company_director」（その company 配下の全テナントの prepped item）
+
+※ tenant director はテナントロールとして存在する（admin と同等権限）
+※ "tenant director" という表現は使わない。「テナントの director ロール」と言う
+
+----------------------------------------------------------------
+4. 共有の仕様
+----------------------------------------------------------------
+
+【共有対象】
+  - prepped item のみ（item_kind = 'prepped'）
+  - base item、raw item は対象外
+
+【共有される情報】
+  - 名前（items.name）
+  - コスト（recipe_lines から動的計算）
+  ※ recipe_lines の詳細（ingredients, labor など）は見えない
+  ※ base_items の情報も見えない
+
+【共有の方向】
+  2種類の公開範囲を選べる：
+
+  A) Company-wide（会社全体）
+     → 同じ company の全テナントが使える
+     → target_type = 'company', target_id = <company_id>
+
+  B) Specific tenant（特定テナント指定）
+     → 指定した特定テナントのみ使える
+     → target_type = 'tenant', target_id = <target_tenant_id>
+     → 複数テナントに個別指定も可（= 1アイテムに複数レコード）
+
+  ※ 1つのアイテムに A と B を混在させることも可能
+     例: 会社全体に公開しつつ、特定テナントには別途設定を持てる
+
+【コストの連動】
+  - パン屋がカレーパンのレシピでカレーを ingredient として使う
+  - recipe_lines.child_item_id = カレーのアイテムID（別テナントのID）
+  - コスト計算時にカレー屋の recipe_lines を参照 → 自動連動
+
+----------------------------------------------------------------
+5. UIの配置
+----------------------------------------------------------------
+
+現在のタブ構成（cost ページ）:
+  [ Costing ] [ Access Control ]
+
+新しいタブ構成:
+  [ Costing ] [ Access Control ] [ Cross-tenant Access Control ]
+
+「Access Control」タブ（既存）はそのまま維持。
+「Cross-tenant Access Control」タブを右側に新規追加。
+
+Cross-tenant タブの見た目：
+  - テナント内 Access Control と同様のテーブル形式
+  - 表示項目: 名前 / 公開範囲の設定（hide / company-wide / 特定テナント指定）
+  - Edit / Save / Cancel の操作パターンも同様
+  - アイテムは prepped items のみ表示
+
+----------------------------------------------------------------
+6. DBテーブル設計
+----------------------------------------------------------------
+
+【新規テーブル名】
+  cross_tenant_item_shares
+
+【既存の resource_shares テーブルを使わない理由】
+  - resource_shares に company_id カラムがない
+    → 「同じ company 内だけ」という制約をDB側で保証できない
+  - 対象は prepped item 固定（resource_type が固定）
+  - target_type が tenant | role | user で「会社全体（company）」の概念がない
+
+【テーブル定義】
+
+  CREATE TABLE cross_tenant_item_shares (
+      id              uuid DEFAULT gen_random_uuid() NOT NULL,
+      company_id      uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      item_id         uuid NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      owner_tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+      target_type     text NOT NULL,
+      -- 'company': 会社全体に公開, 'tenant': 特定テナントに公開
+      target_id       text NOT NULL,
+      -- target_type='company' のとき: company_id（text）
+      -- target_type='tenant' のとき: 対象テナントの uuid（text）
+      created_by      uuid NOT NULL REFERENCES users(id),
+      allowed_actions text[] DEFAULT ARRAY['read'::text] NOT NULL,
+      created_at      timestamptz DEFAULT now() NOT NULL,
+      updated_at      timestamptz DEFAULT now() NOT NULL,
+      PRIMARY KEY (id),
+      CONSTRAINT cross_tenant_item_shares_target_type_check
+        CHECK (target_type IN ('company', 'tenant')),
+      UNIQUE (item_id, target_type, target_id)
+      -- 同じ item + target の組み合わせは1レコードのみ
+  );
+
+【allowed_actions の意味（resource_shares と同じパターン）】
+
+  状態                  | DBの実態
+  ────────────────────────────────────────────────────────
+  Hide（未設定・デフォルト）| レコードなし
+  Hide（明示的にhideにした）| レコードあり、allowed_actions = []（空配列）
+  View（共有中）          | レコードあり、allowed_actions = ['read']
+  （将来の拡張例）         | allowed_actions = ['read', 'view_cost_breakdown']
+
+  ※「レコードあり・allowed_actions=[]」を hide にするのは
+    将来の拡張性のため（resource_shares と同じパターン）
+
+----------------------------------------------------------------
+7. Cedar 認可設計
+----------------------------------------------------------------
+
+【現在の Cedar 構造】
+  - policies.cedar: permit ルール記述
+  - schema.json: Principal / Company / Tenant / CostResource エンティティ定義
+  - authorize.ts: DB から情報取得 → Cedar 呼び出し → allow/deny
+
+【現在の intra-tenant access control の Cedar フロー】
+  1. resource.tenant_id == principal.tenant_id（同じテナント）
+  2. resource_shares を参照して is_shared / is_owner を計算
+  3. context.is_shared = true なら manager でも allow
+
+【cross-tenant access control のために必要な Cedar 変更】
+
+  ① schema.json への追加
+     - context に is_cross_tenant_shared: Boolean（optional）を追加
+       （既存の is_owner, is_shared と同じく context に載せる）
+
+  ② policies.cedar への追加
+     - 新しいポリシー: cross-tenant read を許可するルール
+       ```
+       // Cross-tenant: 同カンパニーの公開 prepped item は read のみ許可
+       permit (
+         principal,
+         action in [Action::"tenant::read_resource", Action::"tenant::list_resources"],
+         resource
+       )
+       when {
+         resource is CostResource &&
+         resource.item_kind == "prepped" &&
+         context.is_cross_tenant_shared == true
+       };
+       ```
+
+  ③ authorize.ts への追加
+     - CostResource の tenant_id ≠ principal の tenant_id のとき
+       → cross-tenant アクセスと判定
+       → cross_tenant_item_shares を確認:
+           ・target_type='company' かつ同じ company_id のレコードがあるか
+           ・または target_type='tenant' かつ target_id = principal.tenant_id のレコードがあるか
+       → allowed_actions に 'read' が含まれていれば is_cross_tenant_shared = true
+
+  ④ 新 Action の追加（manage 用）
+     - company::manage_cross_tenant_shares
+       → company_admin / company_director が許可
+     - tenant::manage_cross_tenant_shares
+       → tenant admin / tenant director が許可（自分のテナントのアイテムのみ）
+
+【cross-tenant 設定の管理権限（API レベル）】
+  API /cross-tenant-item-shares への write 操作:
+    許可条件:
+      - principal.tenant_role == 'admin' AND item.tenant_id == principal.tenant_id
+      - principal.tenant_role == 'director' AND item.tenant_id == principal.tenant_id
+      - principal.company_role == 'company_admin' AND item.company_id == principal.company_id
+      - principal.company_role == 'company_director' AND item.company_id == principal.company_id
+
+----------------------------------------------------------------
+8. バックエンドで変更が必要な箇所
+----------------------------------------------------------------
+
+1. マイグレーション
+   - 新テーブル cross_tenant_item_shares を作成
+   - RLS ポリシーを設定:
+     ・読み取り: 同じ company に属するテナントメンバーなら読める
+     ・書き込み: tenant admin/director, company_admin, company_director のみ
+
+2. 新APIルート: /cross-tenant-item-shares
+   - GET    /cross-tenant-item-shares
+       → 自分の owner_tenant の公開設定を取得（Cross-tenant タブ用）
+       → または自分の company で公開されている他テナントのアイテムを取得（recipe 作成用）
+   - POST   /cross-tenant-item-shares   （公開設定作成 = view）
+   - PUT    /cross-tenant-item-shares/:id（allowed_actions 更新）
+   - DELETE /cross-tenant-item-shares/:id（レコード削除）
+
+3. Cedar 関連ファイルの更新
+   - src/authz/unified/schema.json: context に is_cross_tenant_shared 追加
+   - src/authz/unified/policies.cedar: cross-tenant read policy 追加
+   - src/authz/unified/authorize.ts:
+     ・cross_tenant_item_shares を参照するロジック追加
+     ・CostResource の cross-tenant 判定ロジック追加
+
+4. コスト計算（src/services/cost.ts または src/routes/cost.ts）
+   - recipe_lines の child_item_id が「他テナントのアイテム」の場合
+   - そのアイテムが cross_tenant_item_shares で公開されているかを確認
+   - 公開されていれば他テナントのアイテムコストを参照してコスト計算を許可
+
+5. items ルート（src/routes/items.ts）
+   - recipe 作成時の ingredient 選択に「同じ company の公開 prepped items」を追加
+   - GET /items?include_cross_tenant=true のようなオプション
+     または専用エンドポイント GET /items/cross-tenant-available
+
+6. types/database.ts
+   - CrossTenantItemShare 型を追加
+
+----------------------------------------------------------------
+9. フロントエンドで変更が必要な箇所
+----------------------------------------------------------------
+
+1. frontend/app/cost/page.tsx
+   - activeMode の型に 'cross-tenant-access-control' を追加
+   - タブに「Cross-tenant Access Control」を追加
+   - 新タブのUI実装:
+     ・テーブル形式（prepped items のみ）
+     ・各アイテム行に: hide / company-wide / 特定テナント指定 の選択肢
+     ・「特定テナント指定」選択時は同じ company のテナント一覧ドロップダウンを表示
+   - Edit / Save / Cancel の操作ロジック
+   - cross-tenant-item-shares API の呼び出し
+
+2. recipe 作成画面（cost ページの recipe editor）
+   - ingredient 選択時に「同じ company の公開 prepped items」セクションを追加
+   - 表示項目: アイテム名、コスト、所属テナント名
+   - 選択するとそのアイテムIDで recipe_lines に追加
+
+3. frontend/lib/api.ts
+   - CrossTenantItemShare 型定義を追加
+   - crossTenantItemSharesAPI オブジェクトを追加
+
+4. frontend/contexts または hooks
+   - 同じ company のテナント一覧を取得するロジック（特定テナント指定UI用）
+
+----------------------------------------------------------------
+10. 注意事項・懸念点
+----------------------------------------------------------------
+
+- テナントをまたぐ recipe_lines の child_item_id を許可するため、
+  バックエンドの RLS 設定を慎重に行う必要がある
+- コスト計算が他テナントの recipe_lines を読む際のパフォーマンスと権限
+- 「パン屋が使っているカレー（共有アイテム）をカレー屋が hide に変更したとき」
+  → パン屋の既存 recipe_lines の扱い（エラー？コスト0？）は今後要検討
+- Cedar の is_cross_tenant_shared は TS 側で計算して context に渡す
+  （既存の is_shared / is_owner と同じパターン）
+
+----------------------------------------------------------------
+11. 実装ステップ（順番）
+----------------------------------------------------------------
+
+Step 1: DB マイグレーション
+  - supabase/migrations/ に新ファイル作成
+  - cross_tenant_item_shares テーブル + RLS
+
+Step 2: バックエンド - 型定義追加
+  - src/types/database.ts に CrossTenantItemShare 型を追加
+
+Step 3: バックエンド - API ルート
+  - src/routes/cross-tenant-item-shares.ts を新規作成
+  - src/index.ts にルートを登録
+
+Step 4: Cedar 更新
+  - schema.json: context に is_cross_tenant_shared 追加
+  - policies.cedar: cross-tenant read policy 追加
+  - authorize.ts: cross_tenant_item_shares 参照ロジック追加
+
+Step 5: コスト計算の拡張
+  - src/services/cost.ts または src/routes/cost.ts
+  - 他テナントの公開アイテムのコスト参照を許可
+
+Step 6: フロントエンド - Cross-tenant Access Control タブ
+  - frontend/lib/api.ts に crossTenantItemSharesAPI 追加
+  - frontend/app/cost/page.tsx にタブ追加・UI実装
+
+Step 7: フロントエンド - recipe 作成での ingredient 選択拡張
+  - 同じ company の公開 prepped items を選択肢に追加
+
+================================================================
