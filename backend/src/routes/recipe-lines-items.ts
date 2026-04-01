@@ -33,7 +33,7 @@ async function mapWithConcurrencyLimit<T, R>(
   let nextIndex = 0;
 
   const worker = async () => {
-    while (true) {
+    for (;;) {
       const i = nextIndex++;
       if (i >= n) {
         return;

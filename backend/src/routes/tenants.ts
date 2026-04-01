@@ -5,7 +5,6 @@ import {
   authorizeTeamTenantAccess,
   authorizeUnified,
   UnifiedTenantAction,
-  type UnifiedResource,
 } from "../authz/unified/authorize";
 import { getAuthorizedTenantIds } from "./reminder/authorization-helpers";
 
