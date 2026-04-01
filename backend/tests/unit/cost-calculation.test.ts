@@ -1,5 +1,5 @@
 import { getCost } from "../../src/services/cost";
-import { buildTestMaps } from "../helpers/test-helpers";
+import { buildTestMaps, TEST_TENANT_ID } from "../helpers/test-helpers";
 import { RecipeLine, Item } from "../../src/types/database";
 
 // Supabaseをモック化
@@ -254,7 +254,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-1",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -316,7 +316,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-2",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -404,7 +404,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-3-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -495,7 +495,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-4-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -602,7 +602,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算（Egg Salad）
       const costPerGram = await getCost(
         "item-5-prepped-2",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -739,7 +739,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-6-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -878,7 +878,7 @@ describe("Cost Calculation Unit Tests", () => {
       // コスト計算
       const costPerGram = await getCost(
         "item-7-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -969,7 +969,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-9-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1092,7 +1092,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-10-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1241,7 +1241,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-11-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1321,7 +1321,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-12-raw",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1438,7 +1438,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-13-prepped-2",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1554,7 +1554,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-14-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1667,7 +1667,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-15-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1838,7 +1838,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-16-prepped-3",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -1920,7 +1920,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-17-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2003,7 +2003,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-18-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2071,7 +2071,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-19-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2178,7 +2178,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-20-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2294,7 +2294,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-29-prepped",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2439,7 +2439,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-22-prepped-2",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2870,7 +2870,7 @@ describe("Cost Calculation Unit Tests", () => {
 
       const costPerGram = await getCost(
         "item-23-prepped-6",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -2991,7 +2991,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-21-prepped-1",
-          ["test-user-id"],
+          [TEST_TENANT_ID],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3115,7 +3115,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-24-prepped-1",
-          ["test-user-id"],
+          [TEST_TENANT_ID],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3277,7 +3277,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-25-prepped-1",
-          ["test-user-id"],
+          [TEST_TENANT_ID],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3422,7 +3422,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-26-prepped-1",
-          ["test-user-id"],
+          [TEST_TENANT_ID],
           new Set(),
           baseItemsMap,
           itemsMap,
@@ -3583,7 +3583,7 @@ describe("Cost Calculation Unit Tests", () => {
       // エラーが発生しないことを期待
       const costPerGram = await getCost(
         "item-27-prepped-3",
-        ["test-user-id"],
+        [TEST_TENANT_ID],
         new Set(),
         baseItemsMap,
         itemsMap,
@@ -3723,7 +3723,7 @@ describe("Cost Calculation Unit Tests", () => {
       await expect(
         getCost(
           "item-28-prepped-2",
-          ["test-user-id"],
+          [TEST_TENANT_ID],
           new Set(),
           baseItemsMap,
           itemsMap,
