@@ -1376,6 +1376,9 @@ CREATE OR REPLACE FUNCTION "public"."sync_virtual_vendor_current_price_from_even
     LANGUAGE "plpgsql"
     AS $$
 BEGIN
+  IF COALESCE(NEW.apply_to_current_price, true) IS NOT TRUE THEN
+    RETURN NEW;
+  END IF;
   UPDATE public.virtual_vendor_products
      SET current_price = NEW.price,
         updated_at = NEW.created_at
@@ -1687,6 +1690,26 @@ COMMENT ON COLUMN "public"."document_metadata"."size_bytes" IS 'ファイルサ�
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."document_metadata_invoices" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "vendor_id" "uuid",
+    "value" "text" NOT NULL,
+    "file_name" "text" NOT NULL,
+    "content_type" "text",
+    "size_bytes" bigint,
+    "invoice_date" "date",
+    "total_amount" numeric(12,2),
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_by" "uuid" NOT NULL,
+    "approved_at" timestamp with time zone,
+    CONSTRAINT "document_metadata_invoices_total_amount_positive" CHECK (("total_amount" > (0)::numeric))
+);
+
+
+ALTER TABLE "public"."document_metadata_invoices" OWNER TO "postgres";
+
+
 CREATE TABLE IF NOT EXISTS "public"."document_metadata_user_requirements" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "mapping_user_requirement_id" "uuid" NOT NULL,
@@ -1848,12 +1871,24 @@ CREATE TABLE IF NOT EXISTS "public"."price_events" (
     "invoice_id" "uuid",
     "user_id" "uuid" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "apply_to_current_price" boolean DEFAULT true NOT NULL,
+    "case_unit" integer,
+    "case_purchased" integer,
+    "unit_purchased" integer,
+    CONSTRAINT "pe_case_purchased_positive" CHECK (("case_purchased" > 0)),
+    CONSTRAINT "pe_case_unit_positive" CHECK (("case_unit" > 0)),
+    CONSTRAINT "pe_purchase_qty_not_all_null" CHECK ((("case_unit" IS NOT NULL) OR ("case_purchased" IS NOT NULL) OR ("unit_purchased" IS NOT NULL))),
+    CONSTRAINT "pe_unit_purchased_positive" CHECK (("unit_purchased" > 0)),
     CONSTRAINT "price_events_price_check" CHECK (("price" > (0)::numeric)),
     CONSTRAINT "price_events_source_type_check" CHECK (("source_type" = ANY (ARRAY['manual'::"text", 'invoice'::"text"])))
 );
 
 
 ALTER TABLE "public"."price_events" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."price_events"."apply_to_current_price" IS 'When true (default), AFTER INSERT trigger syncs VVP current_price/updated_at from this row. When false, ledger row only.';
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."proceed_validation_settings" (
@@ -2170,8 +2205,10 @@ CREATE TABLE IF NOT EXISTS "public"."virtual_vendor_products" (
     "updated_at" timestamp with time zone DEFAULT "now"(),
     "deprecated" timestamp with time zone,
     "tenant_id" "uuid" NOT NULL,
+    "case_unit" integer,
     CONSTRAINT "vendor_products_current_price_check" CHECK (("current_price" > (0)::numeric)),
-    CONSTRAINT "vendor_products_purchase_quantity_check" CHECK (("purchase_quantity" > (0)::numeric))
+    CONSTRAINT "vendor_products_purchase_quantity_check" CHECK (("purchase_quantity" > (0)::numeric)),
+    CONSTRAINT "vvp_case_unit_positive" CHECK (("case_unit" > 0))
 );
 
 
@@ -2245,6 +2282,11 @@ ALTER TABLE ONLY "public"."cross_tenant_item_shares"
 
 ALTER TABLE ONLY "public"."cross_tenant_item_shares"
     ADD CONSTRAINT "cross_tenant_item_shares_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."document_metadata_invoices"
+    ADD CONSTRAINT "document_metadata_invoices_pkey" PRIMARY KEY ("id");
 
 
 
@@ -2512,6 +2554,18 @@ CREATE INDEX "idx_cross_tenant_item_shares_owner_tenant" ON "public"."cross_tena
 
 
 CREATE INDEX "idx_cross_tenant_item_shares_target" ON "public"."cross_tenant_item_shares" USING "btree" ("target_type", "target_id");
+
+
+
+CREATE INDEX "idx_document_metadata_invoices_invoice_date" ON "public"."document_metadata_invoices" USING "btree" ("tenant_id", "invoice_date" DESC);
+
+
+
+CREATE INDEX "idx_document_metadata_invoices_tenant" ON "public"."document_metadata_invoices" USING "btree" ("tenant_id");
+
+
+
+CREATE INDEX "idx_document_metadata_invoices_vendor" ON "public"."document_metadata_invoices" USING "btree" ("vendor_id");
 
 
 
@@ -2823,7 +2877,7 @@ CREATE INDEX "idx_virtual_vendor_products_vendor" ON "public"."virtual_vendor_pr
 
 
 
-CREATE UNIQUE INDEX "uq_virtual_vendor_products_unique" ON "public"."virtual_vendor_products" USING "btree" ("vendor_id", "product_name", "tenant_id") WHERE ("product_name" IS NOT NULL);
+CREATE UNIQUE INDEX "uq_virtual_vendor_products_unique" ON "public"."virtual_vendor_products" USING "btree" ("vendor_id", "product_name", "tenant_id", COALESCE("case_unit", 0)) WHERE ("product_name" IS NOT NULL);
 
 
 
@@ -2939,6 +2993,21 @@ ALTER TABLE ONLY "public"."cross_tenant_item_shares"
 
 
 
+ALTER TABLE ONLY "public"."document_metadata_invoices"
+    ADD CONSTRAINT "document_metadata_invoices_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."document_metadata_invoices"
+    ADD CONSTRAINT "document_metadata_invoices_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."document_metadata_invoices"
+    ADD CONSTRAINT "document_metadata_invoices_vendor_id_fkey" FOREIGN KEY ("vendor_id") REFERENCES "public"."vendors"("id") ON DELETE RESTRICT;
+
+
+
 ALTER TABLE ONLY "public"."document_metadata"
     ADD CONSTRAINT "document_metadata_real_data_id_fkey" FOREIGN KEY ("real_data_id") REFERENCES "public"."tenant_requirement_real_data"("id") ON DELETE CASCADE;
 
@@ -3016,6 +3085,11 @@ ALTER TABLE ONLY "public"."mapping_user_requirements"
 
 ALTER TABLE ONLY "public"."mapping_user_requirements"
     ADD CONSTRAINT "mapping_user_requirements_user_requirement_id_fkey" FOREIGN KEY ("user_requirement_id") REFERENCES "public"."user_requirements"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."price_events"
+    ADD CONSTRAINT "price_events_invoice_id_fkey" FOREIGN KEY ("invoice_id") REFERENCES "public"."document_metadata_invoices"("id") ON DELETE SET NULL;
 
 
 
@@ -3244,6 +3318,9 @@ CREATE POLICY "cross_tenant_item_shares_update" ON "public"."cross_tenant_item_s
 
 
 
+ALTER TABLE "public"."document_metadata_invoices" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."proceed_validation_settings" ENABLE ROW LEVEL SECURITY;
 
 
@@ -3426,6 +3503,12 @@ GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "service_role";
 GRANT ALL ON TABLE "public"."document_metadata" TO "anon";
 GRANT ALL ON TABLE "public"."document_metadata" TO "authenticated";
 GRANT ALL ON TABLE "public"."document_metadata" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."document_metadata_invoices" TO "anon";
+GRANT ALL ON TABLE "public"."document_metadata_invoices" TO "authenticated";
+GRANT ALL ON TABLE "public"."document_metadata_invoices" TO "service_role";
 
 
 

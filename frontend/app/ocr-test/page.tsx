@@ -41,7 +41,9 @@ export default function OcrTestPage() {
       <div className="max-w-5xl mx-auto space-y-4">
         <h1 className="text-2xl font-semibold">OCR Test (PDF + Gemini Flash)</h1>
         <p className="text-gray-600">
-          Test-only screen. Upload a PDF, run OCR + extraction, and inspect text and JSON.
+          Experimental playground for Gemini + PDF in this app. Production invoice
+          import uses the same <code className="text-sm">/ocr-test/extract</code>{" "}
+          pipeline from Vendor Items → Import invoice.
         </p>
         <button
           onClick={() => setOpen(true)}

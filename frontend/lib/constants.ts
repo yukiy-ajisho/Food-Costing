@@ -40,6 +40,12 @@ export const NON_MASS_UNITS_ORDERED: string[] = [
   "each",
 ];
 
+/** 仕入れ単位（バックエンド OCR プロンプトと同一順） */
+export const APP_PURCHASE_UNITS_ORDERED: string[] = [
+  ...MASS_UNITS_ORDERED,
+  ...NON_MASS_UNITS_ORDERED,
+];
+
 /**
  * 質量単位かどうかを判定
  */

@@ -28,6 +28,20 @@ export const NON_MASS_UNITS: string[] = [
   "each",
 ];
 
+/** 仕入れ単位（フロントの定数と同一）。OCR プロンプト・正規化で使用 */
+export const MASS_UNITS_ORDERED: string[] = ["g", "kg", "oz", "lb"];
+export const NON_MASS_UNITS_ORDERED: string[] = [
+  "floz",
+  "ml",
+  "liter",
+  "gallon",
+  "each",
+];
+export const APP_PURCHASE_UNITS_ORDERED: string[] = [
+  ...MASS_UNITS_ORDERED,
+  ...NON_MASS_UNITS_ORDERED,
+];
+
 /**
  * 質量単位かどうかを判定
  */

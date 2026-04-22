@@ -27,6 +27,7 @@ import {
 import {
   tenantRequirementRealDataAPI,
   type TenantRequirementRealDataRow,
+  type TenantRequirementInboxPick,
 } from "@/lib/api/reminder/tenant-requirement-real-data";
 import { openPresignedDocumentInNewTab } from "@/lib/open-presigned-document";
 
@@ -238,6 +239,13 @@ export default function TenantRequirementsPage() {
   >([]);
   const [detailUploadMode, setDetailUploadMode] = useState(false);
   const [detailUploadSaving, setDetailUploadSaving] = useState(false);
+  const [detailInboxPicks, setDetailInboxPicks] = useState<
+    TenantRequirementInboxPick[]
+  >([]);
+  const [detailInboxPicksLoading, setDetailInboxPicksLoading] = useState(false);
+  const [detailSelectedInboxId, setDetailSelectedInboxId] = useState<
+    string | null
+  >(null);
   // 詳細モーダル Edit 用のフォーム（Save で real_data に保存）
   const [detailEditDueDate, setDetailEditDueDate] = useState("");
   const [detailEditBillDate, setDetailEditBillDate] = useState("");
@@ -315,7 +323,9 @@ export default function TenantRequirementsPage() {
       rows: TenantRequirementRealDataRow[],
       requirementIds: string[],
     ): Record<string, MappingEntry> => {
-      const nameById = Object.fromEntries(valueTypes.map((vt) => [vt.id, vt.name]));
+      const nameById = Object.fromEntries(
+        valueTypes.map((vt) => [vt.id, vt.name]),
+      );
       const maxGroupKeyByReq: Record<string, number> = {};
       for (const row of rows) {
         const rid = row.tenant_requirement_id;
@@ -339,7 +349,8 @@ export default function TenantRequirementsPage() {
       }
       for (const row of rows) {
         const latestGroup = maxGroupKeyByReq[row.tenant_requirement_id];
-        if (latestGroup === undefined || row.group_key !== latestGroup) continue;
+        if (latestGroup === undefined || row.group_key !== latestGroup)
+          continue;
         const name = nameById[row.type_id];
         const entry = map[row.tenant_requirement_id];
         if (!entry) continue;
@@ -386,9 +397,10 @@ export default function TenantRequirementsPage() {
         const requirementIds = requirements.map((r) => r.id);
         let mapping: Record<string, MappingEntry> = {};
         if (requirementIds.length > 0) {
-          const realData = await tenantRequirementRealDataAPI.getByRequirementIds(
-            requirementIds,
-          );
+          const realData =
+            await tenantRequirementRealDataAPI.getByRequirementIds(
+              requirementIds,
+            );
           mapping = buildLatestMapping(
             realData as TenantRequirementRealDataRow[],
             requirementIds,
@@ -550,6 +562,7 @@ export default function TenantRequirementsPage() {
       setDetailSelectedGroupKey(null);
       setDetailDocuments([]);
       setDetailUploadFile(null);
+      setDetailSelectedInboxId(null);
       setDetailPendingDeleteKeys([]);
       return;
     }
@@ -651,6 +664,19 @@ export default function TenantRequirementsPage() {
       .finally(() => setDetailDocumentsLoading(false));
   }, [detailModalReqId, detailSelectedGroupKey]);
 
+  useEffect(() => {
+    if (!detailUploadMode || !selectedTenantId) {
+      setDetailInboxPicks([]);
+      return;
+    }
+    setDetailInboxPicksLoading(true);
+    tenantRequirementRealDataAPI
+      .getInboxPicks(selectedTenantId)
+      .then(setDetailInboxPicks)
+      .catch(() => setDetailInboxPicks([]))
+      .finally(() => setDetailInboxPicksLoading(false));
+  }, [detailUploadMode, selectedTenantId]);
+
   // 左で選択した group が変わったとき、Edit 中ならフォームをその group の値で更新
   useEffect(() => {
     if (!detailModalEditMode || detailSelectedGroupKey == null) return;
@@ -669,17 +695,26 @@ export default function TenantRequirementsPage() {
     if (
       !detailModalReqId ||
       detailSelectedGroupKey == null ||
-      !detailUploadFile
+      (!detailUploadFile && !detailSelectedInboxId)
     )
       return;
     setDetailUploadSaving(true);
     try {
-      await tenantRequirementRealDataAPI.uploadDocument(
-        detailModalReqId,
-        detailSelectedGroupKey,
-        detailUploadFile,
-      );
+      if (detailSelectedInboxId) {
+        await tenantRequirementRealDataAPI.uploadDocumentFromInbox(
+          detailModalReqId,
+          detailSelectedGroupKey,
+          detailSelectedInboxId,
+        );
+      } else if (detailUploadFile) {
+        await tenantRequirementRealDataAPI.uploadDocument(
+          detailModalReqId,
+          detailSelectedGroupKey,
+          detailUploadFile,
+        );
+      }
       setDetailUploadFile(null);
+      setDetailSelectedInboxId(null);
       const list = await tenantRequirementRealDataAPI.getDocuments(
         detailModalReqId,
         detailSelectedGroupKey,
@@ -1203,289 +1238,301 @@ export default function TenantRequirementsPage() {
             {!statusPanelFullBleedLoading &&
               !statusError &&
               !selectedTenantId && (
-              <div
-                className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
-              >
-                Select a tenant in the header to view status.
-              </div>
-            )}
+                <div
+                  className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
+                >
+                  Select a tenant in the header to view status.
+                </div>
+              )}
             {!statusPanelFullBleedLoading &&
               !statusError &&
               selectedTenantId && (
-              <div className="flex flex-col gap-2 w-full">
-                <div className="flex w-full items-center justify-between gap-4">
-                  <button
-                    type="button"
-                    onClick={openNewModal}
-                    disabled={!selectedTenantId || recordPaymentMode}
-                    title={
-                      !selectedTenantId
-                        ? "Select a tenant in the header first"
-                        : recordPaymentMode
-                          ? "Exit Record Payment to add"
-                          : undefined
-                    }
-                    className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors shrink-0 ${
-                      isDark
-                        ? "bg-slate-600 hover:bg-slate-500 disabled:opacity-50 disabled:pointer-events-none"
-                        : "bg-gray-600 hover:bg-gray-700 disabled:opacity-50 disabled:pointer-events-none"
-                    }`}
-                  >
-                    <Plus className="w-5 h-5" />
-                    Add
-                  </button>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {statusRequirements.length > 0 &&
-                      (recordPaymentMode ? (
-                        <button
-                          type="button"
-                          onClick={handleCancelRecordPayment}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
-                        >
-                          <X className="w-4 h-4" />
-                          Cancel
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setRecordPaymentMode(true)}
-                          className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-600 text-white hover:bg-gray-700"}`}
-                        >
-                          Record Payment
-                        </button>
-                      ))}
-                  </div>
-                </div>
-                {statusRequirements.length === 0 ? (
-                  <div
-                    className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
-                  >
-                    No requirements for this tenant. Use Add to create one.
-                  </div>
-                ) : (
-                  <div
-                    className={`rounded-lg shadow-sm border overflow-x-auto transition-colors w-full ${recordPaymentMode ? "relative z-50" : ""} ${
-                      isDark
-                        ? "bg-slate-800 border-slate-700"
-                        : "bg-white border-gray-200"
-                    }`}
-                  >
-                    <table
-                      className="w-full"
-                      style={{ tableLayout: "auto", minWidth: "min-content" }}
+                <div className="flex flex-col gap-6 w-full">
+                  <div className="flex w-full items-center justify-between gap-4">
+                    <button
+                      type="button"
+                      onClick={openNewModal}
+                      disabled={!selectedTenantId || recordPaymentMode}
+                      title={
+                        !selectedTenantId
+                          ? "Select a tenant in the header first"
+                          : recordPaymentMode
+                            ? "Exit Record Payment to add"
+                            : undefined
+                      }
+                      className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors shrink-0 ${
+                        isDark
+                          ? "bg-slate-600 hover:bg-slate-500 disabled:opacity-50 disabled:pointer-events-none"
+                          : "bg-gray-600 hover:bg-gray-700 disabled:opacity-50 disabled:pointer-events-none"
+                      }`}
                     >
-                      <thead className={isDark ? "bg-slate-700" : "bg-gray-50"}>
-                        <tr>
-                          <th
-                            className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
-                            style={{ minWidth: 160 }}
+                      <Plus className="w-5 h-5" />
+                      Add requirement
+                    </button>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {statusRequirements.length > 0 &&
+                        (recordPaymentMode ? (
+                          <button
+                            type="button"
+                            onClick={handleCancelRecordPayment}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
                           >
-                            Requirement name
-                          </th>
-                          <th
-                            className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
-                            style={{ minWidth: 80 }}
+                            <X className="w-4 h-4" />
+                            Cancel
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setRecordPaymentMode(true)}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-600 text-white hover:bg-gray-700"}`}
                           >
-                            Status
-                          </th>
-                          <th
-                            className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
-                            style={{ minWidth: 120 }}
-                          >
-                            Due date
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody
-                        style={{
-                          borderTop: isDark
-                            ? "1px solid #334155"
-                            : "1px solid #e5e7eb",
-                        }}
+                            Record Payment
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                  {statusRequirements.length === 0 ? (
+                    <div
+                      className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
+                    >
+                      No requirements for this tenant. Use Add requirement to
+                      create one.
+                    </div>
+                  ) : (
+                    <div
+                      className={`rounded-lg shadow-sm border overflow-x-auto transition-colors w-full ${recordPaymentMode ? "relative z-50" : ""} ${
+                        isDark
+                          ? "bg-slate-800 border-slate-700"
+                          : "bg-white border-gray-200"
+                      }`}
+                    >
+                      <table
+                        className="w-full"
+                        style={{ tableLayout: "auto", minWidth: "min-content" }}
                       >
-                        {statusRequirements.map((req) => {
-                          const entry = statusMapping[req.id] ?? {
-                            dueDate: null,
-                            payDate: null,
-                            billDate: null,
-                            validityDurationValue: null,
-                            validityDurationUnit: null,
-                            estimatedDueDate: null,
-                            estimatedSpecificBillDate: null,
-                            estimatedBillDateValidityBased: null,
-                          };
-                          const expiration = getExpiration(req, entry);
-                          const status = getStatus(expiration);
-                          const isDimmed =
-                            recordPaymentMode &&
-                            recordPaymentModalReqId !== req.id;
-                          return (
-                            <tr
-                              key={req.id}
-                              className={`${isDark ? "border-b border-slate-700" : "border-b border-gray-200"} ${recordPaymentMode ? "cursor-pointer" : ""} ${recordPaymentMode ? "hover:ring-2 hover:ring-blue-500 hover:ring-inset" : ""}`}
-                              onClick={
-                                recordPaymentMode
-                                  ? () => {
-                                      setRecordPaymentModalReqId(req.id);
-                                      setRecordPaymentPaymentMadeDate("");
-                                      setRecordPaymentDueSpecific("");
-                                      setRecordPaymentDueValidityBased(false);
-                                      setRecordPaymentBillSpecific("");
-                                      setRecordPaymentBillValidityBased(false);
-                                      setRecordPaymentDueAccordionOpen(false);
-                                      setRecordPaymentBillAccordionOpen(false);
-                                      setRecordPaymentUploadFile(null);
-                                    }
-                                  : undefined
-                              }
-                              role={recordPaymentMode ? "button" : undefined}
+                        <thead
+                          className={isDark ? "bg-slate-700" : "bg-gray-50"}
+                        >
+                          <tr>
+                            <th
+                              className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                              style={{ minWidth: 160 }}
                             >
-                              <td
-                                className={`px-4 py-3 ${isDark ? "text-slate-200" : "text-gray-900"}`}
-                                style={{ minWidth: 200 }}
+                              Requirement name
+                            </th>
+                            <th
+                              className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                              style={{ minWidth: 80 }}
+                            >
+                              Status
+                            </th>
+                            <th
+                              className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                              style={{ minWidth: 120 }}
+                            >
+                              Due date
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody
+                          style={{
+                            borderTop: isDark
+                              ? "1px solid #334155"
+                              : "1px solid #e5e7eb",
+                          }}
+                        >
+                          {statusRequirements.map((req) => {
+                            const entry = statusMapping[req.id] ?? {
+                              dueDate: null,
+                              payDate: null,
+                              billDate: null,
+                              validityDurationValue: null,
+                              validityDurationUnit: null,
+                              estimatedDueDate: null,
+                              estimatedSpecificBillDate: null,
+                              estimatedBillDateValidityBased: null,
+                            };
+                            const expiration = getExpiration(req, entry);
+                            const status = getStatus(expiration);
+                            const isDimmed =
+                              recordPaymentMode &&
+                              recordPaymentModalReqId !== req.id;
+                            return (
+                              <tr
+                                key={req.id}
+                                className={`${isDark ? "border-b border-slate-700" : "border-b border-gray-200"} ${recordPaymentMode ? "cursor-pointer" : ""} ${recordPaymentMode ? "hover:ring-2 hover:ring-blue-500 hover:ring-inset" : ""}`}
+                                onClick={
+                                  recordPaymentMode
+                                    ? () => {
+                                        setRecordPaymentModalReqId(req.id);
+                                        setRecordPaymentPaymentMadeDate("");
+                                        setRecordPaymentDueSpecific("");
+                                        setRecordPaymentDueValidityBased(false);
+                                        setRecordPaymentBillSpecific("");
+                                        setRecordPaymentBillValidityBased(
+                                          false,
+                                        );
+                                        setRecordPaymentDueAccordionOpen(false);
+                                        setRecordPaymentBillAccordionOpen(
+                                          false,
+                                        );
+                                        setRecordPaymentUploadFile(null);
+                                      }
+                                    : undefined
+                                }
+                                role={recordPaymentMode ? "button" : undefined}
                               >
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span
-                                    className={`font-medium min-w-0 truncate ${recordPaymentMode ? "" : "cursor-pointer hover:underline"}`}
-                                    onClick={
-                                      recordPaymentMode
-                                        ? undefined
-                                        : (e) => {
-                                            e.stopPropagation();
-                                            setDetailModalReqId(req.id);
-                                            setDetailModalEditMode(false);
-                                          }
-                                    }
-                                    role={
-                                      recordPaymentMode ? undefined : "button"
-                                    }
-                                    onKeyDown={
-                                      recordPaymentMode
-                                        ? undefined
-                                        : (e) => {
-                                            if (
-                                              e.key === "Enter" ||
-                                              e.key === " "
-                                            ) {
-                                              e.preventDefault();
+                                <td
+                                  className={`px-4 py-3 ${isDark ? "text-slate-200" : "text-gray-900"}`}
+                                  style={{ minWidth: 200 }}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span
+                                      className={`font-medium min-w-0 truncate ${recordPaymentMode ? "" : "cursor-pointer hover:underline"}`}
+                                      onClick={
+                                        recordPaymentMode
+                                          ? undefined
+                                          : (e) => {
                                               e.stopPropagation();
                                               setDetailModalReqId(req.id);
                                               setDetailModalEditMode(false);
                                             }
-                                          }
-                                    }
-                                    tabIndex={recordPaymentMode ? undefined : 0}
-                                  >
-                                    {req.title}
-                                  </span>
-                                  {!recordPaymentMode && (
-                                    <span className="hidden">
-                                      <span className="shrink-0 flex items-center gap-0.5 ml-auto">
-                                        <button
-                                          type="button"
-                                          aria-label="Edit requirement"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            openEditModal(req);
-                                          }}
-                                          className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
-                                        >
-                                          <Edit className="w-4 h-4" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          aria-label="Delete requirement"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            void handleDelete(req.id);
-                                          }}
-                                          className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
-                                        >
-                                          <Trash2 className="w-4 h-4" />
-                                        </button>
-                                      </span>
+                                      }
+                                      role={
+                                        recordPaymentMode ? undefined : "button"
+                                      }
+                                      onKeyDown={
+                                        recordPaymentMode
+                                          ? undefined
+                                          : (e) => {
+                                              if (
+                                                e.key === "Enter" ||
+                                                e.key === " "
+                                              ) {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                setDetailModalReqId(req.id);
+                                                setDetailModalEditMode(false);
+                                              }
+                                            }
+                                      }
+                                      tabIndex={
+                                        recordPaymentMode ? undefined : 0
+                                      }
+                                    >
+                                      {req.title}
                                     </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td
-                                className={`px-4 py-3 ${isDimmed ? "opacity-40" : ""}`}
-                              >
-                                {statusRefreshing ? (
-                                  <Loader2 className="w-5 h-5 animate-spin inline-block" />
-                                ) : (
-                                  <span
-                                    className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${status === "ok" ? "bg-green-500" : status === "overdue" ? "bg-red-500" : "bg-gray-400"}`}
-                                    title={
-                                      expiration
-                                        ? `Expiration: ${formatExpirationDate(expiration)}`
-                                        : "No expiration date"
-                                    }
-                                  />
-                                )}
-                              </td>
-                              <td
-                                className={`px-4 py-3 ${isDark ? "text-slate-300" : "text-gray-700"} ${isDimmed ? "opacity-40" : ""}`}
-                              >
-                                {(() => {
-                                  const formatDate = (s: string) => {
-                                    const d = new Date(s + "T12:00:00");
-                                    return d.toLocaleDateString(undefined, {
-                                      year: "numeric",
-                                      month: "short",
-                                      day: "numeric",
-                                    });
-                                  };
-                                  if (entry.estimatedDueDate) {
-                                    return (
-                                      <>
-                                        {formatDate(entry.estimatedDueDate)}
-                                        <span
-                                          className={`ml-1 text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}
-                                        >
-                                          *estimated due date
+                                    {!recordPaymentMode && (
+                                      <span className="hidden">
+                                        <span className="shrink-0 flex items-center gap-0.5 ml-auto">
+                                          <button
+                                            type="button"
+                                            aria-label="Edit requirement"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              openEditModal(req);
+                                            }}
+                                            className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
+                                          >
+                                            <Edit className="w-4 h-4" />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            aria-label="Delete requirement"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              void handleDelete(req.id);
+                                            }}
+                                            className={`p-1.5 rounded-md transition-colors ${isDark ? "text-slate-300 hover:bg-slate-700" : "text-gray-600 hover:bg-gray-200"}`}
+                                          >
+                                            <Trash2 className="w-4 h-4" />
+                                          </button>
                                         </span>
-                                      </>
-                                    );
-                                  }
-                                  if (entry.dueDate) {
-                                    return formatDate(entry.dueDate);
-                                  }
-                                  return "—";
-                                })()}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                {otherTenants.length > 0 && (
-                  <div
-                    className={`mt-10 rounded-lg border shadow-sm transition-colors ${
-                      isDark
-                        ? "bg-slate-800 border-slate-500 shadow-black/25"
-                        : "bg-white border-gray-300 shadow-gray-200/90"
-                    }`}
-                  >
-                    <div
-                      className={`px-4 py-3 text-sm font-medium ${
-                        isDark
-                          ? "text-slate-100 bg-slate-700/60"
-                          : "text-gray-800 bg-gray-50"
-                      }`}
-                    >
-                      Other tenants
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td
+                                  className={`px-4 py-3 ${isDimmed ? "opacity-40" : ""}`}
+                                >
+                                  {statusRefreshing ? (
+                                    <Loader2 className="w-5 h-5 animate-spin inline-block" />
+                                  ) : (
+                                    <span
+                                      className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${status === "ok" ? "bg-green-500" : status === "overdue" ? "bg-red-500" : "bg-gray-400"}`}
+                                      title={
+                                        expiration
+                                          ? `Expiration: ${formatExpirationDate(expiration)}`
+                                          : "No expiration date"
+                                      }
+                                    />
+                                  )}
+                                </td>
+                                <td
+                                  className={`px-4 py-3 ${isDark ? "text-slate-300" : "text-gray-700"} ${isDimmed ? "opacity-40" : ""}`}
+                                >
+                                  {(() => {
+                                    const formatDate = (s: string) => {
+                                      const d = new Date(s + "T12:00:00");
+                                      return d.toLocaleDateString(undefined, {
+                                        year: "numeric",
+                                        month: "short",
+                                        day: "numeric",
+                                      });
+                                    };
+                                    if (entry.estimatedDueDate) {
+                                      return (
+                                        <>
+                                          {formatDate(entry.estimatedDueDate)}
+                                          <span
+                                            className={`ml-1 text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}
+                                          >
+                                            *estimated due date
+                                          </span>
+                                        </>
+                                      );
+                                    }
+                                    if (entry.dueDate) {
+                                      return formatDate(entry.dueDate);
+                                    }
+                                    return "—";
+                                  })()}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
+                  )}
+                  {otherTenants.length > 0 && (
                     <div
-                      className={`border-t ${
-                        isDark ? "border-slate-700" : "border-gray-200"
+                      className={`mt-10 rounded-lg border shadow-sm transition-colors ${
+                        isDark
+                          ? "bg-slate-800 border-slate-500 shadow-black/25"
+                          : "bg-white border-gray-300 shadow-gray-200/90"
                       }`}
                     >
+                      <div
+                        className={`px-4 py-3 text-sm font-medium ${
+                          isDark
+                            ? "text-slate-100 bg-slate-700/60"
+                            : "text-gray-800 bg-gray-50"
+                        }`}
+                      >
+                        Other tenants
+                      </div>
+                      <div
+                        className={`border-t ${
+                          isDark ? "border-slate-700" : "border-gray-200"
+                        }`}
+                      >
                         {otherTenants.map((tenant) => {
-                          const expanded = otherTenantExpandedIds.has(tenant.id);
-                          const snapshot = otherTenantStatusByTenantId[tenant.id];
+                          const expanded = otherTenantExpandedIds.has(
+                            tenant.id,
+                          );
+                          const snapshot =
+                            otherTenantStatusByTenantId[tenant.id];
                           return (
                             <div
                               key={tenant.id}
@@ -1522,19 +1569,22 @@ export default function TenantRequirementsPage() {
                                       }
                                       return next;
                                     });
-                                    if (!snapshot?.loaded && !snapshot?.loading) {
+                                    if (
+                                      !snapshot?.loaded &&
+                                      !snapshot?.loading
+                                    ) {
                                       void loadOtherTenantStatus(tenant.id);
                                     }
                                   }
                                 }}
                                 className={`w-full px-4 py-3 flex items-center justify-between text-left text-sm cursor-pointer ${
-                                  isDark
-                                    ? "text-slate-200"
-                                    : "text-gray-800"
+                                  isDark ? "text-slate-200" : "text-gray-800"
                                 }`}
                               >
                                 <span className="flex items-center gap-2">
-                                  <span className="font-medium">{tenant.name}</span>
+                                  <span className="font-medium">
+                                    {tenant.name}
+                                  </span>
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -1542,16 +1592,19 @@ export default function TenantRequirementsPage() {
                                       setSelectedTenantId(tenant.id);
                                     }}
                                     title="Switch tenant"
-                                    className={`inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors ${
+                                    className={`inline-flex items-center justify-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] leading-tight font-medium transition-colors border ${
                                       isDark
-                                        ? "text-blue-100 bg-blue-600/80 hover:bg-blue-500"
-                                        : "text-white bg-blue-600 hover:bg-blue-700"
+                                        ? "text-blue-200 bg-blue-950/45 border-blue-800/50 hover:bg-blue-900/55"
+                                        : "text-blue-900 bg-blue-100 border-blue-200/80 hover:bg-blue-200/85"
                                     }`}
                                   >
                                     <span className="inline-flex items-center gap-0">
-                                      <ArrowUp className="w-3 h-3 shrink-0" aria-hidden />
+                                      <ArrowUp
+                                        className="w-2.5 h-2.5 shrink-0"
+                                        aria-hidden
+                                      />
                                       <ArrowDown
-                                        className="w-3 h-3 shrink-0 -ml-1"
+                                        className="w-2.5 h-2.5 shrink-0 -ml-0.5"
                                         aria-hidden
                                       />
                                     </span>
@@ -1559,7 +1612,9 @@ export default function TenantRequirementsPage() {
                                   </button>
                                 </span>
                                 <span
-                                  className={isDark ? "text-slate-400" : "text-gray-500"}
+                                  className={
+                                    isDark ? "text-slate-400" : "text-gray-500"
+                                  }
                                 >
                                   {expanded ? "▼" : "▶"}
                                 </span>
@@ -1576,7 +1631,8 @@ export default function TenantRequirementsPage() {
                                     <div className="text-sm text-red-500">
                                       {snapshot.error}
                                     </div>
-                                  ) : (snapshot?.requirements ?? []).length === 0 ? (
+                                  ) : (snapshot?.requirements ?? []).length ===
+                                    0 ? (
                                     <div
                                       className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
                                     >
@@ -1598,7 +1654,9 @@ export default function TenantRequirementsPage() {
                                         }}
                                       >
                                         <thead
-                                          className={isDark ? "bg-slate-700" : "bg-white"}
+                                          className={
+                                            isDark ? "bg-slate-700" : "bg-white"
+                                          }
                                         >
                                           <tr>
                                             <th
@@ -1620,7 +1678,9 @@ export default function TenantRequirementsPage() {
                                         </thead>
                                         <tbody>
                                           {snapshot.requirements.map((req) => {
-                                            const entry = snapshot.mapping[req.id] ?? {
+                                            const entry = snapshot.mapping[
+                                              req.id
+                                            ] ?? {
                                               dueDate: null,
                                               payDate: null,
                                               billDate: null,
@@ -1628,10 +1688,15 @@ export default function TenantRequirementsPage() {
                                               validityDurationUnit: null,
                                               estimatedDueDate: null,
                                               estimatedSpecificBillDate: null,
-                                              estimatedBillDateValidityBased: null,
+                                              estimatedBillDateValidityBased:
+                                                null,
                                             };
-                                            const expiration = getExpiration(req, entry);
-                                            const status = getStatus(expiration);
+                                            const expiration = getExpiration(
+                                              req,
+                                              entry,
+                                            );
+                                            const status =
+                                              getStatus(expiration);
                                             return (
                                               <tr
                                                 key={req.id}
@@ -1660,7 +1725,9 @@ export default function TenantRequirementsPage() {
                                                 <td
                                                   className={`px-4 py-2.5 text-sm ${isDark ? "text-slate-300" : "text-gray-700"}`}
                                                 >
-                                                  {entry.estimatedDueDate || entry.dueDate || "—"}
+                                                  {entry.estimatedDueDate ||
+                                                    entry.dueDate ||
+                                                    "—"}
                                                 </td>
                                               </tr>
                                             );
@@ -1674,11 +1741,11 @@ export default function TenantRequirementsPage() {
                             </div>
                           );
                         })}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+                </div>
+              )}
           </div>
         )}
 
@@ -2136,6 +2203,7 @@ export default function TenantRequirementsPage() {
                             type="button"
                             onClick={() => {
                               setDetailUploadFile(null);
+                              setDetailSelectedInboxId(null);
                               setDetailUploadMode(false);
                             }}
                             disabled={detailUploadSaving}
@@ -2146,7 +2214,10 @@ export default function TenantRequirementsPage() {
                           <button
                             type="button"
                             onClick={handleSaveDetailUpload}
-                            disabled={detailUploadSaving || !detailUploadFile}
+                            disabled={
+                              detailUploadSaving ||
+                              (!detailUploadFile && !detailSelectedInboxId)
+                            }
                             className={`flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:opacity-60`}
                           >
                             <Save className="w-4 h-4" />
@@ -2182,6 +2253,7 @@ export default function TenantRequirementsPage() {
                             setDetailModalEditMode(false);
                             setDetailUploadMode(false);
                             setDetailUploadFile(null);
+                            setDetailSelectedInboxId(null);
                           }}
                           className={`p-2 rounded-lg transition-colors `}
                           title="Close"
@@ -2219,7 +2291,9 @@ export default function TenantRequirementsPage() {
                                       return;
                                     setDetailSelectedGroupKey(gk);
                                   }}
-                                  disabled={detailUploadMode || detailModalEditMode}
+                                  disabled={
+                                    detailUploadMode || detailModalEditMode
+                                  }
                                   className={`w-full text-left px-2 py-2 rounded text-xs font-medium leading-snug transition-colors ${
                                     detailSelectedGroupKey === gk
                                       ? isDark
@@ -2253,14 +2327,19 @@ export default function TenantRequirementsPage() {
                               >
                                 Tenant:
                               </span>{" "}
-                              <span className="inline-block max-w-full truncate align-middle">{tenantName || "—"}</span>
+                              <span className="inline-block max-w-full truncate align-middle">
+                                {tenantName || "—"}
+                              </span>
                             </p>
                             {!detailModalEditMode && (
                               <div className="flex items-center gap-2 shrink-0">
                                 <button
                                   type="button"
                                   onClick={openDetailEditMode}
-                                  disabled={savingDetail || detailSelectedGroupKey == null}
+                                  disabled={
+                                    savingDetail ||
+                                    detailSelectedGroupKey == null
+                                  }
                                   className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"} ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
                                 >
                                   <Edit className="w-4 h-4" />
@@ -2270,6 +2349,8 @@ export default function TenantRequirementsPage() {
                                   type="button"
                                   onClick={() => {
                                     if (detailSelectedGroupKey == null) return;
+                                    setDetailUploadFile(null);
+                                    setDetailSelectedInboxId(null);
                                     setDetailUploadMode(true);
                                   }}
                                   disabled={detailSelectedGroupKey == null}
@@ -2607,7 +2688,95 @@ export default function TenantRequirementsPage() {
                           >
                             Upload
                           </div>
-                          {!detailUploadFile ? (
+                          <div className="space-y-2">
+                            <label
+                              className={`block text-xs font-medium ${
+                                isDark ? "text-slate-400" : "text-gray-600"
+                              }`}
+                            >
+                              From Document Box
+                            </label>
+                            {detailInboxPicksLoading ? (
+                              <p
+                                className={`text-xs ${
+                                  isDark ? "text-slate-500" : "text-gray-500"
+                                }`}
+                              >
+                                Loading…
+                              </p>
+                            ) : (
+                              <select
+                                value={detailSelectedInboxId ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setDetailSelectedInboxId(v || null);
+                                  if (v) setDetailUploadFile(null);
+                                }}
+                                disabled={!!detailUploadFile}
+                                className={`w-full text-sm rounded-lg border px-3 py-2 ${
+                                  isDark
+                                    ? "bg-slate-700 border-slate-600 text-slate-100"
+                                    : "bg-white border-gray-300 text-gray-900"
+                                } ${detailUploadFile ? "opacity-60 cursor-not-allowed" : ""}`}
+                              >
+                                <option value="">— None —</option>
+                                {detailInboxPicks.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.file_name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                          {detailInboxPicks.length === 0 &&
+                          !detailInboxPicksLoading &&
+                          selectedTenantId ? (
+                            <p
+                              className={`text-xs ${
+                                isDark ? "text-slate-500" : "text-gray-500"
+                              }`}
+                            >
+                              No unreviewed tenant documents in Document Box
+                              for this tenant.
+                            </p>
+                          ) : null}
+                          <p
+                            className={`text-xs ${
+                              isDark ? "text-slate-500" : "text-gray-500"
+                            }`}
+                          >
+                            Or upload a file from your device
+                          </p>
+                          {detailSelectedInboxId ? (
+                            <div
+                              className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border ${
+                                isDark
+                                  ? "bg-slate-700 border-slate-600"
+                                  : "bg-gray-50 border-gray-200"
+                              }`}
+                            >
+                              <span
+                                className={`text-sm truncate ${
+                                  isDark ? "text-slate-200" : "text-gray-700"
+                                }`}
+                              >
+                                {detailInboxPicks.find(
+                                  (p) => p.id === detailSelectedInboxId,
+                                )?.file_name ?? "Document Box item"}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setDetailSelectedInboxId(null)}
+                                className={`text-sm px-2 py-1 rounded shrink-0 ${
+                                  isDark
+                                    ? "text-slate-300 hover:bg-slate-600"
+                                    : "text-gray-600 hover:bg-gray-200"
+                                }`}
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          ) : !detailUploadFile ? (
                             <label
                               className={`flex flex-col items-center justify-center gap-2 w-full py-6 rounded-lg border-2 border-dashed cursor-pointer transition-colors ${
                                 isDark
@@ -2622,7 +2791,10 @@ export default function TenantRequirementsPage() {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 const file = e.dataTransfer.files?.[0];
-                                if (file) setDetailUploadFile(file);
+                                if (file) {
+                                  setDetailSelectedInboxId(null);
+                                  setDetailUploadFile(file);
+                                }
                               }}
                             >
                               <UploadCloud
@@ -2643,7 +2815,10 @@ export default function TenantRequirementsPage() {
                                 className="hidden"
                                 onChange={(e) => {
                                   const f = e.target.files?.[0];
-                                  if (f) setDetailUploadFile(f);
+                                  if (f) {
+                                    setDetailSelectedInboxId(null);
+                                    setDetailUploadFile(f);
+                                  }
                                   e.target.value = "";
                                 }}
                               />

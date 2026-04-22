@@ -29,6 +29,7 @@ export interface VendorProduct {
   purchase_unit: string;
   purchase_quantity: number;
   current_price: number;
+  case_unit?: number | null; // 1ケース = 何ユニット。NULL = ばら前提
   deprecated?: string | null; // timestamp when deprecated
   tenant_id: string; // FK to tenants
   created_at?: string;
@@ -273,6 +274,21 @@ export interface MappingUserRequirement {
   specific_date: string | null; // date YYYY-MM-DD（手入力の期限日。auto OFF のとき使用）
   created_at?: string;
   updated_at?: string;
+}
+
+/** Invoice document stored in R2 (value = R2 object key) */
+export interface DocumentMetadataInvoice {
+  id: string;
+  tenant_id: string;
+  vendor_id: string | null;
+  value: string;
+  file_name: string;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  invoice_date: string | null; // date YYYY-MM-DD（未確定時は NULL）
+  total_amount: number | null;
+  created_at?: string;
+  created_by: string;
 }
 
 /** Employee requirement document (R2 key in value) */

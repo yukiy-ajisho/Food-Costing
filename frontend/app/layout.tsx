@@ -20,6 +20,8 @@ export default async function RootLayout({
   const headersList = await headers();
   const pathname = headersList.get("x-pathname") || "";
   const isPublicPage = pathname === "/login" || pathname === "/request-access" || pathname.startsWith("/join");
+  /** Invoice embed: no sidebar/header shell; still needs auth providers. */
+  const isInvoiceEmbedChrome = pathname === "/items/vendors-embed";
 
   return (
     <html lang="en">
@@ -27,6 +29,12 @@ export default async function RootLayout({
         <ThemeProvider>
           {isPublicPage ? (
             children
+          ) : isInvoiceEmbedChrome ? (
+            <UserProvider>
+              <CompanyProvider>
+                <TenantProvider>{children}</TenantProvider>
+              </CompanyProvider>
+            </UserProvider>
           ) : (
             <UserProvider>
               <CompanyProvider>

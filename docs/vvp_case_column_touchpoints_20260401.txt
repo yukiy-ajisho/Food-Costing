@@ -1,0 +1,193 @@
+ケース対応設計・修正箇所一覧
+================================================================================
+作成: 2026-04-07
+
+================================================================================
+【設計方針】
+================================================================================
+
+■ virtual_vendor_products に追加
+  - case_unit (integer, nullable)
+      この商品マスタにおける「1ケース = 何ユニット」。
+      従来の行は NULL のまま（ばら前提）。
+
+■ price_events に追加（3列、すべて nullable）
+  - case_unit      … この行の「1ケース = 何ユニット」
+  - case_purchased … 何ケース購入したか
+  - unit_purchased … ばらで何個購入したか
+
+  購入形態は3パターン:
+
+    パターンA: ケースのみ
+      case_unit 非NULL、case_purchased 非NULL、unit_purchased NULL
+
+    パターンB: ばらのみ
+      unit_purchased 非NULL、case_unit NULL、case_purchased NULL
+
+    パターンC: ケース＋ばら混在
+      case_unit 非NULL、case_purchased 非NULL、unit_purchased 非NULL
+
+  CHECK 制約: 3列すべて NULL を禁止（全行対象）。
+  既存行（旧データ）はマイグレーションで unit_purchased = 1 に UPDATE し、NULL 行をなくす。
+
+■ price の意味
+  price は常に「1ユニットあたりの単価」とする（ケース買いでも、ばら買いでも同じ）。
+  case_unit, case_purchased, unit_purchased は購入形態の記録（監査・参照用）であり、
+  price の計算には使わない。
+  旧データ: マイグレーション後は unit_purchased = 1 となる。price の意味は変わらず 1ユニット単価（従来どおり）。
+
+■ VVP.current_price の意味とトリガーの方針
+  「1ユニット単価」を常に current_price に保持する（従来と同じ）。
+  トリガー public.sync_virtual_vendor_current_price_from_event は変更不要。
+  price_events.price が常に単価なので、そのまま current_price に書けばよい。
+  → breakdown SQL・cost.ts も変更不要。
+
+================================================================================
+【修正・確認が必要な場所】
+================================================================================
+
+--------------------------------------------------------------------------------
+1. データベース（マイグレーション）
+--------------------------------------------------------------------------------
+  [1-a] virtual_vendor_products に case_unit (integer, nullable) を追加。
+        既存行は全て NULL（1個・1本単位の前提）のまま残す。
+
+        【VVP 新規作成ルール】
+        ばら購入・ケース購入にかかわらず、
+        「その vendor_id × product_name × tenant_id × case_unit の組み合わせがまだ存在しない」
+        ときだけ新規 VVP を作成する。存在すれば既存 VVP に紐づけるだけ。
+        - ばら: case_unit = NULL の VVP を探す。なければ case_unit = NULL で新規作成。
+        - ケース(12本): case_unit = 12 の VVP を探す。なければ case_unit = 12 で新規作成。
+        コード側でこのマッチングを行うのがメイン。DB 制約は事故防止の保険。
+
+        【unique 制約の変更】
+        現行: (vendor_id, product_name, tenant_id) WHERE product_name IS NOT NULL
+        変更後: (vendor_id, product_name, tenant_id, COALESCE(case_unit, 0))
+                WHERE product_name IS NOT NULL
+        NULL は COALESCE で 0 に変換（case_unit > 0 制約があれば 0 は実値と衝突しない）。
+  [1-b] price_events に case_unit, case_purchased, unit_purchased を追加（すべて nullable）。
+        既存行（旧データ）は マイグレーションで unit_purchased = 1 に UPDATE する。
+        → case_unit = NULL, case_purchased = NULL, unit_purchased = 1 が「1個単位」の表現。
+        → これにより CHECK 制約を新旧問わず全行に適用できる。
+
+        【注意】price_events には UPDATE を禁止するトリガー
+        (trg_prevent_price_events_update / prevent_price_events_update_delete) が存在する。
+        マイグレーション内で UPDATE を行う前に ALTER TABLE ... DISABLE TRIGGER ALL を実行し、
+        UPDATE 後に ALTER TABLE ... ENABLE TRIGGER ALL で再有効化すること。
+
+        例:
+          ALTER TABLE public.price_events DISABLE TRIGGER USER;
+          UPDATE public.price_events SET unit_purchased = 1 WHERE unit_purchased IS NULL;
+          ALTER TABLE public.price_events ENABLE TRIGGER USER;
+          ※ TRIGGER ALL ではなく USER を使うこと。ALL はシステムトリガーも含むため
+             Supabase ホスト環境では権限エラーになる。
+
+  [1-c] CHECK 制約: 3列すべて NULL を禁止（既存行も [1-b] の UPDATE で解消済みのため全行対象）。
+  [1-d] 適用後に supabase/schema_dump.sql を再生成。
+
+--------------------------------------------------------------------------------
+2. トリガー
+--------------------------------------------------------------------------------
+  - public.sync_virtual_vendor_current_price_from_event は変更不要。
+  - price が常に 1ユニット単価 なので、今のまま NEW.price → current_price で正しい。
+
+--------------------------------------------------------------------------------
+3. PostgreSQL 原価 breakdown 関数
+--------------------------------------------------------------------------------
+  対象: public.calculate_item_costs_with_breakdown_scoped(...)
+  ラッパー: public.calculate_item_costs_with_breakdown(...) は scoped の REPLACE で追従。
+
+  price = 1ユニット単価 の方針により、既存の計算式への変更は不要。
+  ただし schema_dump.sql 上に同型の CASE 式が複数ブロックある（クロステナント等）ため、
+  動作確認は全ブロック対象で行う。
+
+--------------------------------------------------------------------------------
+4. バックエンド TypeScript
+--------------------------------------------------------------------------------
+  [4-a] backend/src/types/database.ts
+        VendorProduct に case_unit (number | null) を追加。
+        price_events 関連の型（使用箇所あれば）に3列を追加。
+
+  [4-b] backend/src/services/cost.ts
+        current_price / grams の式は変更不要。
+        price が常に単価のため、旧データ・新データ共に同じ計算で動く。
+
+  [4-c] backend/src/services/deprecation.ts
+        「最安」比較の current_price / purchase_quantity は、
+        current_price が 1ユニット単価 になれば意味は揃う。式の変更は最小限。
+
+  [4-d] backend/src/routes/vendor-products.ts
+        POST: case_unit の受け取り・永続化・バリデーションを追加。
+        PUT: current_price は除外済み（price_events 経由）。case_unit は更新可能にする。
+
+  [4-e] backend/src/routes/price-events.ts
+        POST manual: case_unit, case_purchased, unit_purchased を受け取る。
+        POST invoice: 同上。
+        GET history: select に case_unit, case_purchased, unit_purchased を追加。
+        PriceHistoryRow 型に3列を追加。
+
+  [4-f] backend/src/routes/base-items.ts
+        GET .../vendor-products の明示 select に case_unit を追加。
+
+--------------------------------------------------------------------------------
+5. バックエンドテスト
+--------------------------------------------------------------------------------
+  - backend/tests/unit/cost-calculation.test.ts
+      ケースのみ・ばらのみ・ケース＋ばら・旧データ（NULL）の4パターンを追加。
+  - backend/tests/helpers/test-helpers.ts
+      フィクスチャに新列（デフォルト: NULL = 旧互換）。
+
+--------------------------------------------------------------------------------
+6. フロントエンド型・API レイヤ
+--------------------------------------------------------------------------------
+  - frontend/lib/api.ts
+      VendorProduct に case_unit (nullable) を追加。
+      recordInvoice / recordManual のオプション型に3列を追加。
+      vendorProductsAPI.create のペイロード型に case_unit を追加。
+      PriceHistoryRow 型に case_unit, case_purchased, unit_purchased を追加。
+
+--------------------------------------------------------------------------------
+7. フロントエンド UI・表示・クライアント側計算
+--------------------------------------------------------------------------------
+  [7-a] frontend/app/cost/page.tsx
+        calculateCostPerKg は current_price = 1ユニット単価 前提のまま変更不要。
+        動作確認のみ行う。
+
+  [7-b] frontend/app/items/page.tsx
+        VVP 作成・編集フォームに case_unit フィールドを追加。
+        価格表示を「1ユニットあたり」として見せるなら表示ロジックを整理。
+
+  [7-c] frontend/components/InvoiceImportModal.tsx
+        【Review Lines テーブル】
+        各行に購入形態の入力を追加:
+          - ケース買い: case_unit（1ケース何本か）と case_purchased（何ケース）を入力
+          - ばら買い: unit_purchased（何個）を入力
+          - 切り替えは行ごとに選択できるようにする
+        【マッチング変更】
+        既存 VVP の候補を探す際、case_unit も含めてマッチングする。
+        case_unit が一致する VVP がなければ New 扱いにして新規 VVP を作成する。
+        recordInvoice / vendorProductsAPI.create に購入形態（3列）を渡す。
+        Confirm ステップの表示に購入形態を反映。
+
+--------------------------------------------------------------------------------
+8. 請求書 OCR プロンプト
+--------------------------------------------------------------------------------
+  - backend/src/routes/ocr-test.ts のプロンプトに、
+    ケース行（case_unit, case_purchased）とばら行（unit_purchased）の
+    認識ルールを追加。
+
+================================================================================
+【確定済み設計判断】
+================================================================================
+  A. 旧データの扱い: 既存の price_events は全て「1個単位での購入」前提。
+     マイグレーションで unit_purchased = 1 に UPDATE し、NULL 行をなくす。
+     current_price はそのまま 1ユニット単価として扱う（計算の変更不要）。
+
+  B. price_events.case_unit の必要性（保留）:
+     VVP に case_unit があり、price_events は必ず特定の VVP に紐づくため、
+     price_events.case_unit は VVP.case_unit と常に同じ値になる。
+     「price_events に case_unit は冗長では？」という疑問が出たが、現状は一旦含めておく。
+     将来的に「その請求行でのケースサイズが VVP マスタと異なる」ケースが出た場合に
+     役立つ可能性があるため保留。
+
+================================================================================

@@ -1,0 +1,178 @@
+Invoice ドキュメント保存・表示 設計書
+================================================================================
+作成: 2026-04-07
+
+================================================================================
+【概要】
+================================================================================
+Invoice import 時にアップロードした PDF を R2 に保存し、
+price_events と紐づけることで「どの請求書から生まれた価格変更か」を追跡できるようにする。
+また food costing のトップナビに "Vendors" ページ（Recipes と同じ階層）を新設し、
+その中の "Invoices" タブで invoice 一覧を表示する。
+
+================================================================================
+【確定済み設計判断】
+================================================================================
+  A. テーブル名は document_metadata_invoices
+     （既存の document_metadata_user_requirements と命名規則を統一）
+
+  B. 1枚の PDF = document_metadata_invoices の 1行（import セッションにつき1回 INSERT）
+     同じ請求書から複数の price_events が生まれる場合（例: 3品目）、
+     すべての price_events に同じ invoice_id が入る（1対多）。
+     1セッションで扱う PDF は1ファイルのみ。
+
+  C. price_events.invoice_id（すでに存在する列）が
+     document_metadata_invoices.id を参照する FK となる。
+
+  D. food costing のトップナビに "Vendors" ページを新設（Recipes と同じ階層）。
+     その中に "Invoices" タブを設け、invoice 一覧をフラットなテーブルで表示する。
+     アコーディオン形式は使わない。
+
+  E. total_amount は NOT NULL。
+     OCR で請求書の合計金額を読み取り、Review Lines ステップでユーザーが確認・編集できる。
+     Import ボタンは total_amount が未入力の場合は押せない（バリデーション）。
+
+  F. vendor_id を document_metadata_invoices に持つ。
+     1枚の請求書は1仕入先から発行されるため、直接 FK で紐づける。
+
+================================================================================
+【DB 設計】
+================================================================================
+
+■ document_metadata_invoices テーブル（新規作成）
+
+  CREATE TABLE public.document_metadata_invoices (
+    id           uuid    DEFAULT gen_random_uuid() NOT NULL PRIMARY KEY,
+    tenant_id    uuid    NOT NULL REFERENCES public.tenants(id)  ON DELETE CASCADE,
+    vendor_id    uuid    NOT NULL REFERENCES public.vendors(id)  ON DELETE RESTRICT,
+    value        text    NOT NULL,               -- R2 オブジェクトキー (invoices/{tenant_id}/{uuid}.pdf)
+    file_name    text    NOT NULL,               -- 元のファイル名
+    content_type text,                           -- 'application/pdf' 等
+    size_bytes   bigint,                         -- ファイルサイズ
+    invoice_date date    NOT NULL,               -- 請求書の日付 (YYYY-MM-DD)
+    total_amount numeric(12,2) NOT NULL,         -- 請求書の合計金額（OCR 読取 → ユーザー確認）
+    created_at   timestamptz DEFAULT now() NOT NULL,
+    created_by   uuid    NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT
+  );
+
+  CREATE INDEX idx_document_metadata_invoices_tenant
+    ON public.document_metadata_invoices (tenant_id);
+  CREATE INDEX idx_document_metadata_invoices_vendor
+    ON public.document_metadata_invoices (vendor_id);
+  CREATE INDEX idx_document_metadata_invoices_invoice_date
+    ON public.document_metadata_invoices (tenant_id, invoice_date DESC);
+
+■ price_events.invoice_id の FK 追加
+
+  現在 invoice_id は nullable uuid だが FK 制約が未設定。
+  マイグレーションで FK を追加する:
+
+  ALTER TABLE public.price_events
+    ADD CONSTRAINT price_events_invoice_id_fkey
+      FOREIGN KEY (invoice_id)
+      REFERENCES public.document_metadata_invoices(id)
+      ON DELETE SET NULL;
+
+================================================================================
+【フロー（Invoice Import 時）】
+================================================================================
+
+  1. ユーザーが PDF をアップロード（既存の Upload ステップ）
+  2. OCR 処理:
+     - 既存の各行アイテム情報に加え、請求書の total_amount を抽出（OCR プロンプトに追加）
+  3. Review Lines ステップ:
+     - 既存の invoice_date 入力欄の下に Total price 入力欄を追加
+     - OCR 結果を初期値として表示、ユーザーが編集可能
+     - group state に totalAmount フィールドを追加
+  4. Confirm → Import ボタン押下時（handleImport）:
+     a. total_amount・invoice_date が揃っているかバリデーション
+     b. file（PDF, 1ファイル）を R2 にアップロード
+        キー: invoices/{tenant_id}/{uuid}.pdf
+     c. document_metadata_invoices に 1行 INSERT
+        （vendor_id, invoice_date, total_amount, value, file_name, ... を含む）
+        → id を取得（以降 invoiceId と呼ぶ）
+     d. groups × rows の全ループで price_events を作成する際、
+        全行に同じ invoiceId を渡す
+
+================================================================================
+【UI 設計】
+================================================================================
+
+■ Vendors ページ（新規ページ）
+
+  パス: /vendors
+  ナビ: Recipes と同じ階層に "Vendors" を追加
+  タブ構成: "Invoices"（将来的に他タブを追加する余地あり）
+
+■ Invoices タブの表示内容
+
+  フラットなテーブル形式。行ごとに1枚の invoice を表示。
+  invoice_date 降順で並べる。
+
+  カラム:
+    Vendor     | Invoice Date | Total Amount
+    ───────────┼──────────────┼──────────────
+    [vendor名]  | [YYYY-MM-DD] | [$xxx.xx]  ← クリックで PDF を新タブで開く
+
+  Total Amount セルをクリック → presigned URL を取得して新しいブラウザタブで PDF を開く
+  （openPresignedDocumentInNewTab を使用、既存パターンと統一）
+
+  ロード戦略:
+    - タブ切り替え時に tenant_id でフィルタした invoice 一覧を取得
+    - vendor name は JOIN で取得（vendors テーブル）
+
+================================================================================
+【修正が必要なファイル】
+================================================================================
+
+  [1] DB マイグレーション（新規ファイル）
+      - document_metadata_invoices テーブル作成（vendor_id・total_amount 含む）
+      - price_events.invoice_id FK 追加
+
+  [2] backend/src/lib/r2-upload.ts
+      - uploadInvoiceDocumentToR2 関数を追加
+        キー形式: invoices/{tenantId}/{uuid}.{ext}
+
+  [3] backend/src/types/database.ts
+      - DocumentMetadataInvoice 型を追加
+
+  [4] backend/src/routes/document-metadata-invoices.ts（新規ファイル）
+      - POST /document     PDF を R2 にアップロード + DB に INSERT → id を返す
+      - GET  /document-url R2 の presigned URL を取得（クエリ: key）
+      - GET  /             tenant の invoice 一覧を取得（vendor name JOIN・日付降順）
+
+  [5] backend/src/index.ts
+      - 新ルート "/document-metadata-invoices" を登録
+
+  [6] backend/src/routes/price-events.ts
+      - POST manual / invoice: invoice_id を受け取れるよう更新
+
+  [7] backend/src/routes/vendor-products.ts
+      - POST: initial price event に invoice_id を渡せるよう更新
+
+  [8] backend/src/routes/ocr-test.ts
+      - OCR プロンプトに total_amount（請求書合計金額）の抽出を追加
+
+  [9] frontend/lib/api/document-metadata-invoices.ts（新規ファイル）
+      - DocumentMetadataInvoiceRow 型
+      - documentMetadataInvoicesAPI.uploadDocument / getDocumentUrl / list
+
+  [10] frontend/lib/api.ts
+      - priceEventsAPI.recordInvoice に invoice_id を追加
+      - vendorProductsAPI.create に invoice_id を追加
+
+  [11] frontend/components/InvoiceImportModal.tsx
+      - OCR 結果から total_amount を group state に初期値として設定
+      - Review Lines ステップ: invoice_date 入力欄の下に Total price 入力欄を追加
+      - handleImport の冒頭で total_amount バリデーション → PDF → R2 → DB → invoiceId 取得
+      - 全ループ内の recordInvoice / vendorProductsAPI.create に invoiceId を渡す
+
+  [12] frontend/app/vendors/page.tsx（新規ファイル）
+      - "Invoices" タブ
+      - invoice 一覧テーブル（Vendor | Invoice Date | Total Amount）
+      - Total Amount クリックで openPresignedDocumentInNewTab
+
+  [13] frontend/app/layout.tsx（または NavBar）
+      - "Vendors" をトップナビに追加
+
+================================================================================

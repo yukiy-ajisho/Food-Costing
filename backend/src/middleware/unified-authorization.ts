@@ -26,11 +26,28 @@ export function unifiedAuthorizationMiddleware(
         return res.status(403).json({ error: "Forbidden: Insufficient permissions" });
       }
 
-      // tenant scoped resources に必要な Principal 属性を渡す
       const currentTenantId =
         req.user.selected_tenant_id || req.user.tenant_ids[0];
       if (!currentTenantId) {
         return res.status(403).json({ error: "No tenant associated" });
+      }
+
+      // company::* は company_members のロールのみで判定（テナント profile 不要）
+      if (action.startsWith("company::")) {
+        const isAllowed = await authorizeUnified(
+          req.user.id,
+          action,
+          resource,
+          undefined,
+          { tenantId: currentTenantId }
+        );
+        if (!isAllowed) {
+          return res
+            .status(403)
+            .json({ error: "Forbidden: Insufficient permissions" });
+        }
+        next();
+        return;
       }
 
       const tenantRole = req.user.roles.get(currentTenantId);

@@ -15,11 +15,11 @@ const ALLOWED_CONTENT_TYPES = new Set([
 ]);
 
 /**
- * Upload a file buffer to R2 and return the object key (path).
- * Key format: documents/{requirement_id}/{uuid}.{ext}
+ * Upload a file buffer to R2 and return the object key.
+ * Key format: {uuid}.{ext}
  */
 export async function uploadDocumentToR2(
-  requirementId: string,
+  _requirementId: string,
   buffer: Buffer,
   originalName: string,
   contentType: string
@@ -32,7 +32,7 @@ export async function uploadDocumentToR2(
     throw new Error("Allowed content types: application/pdf, image/jpeg");
   }
 
-  const key = `documents/${requirementId}/${randomUUID()}.${ext}`;
+  const key = `${randomUUID()}.${ext}`;
   const client = getR2Client();
   const bucket = getR2BucketName();
 
@@ -48,9 +48,9 @@ export async function uploadDocumentToR2(
   return key;
 }
 
-/** Company requirement document. Key format: company-documents/{requirement_id}/{uuid}.{ext} */
+/** Company requirement document. Key format: {uuid}.{ext}. */
 export async function uploadCompanyDocumentToR2(
-  requirementId: string,
+  _requirementId: string,
   buffer: Buffer,
   originalName: string,
   contentType: string
@@ -63,7 +63,7 @@ export async function uploadCompanyDocumentToR2(
     throw new Error("Allowed content types: application/pdf, image/jpeg");
   }
 
-  const key = `company-documents/${requirementId}/${randomUUID()}.${ext}`;
+  const key = `${randomUUID()}.${ext}`;
   const client = getR2Client();
   const bucket = getR2BucketName();
 
@@ -81,10 +81,10 @@ export async function uploadCompanyDocumentToR2(
 
 /**
  * Employee (mapping) requirement document.
- * Key format: employee/{mapping_user_requirement_id}/{uuid}.{ext}
+ * Key format: {uuid}.{ext}
  */
 export async function uploadEmployeeRequirementDocumentToR2(
-  mappingUserRequirementId: string,
+  _mappingUserRequirementId: string,
   buffer: Buffer,
   originalName: string,
   contentType: string
@@ -97,7 +97,41 @@ export async function uploadEmployeeRequirementDocumentToR2(
     throw new Error("Allowed content types: application/pdf, image/jpeg");
   }
 
-  const key = `employee/${mappingUserRequirementId}/${randomUUID()}.${ext}`;
+  const key = `${randomUUID()}.${ext}`;
+  const client = getR2Client();
+  const bucket = getR2BucketName();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+    })
+  );
+
+  return key;
+}
+
+/**
+ * Invoice document.
+ * Key format: {uuid}.{ext}
+ */
+export async function uploadInvoiceDocumentToR2(
+  _tenantId: string,
+  buffer: Buffer,
+  originalName: string,
+  contentType: string
+): Promise<string> {
+  const ext = originalName.split(".").pop()?.toLowerCase();
+  if (!ext || !ALLOWED_EXT.has(ext)) {
+    throw new Error("Allowed file types: PDF, JPG");
+  }
+  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+    throw new Error("Allowed content types: application/pdf, image/jpeg");
+  }
+
+  const key = `${randomUUID()}.${ext}`;
   const client = getR2Client();
   const bucket = getR2BucketName();
 

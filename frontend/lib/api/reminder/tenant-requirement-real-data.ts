@@ -21,6 +21,13 @@ export interface RealDataRowPayload {
   value?: string | null;
 }
 
+export interface TenantRequirementInboxPick {
+  id: string;
+  file_name: string;
+  created_at: string;
+  tenant_id: string;
+}
+
 export const tenantRequirementRealDataAPI = {
   getByRequirementIds: (tenantRequirementIds: string[]) => {
     if (tenantRequirementIds.length === 0) return Promise.resolve([]);
@@ -60,6 +67,29 @@ export const tenantRequirementRealDataAPI = {
     form.append("tenant_requirement_id", tenantRequirementId);
     form.append("group_key", String(groupKey));
     form.append("file", file);
+    return apiRequest<{ ok: boolean }>("/tenant-requirement-real-data/document", {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  getInboxPicks: (tenantId: string) => {
+    const params = new URLSearchParams();
+    params.set("tenant_id", tenantId);
+    return apiRequest<TenantRequirementInboxPick[]>(
+      `/tenant-requirement-real-data/inbox-picks?${params.toString()}`
+    );
+  },
+
+  uploadDocumentFromInbox: (
+    tenantRequirementId: string,
+    groupKey: number,
+    documentInboxId: string,
+  ) => {
+    const form = new FormData();
+    form.append("tenant_requirement_id", tenantRequirementId);
+    form.append("group_key", String(groupKey));
+    form.append("document_inbox_id", documentInboxId);
     return apiRequest<{ ok: boolean }>("/tenant-requirement-real-data/document", {
       method: "POST",
       body: form,

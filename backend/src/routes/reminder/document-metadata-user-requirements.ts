@@ -55,20 +55,29 @@ async function ensureMappingDocumentAccess(
 
 /**
  * GET /document-metadata-user-requirements/document-url
- * Query: key (R2 object key, employee/{mapping_id}/...)
+ * Query: key (R2 object key)
  */
 router.get("/document-url", async (req, res) => {
   try {
     const key = req.query.key as string | undefined;
-    if (!key || !key.startsWith("employee/")) {
+    if (!key) {
       return res.status(400).json({ error: "Invalid or missing key" });
     }
-    const parts = key.split("/");
-    const mappingId = parts[1];
-    if (!mappingId) {
-      return res.status(400).json({ error: "Invalid key format" });
+    const { data: row, error } = await supabase
+      .from("document_metadata_user_requirements")
+      .select("mapping_user_requirement_id")
+      .eq("value", key)
+      .maybeSingle();
+    if (error) {
+      return res.status(500).json({ error: error.message });
     }
-    const ok = await ensureMappingDocumentAccess(req.user!.id, mappingId);
+    if (!row) {
+      return res.status(404).json({ error: "Document not found" });
+    }
+    const ok = await ensureMappingDocumentAccess(
+      req.user!.id,
+      row.mapping_user_requirement_id
+    );
     if (!ok) {
       return res.status(403).json({ error: "Access denied" });
     }
@@ -196,7 +205,7 @@ router.delete("/document", async (req, res) => {
     }
     await supabase.from("document_metadata_user_requirements").delete().eq("id", id);
     try {
-      if (row.value?.startsWith("employee/")) {
+      if (row.value) {
         await deleteObjectFromR2(row.value);
       }
     } catch {

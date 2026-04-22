@@ -1,0 +1,322 @@
+============================================================
+統合ドキュメント一次受け（Table A）導入計画書
+作成日: 2026-04-15
+最終反映: 2026-04-18（classified_by 必須、RLS/テナントスコープ、仕分けの再変更、
+  requirement は real_data 先行、連携完了更新の集約、会社・管轄フィルタ、
+  従業員要件の inbox 連携はアップロード UI 整備後の後続フェーズ、
+  既存データ移行は別途、§13 用語補足）
+============================================================
+
+1. 背景と課題
+------------------------------------------------------------
+- 現状は document_metadata_invoices に
+  - 未処理（まだ仕分け/Import 未実施）
+  - 処理済み（Import 完了）
+  が混在している。
+- ドキュメント受付が invoice 前提になっており、
+  requirement 系（company/tenant/employee）の一次受けができない。
+- Document Box も invoice 前提の Review フローになっている。
+
+2. 目標
+------------------------------------------------------------
+- 「一次受け」と「業務テーブル確定登録」を分離する。
+- すべての受信ドキュメント（invoice + requirement 系）を
+  まず Table A に入れる。
+- Document Box は Table A を表示し、Web 側で仕分けする。
+- invoice は Import invoice 完了時に初めて document_metadata_invoices へ登録する。
+- requirement 系は仕分け後に各 requirement ドキュメントテーブルへ登録する。
+
+3. 基本方針（確定）
+------------------------------------------------------------
+- Table A を新設する（一次受け専用）。
+- 初期状態は document_type = NULL（未仕分け）。
+- ユーザーが Review で種別を確定した時点で document_type を設定する
+  （PATCH は「ラジオ選択 → 即時」。invoice を含め遅延 PATCH は採用しない）。
+- reviewed_at / reviewed_by は、下流の業務テーブルにレコードが生成され、
+  連携が完了したタイミングでのみ設定する（案B。§10 参照）。
+- 既存の確定テーブル（document_metadata / company_document_metadata /
+  document_metadata_user_requirements / document_metadata_invoices）は
+  「紐付けIDが確定した後」にのみ INSERT する。
+- 既存確定テーブルの必須 FK を NULL 許容にして未確定を混在させる運用は採用しない。
+- document_inbox は常に tenant_id を持つ（NOT NULL）。アップロード時点で
+  受領テナントが決まる前提とする。
+- Row Level Security（RLS）は document_metadata_invoices と同じ方針・パターンで
+  設計する（テナント境界の取り方を揃え、二重実装を避ける）。
+
+4. Table A（新規）確定案
+------------------------------------------------------------
+テーブル名:
+- document_inbox
+
+document_type の表現（確定: PostgreSQL ENUM）:
+- 種別は text + CHECK ではなく、PostgreSQL の ENUM 型で値集合を固定する。
+- ENUM 型名（確定）: document_inbox_document_type
+- ENUM 値（確定・順序はマイグレーションで定義）:
+  - invoice
+  - company_requirement
+  - tenant_requirement
+  - employee_requirement
+- カラム document_type:
+  - 型 public.document_inbox_document_type NULL
+  - 未仕分けは NULL。仕分け済みは上記いずれかの ENUM 値を 1 つ格納する。
+- マイグレーション: CREATE TYPE public.document_inbox_document_type AS ENUM (...);
+  の後、document_inbox.document_type にその型を付与する。
+- 値を追加する場合は ALTER TYPE ... ADD VALUE が必要（既存の company_member_role
+  等と同様の運用）。
+
+必須カラム（案）:
+- id (uuid, PK)
+- tenant_id (uuid, NOT NULL)
+- value (text, NOT NULL)            -- R2 key
+- file_name (text, NOT NULL)
+- content_type (text, NULL)
+- size_bytes (bigint, NULL)
+- created_at (timestamptz, NOT NULL default now())
+- created_by (uuid, NOT NULL)
+
+仕分け・監査カラム（案）:
+- document_type (document_inbox_document_type, NULL)  -- 上記 ENUM
+- classified_at (timestamptz, NULL)
+  -- 仕分け（種別が確定）された日時。サーバ側で now() を設定する。
+  未仕分けの間は NULL。
+- classified_by (uuid, NULL)
+  -- 仕分けを実行した users.id。仕分け済み行では NOT NULL（document_type と同時に
+  セット）。未仕分けの間は NULL。FK → users。
+  認証済みリクエストではバックエンドが auth.uid() を用いる（クライアント任せにしない）。
+- reviewed_at (timestamptz, NULL)
+  -- 案B: 連携完了まで NULL 許容（NOT NULL 制約は付けない）
+- reviewed_by (uuid, NULL)
+  -- 連携完了を記録した users.id。FK → users。
+  reviewed_at が入る行では NOT NULL とする（§制約参照）。
+
+紐付けの持ち方（linked_* 列は持たない）:
+- inbox 側に linked_at / linked_target_* は置かない。
+- document_metadata_invoices / document_metadata / company_document_metadata /
+  document_metadata_user_requirements 等の業務テーブルに、当面は
+  document_inbox_id 列を追加しない方針とする（必須ではない）。
+  inbox 行と業務行の対応は tenant_id + value（R2 キー）の一致や
+  アプリの処理順で足りる想定。将来、監査やサポートで双方向参照が
+  強く必要になった場合に限り、各テーブルへ document_inbox_id を
+  任意で追加する案を再検討する。
+
+その他（案）:
+- updated_at (timestamptz, NOT NULL default now())  -- 仕分け PATCH 等で更新
+
+制約（案）:
+- document_type IS NOT NULL の場合 classified_at / classified_by も NOT NULL
+  （仕分け済みなら「いつ・誰が」が必ず分かる）
+- document_type IS NULL の場合 classified_at / classified_by も NULL（未仕分け）
+- reviewed_at IS NOT NULL の場合 document_type IS NOT NULL
+- reviewed_at IS NOT NULL の場合 reviewed_by IS NOT NULL
+  （監査のベストプラクティス。連携完了操作の実行者を必ず残す）
+- 仕分け後に別ラジオへ変更した場合: document_type を更新し、classified_at を
+  その PATCH の時刻で上書きし、classified_by をその操作の auth.uid() で上書きする
+
+inbox レコードの削除・アーカイブ:
+- 本計画書のスコープでは取り扱わない（現時点では設計・運用ルールを立てない）。
+
+5. 画面仕様（Document Box）
+------------------------------------------------------------
+5-1. 一覧
+- Table A（document_inbox）を表示
+- レイアウトは現状を極力維持し、データソースを inbox に切り替える
+- 一覧はヘッダで選択中のテナント（通常は profiles のセッション tenant_id）で
+  絞り込む: document_inbox.tenant_id がそれと一致する行のみ表示する。
+  既存の document_metadata_invoices 一覧と同じスコープ感とする。
+- フィルタ例:
+  - 未仕分け: document_type IS NULL
+  - 仕分け済み・未連携: document_type IS NOT NULL AND reviewed_at IS NULL
+  - 連携済み: reviewed_at IS NOT NULL
+
+5-2. Review ボタン
+- 既存の「即 Import invoice モーダル起動」を廃止する
+- Review 押下で「仕分け用モーダル」を開く
+
+5-2-1. Review モーダル — レイアウト（デスクトップ）
+- 左: PDF プレビュー（複数ページ対応、スクロール/ページ移動）
+- 右: document_type をラジオで選択（invoice / company_requirement /
+      tenant_requirement / employee_requirement）
+- 初期状態はいずれも未選択。説明用のヒント文は出さない
+- ワイヤーイメージ:
+    +----------------------------------------------------------+
+    |  [×]  Review                                              |
+    +----------------------------------------------------------+
+    |  +------------------------+  +-------------------------+  |
+    |  |   PDF プレビュー        |  | ○ invoice              |  |
+    |  |                        |  | ○ company_requirement  |  |
+    |  |                        |  | ○ tenant_requirement   |  |
+    |  |                        |  | ○ employee_requirement |  |
+    |  +------------------------+  +-------------------------+  |
+    |                              | [invoice 時のみ表示]      |  |
+    |                              | 「Import invoice」        |  |
+    +----------------------------------------------------------+
+
+5-2-2. Review モーダル — モバイル
+- Preview / Classify のタブ切替は採用しない
+- 縦積み（上: PDF、下: ラジオ。invoice 時のみその下に Import invoice）
+
+5-3. 種別確定（PATCH）の方針（確定: パターン 1）
+- ラジオ選択のタイミングで即 PATCH し、document_type を保存する。
+- 同じ PATCH で classified_at（now()）と classified_by（auth.uid()）を設定する。
+  仕分け後に別ラジオへ変更した場合も、同様に上書きする。
+- invoice を含め、種別の PATCH を Import 完了まで遲らせる方式は採用しない
+  （運用・状態の一貫性のため）。
+- この PATCH では reviewed_at / reviewed_by は更新しない。
+
+5-4. invoice のみ追加アクション
+- document_type = invoice にラジオで確定した後のみ
+  「Import invoice」ボタンを表示する
+- 押下で既存の Import invoice モーダルへ遷移（挙動は現行に近い）。
+  当該 inbox 行（id / value / file_name 等）が既に選択されたコンテキストで開き、
+  現行の Document Box で Review 押下時と同様に「このドキュメント」を対象にする。
+- Import 完了時（document_metadata_invoices に INSERT 成功後）に inbox を更新:
+  - reviewed_at / reviewed_by（案B）
+  - 業務テーブルへの document_inbox_id は当面付与しない（§4 参照）
+
+5-5. requirement 系の挙動
+- モーダル上はラジオ選択 → 即 PATCH で仕分けまで完了（追加の Save ボタンは置かない）
+- 実際の requirement 紐付けは各 requirement 画面で行う
+  （D&D/ローカルファイル選択に加えて「仕分け済み inbox から選択」を追加）
+- employee-requirements は現状この画面からのファイルアップロード UI がない（§6）。
+  「仕分け済み inbox から選択」は当面 company / tenant 先行とし、従業員向けは後続フェーズ。
+- 業務テーブルへの INSERT 成功後に inbox の reviewed_at / reviewed_by を更新する
+  （業務行への document_inbox_id は当面付与しない。§4 参照）
+
+6. requirement 画面側仕様（追加）
+------------------------------------------------------------
+現状（2026-04 時点のコードベース）:
+- company / tenant の要件画面（company-requirements / tenant-requirements）には、
+  Documents 周りでローカルファイルからのアップロード導線がある。
+- employee-requirements（従業員要件）画面には、会社・テナントのような
+  「この画面からファイルをアップロードする」UI はない。Documents タブは
+  既存ドキュメントの一覧・参照が中心であり、フロントから document_metadata_user_requirements へのアップロード API は未接続
+  （バックエンドの POST は別途存在する）。
+- したがって「仕分け済み inbox から選択して紐付ける」機能は、まず
+  company / tenant 要件に限定して実装し、従業員要件への inbox 連携は
+  アップロード UI を整えたうえで後続フェーズで行う。
+
+- 現在のアップロード UI（company / tenant）:
+  - Drag & Drop
+  - ローカルファイル選択
+- 追加（company / tenant 先行）:
+  - 「仕分け済み inbox から選択」
+
+処理順序（確定）:
+- 既存フローに合わせ、real_data（または employee の mapping 等の親行）を
+  確定してから、対応する document_metadata / company_document_metadata /
+  document_metadata_user_requirements に INSERT する（real_data → メタの順）。
+
+inbox から選ぶときのフィルタ（ベストプラクティス）:
+- 共通: document_type が当該画面の種別と一致し、reviewed_at IS NULL（未連携）。
+- tenant requirement: inbox.tenant_id がヘッダのテナントと一致。
+- company requirement: inbox.tenant_id から company_tenants 等で company を解決し、
+  現在の会社スコープ（ヘッダの company）に属するテナントの行に限定する。
+- employee requirement: 上記に加え、inbox.tenant_id が属する company とヘッダの
+  company が一致すること、かつ当該ユーザーが user_jurisdictions で付与されている
+  jurisdiction と紐付け対象の user_requirements.jurisdiction_id が整合する行
+  （または選択後の紐付け先）だけを選べるようにフィルタする。
+  権限のない inbox 行を出さないことが原則。
+  （従業員要件の inbox 選択 UI 自体は §6 の現状どおり後続フェーズ。ここは将来実装時の前提。）
+
+選択後:
+- company requirement:
+  - company_requirement_real_data を確定
+  - company_document_metadata に INSERT
+- tenant requirement:
+  - tenant_requirement_real_data を確定
+  - document_metadata に INSERT
+- employee requirement（後続フェーズ）:
+  - mapping_user_requirement_id を確定
+  - document_metadata_user_requirements に INSERT
+- いずれも成功後に inbox の reviewed_at / reviewed_by を更新する
+  （業務行への document_inbox_id は当面付与しない。§4 参照）
+
+7. Import invoice 連携仕様
+------------------------------------------------------------
+- inbox の invoice を Import するまでは
+  document_metadata_invoices にレコードを作らない。
+- Import 確定時にのみ document_metadata_invoices を作成する。
+- 完了後、inbox を更新する:
+  - reviewed_at / reviewed_by（案B）
+  - 業務テーブルへの document_inbox_id は当面付与しない（§4 参照）
+
+8. API/バックエンド改修ポイント（高レベル）
+------------------------------------------------------------
+- 新規 API（例）:
+  - inbox 一覧取得（テナント・権限は§6 のフィルタ方針に沿う）
+  - inbox 仕分け更新: ラジオ確定時。document_type / classified_at（now()）/
+    classified_by（auth.uid()）。reviewed_* は付けない
+  - inbox 連携完了: reviewed_at（now()）/ reviewed_by（auth.uid()）を更新
+    （Import 完了・requirement 紐付け成功のいずれかの経路から呼ぶ）
+- 連携完了時の inbox 更新は、バックエンドで 1 つのヘルパ（または 1 モジュール）
+  に集約し、重複実装や更新漏れを防ぐ。可能なら同一トランザクション内で
+  業務テーブルへの INSERT と inbox の reviewed_* をまとめる。
+- 既存アップロード導線:
+  - モバイル/Web の一次受け先を inbox へ寄せる
+- requirement 既存 API:
+  - company / tenant 向けに「inbox から選択して紐付け」エンドポイントを追加
+  - 従業員要件向けは画面のアップロード／inbox 選択 UI が整った段階で拡張（§6）
+
+9. 移行方針（段階的）
+------------------------------------------------------------
+Phase 1:
+- Table A 作成 + Document Box 一覧のデータソース切り替え
+- 仕分けモーダル導入（ラジオ選択 → 即 PATCH で document_type / classified_at /
+    classified_by まで）
+
+Phase 2:
+- invoice: Import 完了時のみ document_metadata_invoices 作成に切替
+- requirement 画面（company / tenant）で inbox 選択導線を追加
+- employee-requirements は UI 整備後に追随（§6）
+
+既存データ移行:
+- すでに document_metadata_invoices 等に存在する行の inbox 化・二重管理の整理は
+  本書では取り扱わず、必要になった段階で別途決定する。
+
+Phase 3:
+- reviewed_* / classified_* を含む監査表示、不要データの運用ルール確立
+
+10. reviewed_at / document_type の運用（確定・案B）
+------------------------------------------------------------
+- document_type が NULL でない
+  → Web 上で種別の仕分けが完了している。
+- classified_at が NULL でない
+  → 仕分け（種別確定）が行われた日時（ラジオ即 PATCH のタイミング）。
+- classified_by が NULL でない（かつ document_type あり）
+  → その仕分けを実行したユーザー（users.id）。
+- reviewed_at が NULL でない
+  → 下流の業務テーブルにレコードが生成され連携が完了した
+    （「レコードができてから reviewed」と読める状態）。
+  - reviewed_at は後から値が入るため、列は NULL 許容とする（NOT NULL 制約は付けない）。
+- したがって、仕分け直後は document_type / classified_at / classified_by が入り、
+  reviewed_at は NULL のままとする。reviewed_at（および reviewed_by）は連携完了時に設定する。
+- 状態の読み分け例:
+  - document_type あり / reviewed_at なし
+    → 仕分け済み・業務テーブル未連携（invoice なら Import 前もここに含まれる）
+  - document_type あり / reviewed_at あり
+    → 業務行が存在し連携が完了した状態（業務テーブルへの document_inbox_id
+      は当面持たないため、対応関係は value 等で迫る想定）
+
+11. 未確定事項（実装前に最終決定）
+------------------------------------------------------------
+- 特になし（本書時点では主要な設計は確定済みとする）。
+
+12. 期待効果
+------------------------------------------------------------
+- 未処理/処理済みの混在を解消
+- invoice 前提の受付を廃止し、全ドキュメントの一次受けを統一
+- 仕分け責務を Web に集約し、運用と監査を明確化
+- document_type と reviewed_at の組み合わせで、仕分け済みと業務連携済みを
+  列ベースで判別しやすい
+- classified_at / classified_by により仕分けの監査証跡が明確になる
+
+13. 用語補足（実装時の参照）
+------------------------------------------------------------
+- content_type: ファイルの MIME。document_type: 業務上の仕分けカテゴリ（ENUM）。
+- classified_at は時刻のみ（サーバ now()）。classified_by は実行者（auth.uid()）。
+  「classified_at があるから auth.uid() が必須」ではないが、本計画では
+  classified_by も仕分け済み行では必須とする。
+- Document Box の「Sent by」列: created_by に紐づくユーザーの表示名（既存と同様）。
+  外部の送付者（ベンダー等）とは別。
+- 「会社専用テナント」という特別な用語は使わない。inbox は常に tenant_id を持ち、
+  company スコープの画面では company_tenants 等で会社との関係を解決する。

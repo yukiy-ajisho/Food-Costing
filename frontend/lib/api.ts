@@ -182,8 +182,11 @@ export interface VendorProduct {
   purchase_unit: string;
   purchase_quantity: number;
   current_price: number;
+  case_unit?: number | null; // 1ケース = 何ユニット。NULL = ばら前提
   deprecated?: string | null; // timestamp when deprecated
   created_at?: string;
+  /** Set when listing VVPs; used for invoice-date vs last-update warnings */
+  updated_at?: string;
 }
 
 export interface ProductMapping {
@@ -586,7 +589,18 @@ export const vendorsAPI = {
 export const vendorProductsAPI = {
   getAll: () => fetchAPI<VendorProduct[]>("/vendor-products"),
   getById: (id: string) => fetchAPI<VendorProduct>(`/vendor-products/${id}`),
-  create: (vendorProduct: Partial<VendorProduct>) =>
+  create: (
+    vendorProduct: Partial<VendorProduct> & {
+      initial_price_event_source?: "manual" | "invoice";
+      /** YYYY-MM-DD; when source is invoice, stored as price_events.created_at (UTC midnight) */
+      invoice_date?: string;
+      /** document_metadata_invoices.id to link the initial price event */
+      invoice_id?: string | null;
+      /** Initial price event purchase fields */
+      initial_case_purchased?: number | null;
+      initial_unit_purchased?: number | null;
+    },
+  ) =>
     fetchAPI<VendorProduct>("/vendor-products", {
       method: "POST",
       body: JSON.stringify(vendorProduct),
@@ -621,12 +635,23 @@ export type PriceHistoryRow = {
   brand_name: string | null;
   purchase_quantity: number | null;
   purchase_unit: string | null;
+  case_unit: number | null;
+  case_purchased: number | null;
+  unit_purchased: number | null;
 };
 
 export const priceEventsAPI = {
   getHistory: () => fetchAPI<PriceHistoryRow[]>("/price-events/history"),
 
-  recordManual: (vendorProductId: string, price: number) =>
+  recordManual: (
+    vendorProductId: string,
+    price: number,
+    options?: {
+      caseUnit?: number | null;
+      casePurchased?: number | null;
+      unitPurchased?: number | null;
+    },
+  ) =>
     fetchAPI<{
       id: string;
       virtual_vendor_product_id: string;
@@ -635,7 +660,57 @@ export const priceEventsAPI = {
       created_at: string;
     }>(`/price-events/vendor-products/${vendorProductId}/manual`, {
       method: "POST",
-      body: JSON.stringify({ price }),
+      body: JSON.stringify({
+        price,
+        ...(options?.caseUnit != null ? { case_unit: options.caseUnit } : {}),
+        ...(options?.casePurchased != null
+          ? { case_purchased: options.casePurchased }
+          : {}),
+        ...(options?.unitPurchased != null
+          ? { unit_purchased: options.unitPurchased }
+          : {}),
+      }),
+    }),
+
+  recordInvoice: (
+    vendorProductId: string,
+    price: number,
+    options?: {
+      applyToCurrentPrice?: boolean;
+      /** YYYY-MM-DD; stored as price_events.created_at (UTC midnight) */
+      invoiceDate?: string;
+      /** document_metadata_invoices.id */
+      invoiceId?: string | null;
+      caseUnit?: number | null;
+      casePurchased?: number | null;
+      unitPurchased?: number | null;
+    },
+  ) =>
+    fetchAPI<{
+      id: string;
+      virtual_vendor_product_id: string;
+      price: number;
+      source_type: "manual" | "invoice";
+      created_at: string;
+    }>(`/price-events/vendor-products/${vendorProductId}/invoice`, {
+      method: "POST",
+      body: JSON.stringify({
+        price,
+        ...(options?.applyToCurrentPrice === false
+          ? { apply_to_current_price: false }
+          : {}),
+        ...(options?.invoiceDate?.trim()
+          ? { invoice_date: options.invoiceDate.trim() }
+          : {}),
+        ...(options?.invoiceId != null ? { invoice_id: options.invoiceId } : {}),
+        ...(options?.caseUnit != null ? { case_unit: options.caseUnit } : {}),
+        ...(options?.casePurchased != null
+          ? { case_purchased: options.casePurchased }
+          : {}),
+        ...(options?.unitPurchased != null
+          ? { unit_purchased: options.unitPurchased }
+          : {}),
+      }),
     }),
 };
 
@@ -646,7 +721,24 @@ export const ocrTestAPI = {
     return fetchAPI<{
       model_text: string;
       raw_text: string;
-      structured_json: { items: unknown[] } | null;
+      structured_json: {
+        vendor_name_hint?: string | null;
+        invoice_date?: string | null;
+        total_amount?: number | null;
+        lines?: unknown[];
+        items?: unknown[];
+        /** Legacy merge: 2+ different supplier name hints */
+        distinct_vendor_name_hints?: string[];
+        /** Legacy merge: 2+ different YYYY-MM-DD */
+        distinct_invoice_dates?: string[];
+        /** @deprecated OCR no longer returns vendor_blocks */
+        vendor_blocks?: Array<{
+          vendor_name_hint: string | null;
+          invoice_date?: string | null;
+          total_amount?: number | null;
+          lines: unknown[];
+        }>;
+      } | null;
     }>("/ocr-test/extract", {
       method: "POST",
       body: formData,

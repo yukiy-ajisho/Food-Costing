@@ -226,6 +226,7 @@ router.get(
           purchase_unit,
           purchase_quantity,
           current_price,
+          case_unit,
           deprecated,
           tenant_id,
           created_at,
