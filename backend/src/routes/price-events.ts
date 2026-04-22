@@ -25,33 +25,37 @@ function parsePurchaseFields(body: Record<string, unknown>): {
 } {
   const toPositiveIntOrNull = (
     v: unknown
-  ): number | null | { error: string } => {
-    if (v === undefined || v === null || v === "") return null;
+  ): { ok: true; value: number | null } | { ok: false; raw: string } => {
+    if (v === undefined || v === null || v === "") return { ok: true, value: null };
     const n = Number(v);
-    if (!Number.isInteger(n) || n <= 0) return { error: String(v) };
-    return n;
+    if (!Number.isInteger(n) || n <= 0) return { ok: false, raw: String(v) };
+    return { ok: true, value: n };
   };
 
-  const cu = toPositiveIntOrNull(body?.case_unit);
-  if (typeof cu === "object" && cu !== null)
+  const cuR = toPositiveIntOrNull(body?.case_unit);
+  if (!cuR.ok)
     return {
       error: "case_unit must be a positive integer",
       fields: { case_unit: null, case_purchased: null, unit_purchased: null },
     };
 
-  const cp = toPositiveIntOrNull(body?.case_purchased);
-  if (typeof cp === "object" && cp !== null)
+  const cpR = toPositiveIntOrNull(body?.case_purchased);
+  if (!cpR.ok)
     return {
       error: "case_purchased must be a positive integer",
       fields: { case_unit: null, case_purchased: null, unit_purchased: null },
     };
 
-  const up = toPositiveIntOrNull(body?.unit_purchased);
-  if (typeof up === "object" && up !== null)
+  const upR = toPositiveIntOrNull(body?.unit_purchased);
+  if (!upR.ok)
     return {
       error: "unit_purchased must be a positive integer",
       fields: { case_unit: null, case_purchased: null, unit_purchased: null },
     };
+
+  const cu = cuR.value;
+  const cp = cpR.value;
+  const up = upR.value;
 
   // 3列すべて省略 → ばら1個扱い
   if (cu === null && cp === null && up === null) {
