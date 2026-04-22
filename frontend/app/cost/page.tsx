@@ -1,12 +1,20 @@
 "use client";
 
-import { useState, Fragment, useEffect, useRef, useMemo } from "react";
+import {
+  useState,
+  Fragment,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+} from "react";
 import {
   Edit,
   Save,
   Plus,
   Trash2,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   Search,
   X,
@@ -95,6 +103,18 @@ interface PreppedItem {
   responsible_user_id?: string | null; // 責任者のユーザーID（アクセス権を変更できるManager）
 }
 
+type CostingItemsSortKey = "name";
+type CostingItemsSortState = {
+  key: CostingItemsSortKey | null;
+  ascending: boolean;
+};
+const COSTING_ITEMS_SORT_STORAGE_KEY = "cost_costing_items_sort_v1";
+/** Default: Name column ascending (was key null + id order before). */
+const COSTING_ITEMS_SORT_SSR_INITIAL: CostingItemsSortState = {
+  key: "name",
+  ascending: true,
+};
+
 // 単位のオプション（順番を制御）
 // const unitOptions = [...MASS_UNITS_ORDERED, ...NON_MASS_UNITS_ORDERED]; // 未使用のためコメントアウト
 
@@ -117,6 +137,7 @@ function AddItemModal({
   getAvailableVendorProducts,
   getAvailableUnitsForItem,
   calculateCostPerKg,
+  savePending = false,
 }: {
   onSave: (item: PreppedItem) => void;
   onCancel: () => void;
@@ -161,6 +182,7 @@ function AddItemModal({
     vendorProduct: VendorProduct,
     childItem: Item,
   ) => number | null;
+  savePending?: boolean;
 }) {
   const [name, setName] = useState("");
   const [isMenuItem, setIsMenuItem] = useState(false);
@@ -1228,8 +1250,10 @@ function AddItemModal({
         {/* Modal Footer */}
         <div className="flex justify-end gap-2 mt-6">
           <button
+            type="button"
             onClick={onCancel}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+            disabled={savePending}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors disabled:pointer-events-none disabled:opacity-50 ${
               isDark
                 ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
                 : "bg-gray-200 text-gray-700 hover:bg-gray-300"
@@ -1239,11 +1263,13 @@ function AddItemModal({
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleSave}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            disabled={savePending}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:pointer-events-none disabled:opacity-50"
           >
             <Save className="w-5 h-5" />
-            Save
+            {savePending ? "Saving…" : "Save"}
           </button>
         </div>
       </div>
@@ -1322,10 +1348,36 @@ export default function CostPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [appliedSearchTerm, setAppliedSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const readCostingItemsSortFromStorage =
+    useCallback((): CostingItemsSortState => {
+      try {
+        const raw = localStorage.getItem(COSTING_ITEMS_SORT_STORAGE_KEY);
+        if (!raw) return COSTING_ITEMS_SORT_SSR_INITIAL;
+        const o = JSON.parse(raw) as Partial<CostingItemsSortState>;
+        const k = o.key;
+        if (k != null && k !== "name") return COSTING_ITEMS_SORT_SSR_INITIAL;
+        // Migrate stored key: null → treat as Name ascending; keep Name + explicit ascending.
+        const ascending =
+          k === "name" && typeof o.ascending === "boolean"
+            ? o.ascending
+            : true;
+        return { key: "name", ascending };
+      } catch {
+        return COSTING_ITEMS_SORT_SSR_INITIAL;
+      }
+    }, []);
+  const [costingItemsSort, setCostingItemsSort] =
+    useState<CostingItemsSortState>(COSTING_ITEMS_SORT_SSR_INITIAL);
+  useEffect(() => {
+    setCostingItemsSort(readCostingItemsSortFromStorage());
+  }, [readCostingItemsSortFromStorage]);
+
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
   const [costUnit, setCostUnit] = useState<"g" | "kg">("kg"); // Cost表示単位
   const [eachMode, setEachMode] = useState(false); // eachモード選択状態
   const [loading, setLoading] = useState(true);
+  /** Costing / Access / Cross-tenant の保存 API 実行中（ページ全体を Loading にしない） */
+  const [savePending, setSavePending] = useState(false);
   // 展開されたアイテムの色を管理（item.id -> 色のインデックス 0-3）
   const [expandedItemColors, setExpandedItemColors] = useState<
     Map<string, number>
@@ -1917,7 +1969,7 @@ export default function CostPage() {
   // Cross-tenant Save: pending 変更を API に保存
   const handleCrossTenantSaveClick = async () => {
     if (!selectedTenantId || !selectedCompanyId || !currentUserId) return;
-    setLoading(true);
+    setSavePending(true);
     try {
       for (const [itemId, value] of pendingCrossTenantChanges.entries()) {
         const existingShares = crossTenantShares.get(itemId) ?? [];
@@ -1999,7 +2051,7 @@ export default function CostPage() {
       console.error("Failed to save cross-tenant share settings:", error);
       alert("Cross-tenant 共有設定の保存に失敗しました");
     } finally {
-      setLoading(false);
+      setSavePending(false);
     }
   };
 
@@ -2074,7 +2126,7 @@ export default function CostPage() {
 
   // Access ControlモードのSave処理
   const handleAccessControlSaveClick = async () => {
-    setLoading(true);
+    setSavePending(true);
     try {
       // pendingShareChangesを順次保存
       for (const [itemId, shareType] of pendingShareChanges.entries()) {
@@ -2191,7 +2243,7 @@ export default function CostPage() {
       console.error("Failed to save share settings:", error);
       alert("共有設定の保存に失敗しました");
     } finally {
-      setLoading(false);
+      setSavePending(false);
     }
   };
 
@@ -2444,7 +2496,7 @@ export default function CostPage() {
       timestamp: new Date().toISOString(),
     });
     try {
-      setLoading(true);
+      setSavePending(true);
 
       // itemsToSaveを使用
       const currentItems = itemsToSave;
@@ -2513,7 +2565,7 @@ export default function CostPage() {
 
             if (validationMode === "block") {
               alert(errorMessage);
-              setLoading(false);
+              setSavePending(false);
               return;
             } else if (validationMode === "notify") {
               const itemDisplayName = getItemDisplayName(item, baseItems);
@@ -2530,7 +2582,7 @@ export default function CostPage() {
                 confirmed,
               });
               if (!confirmed) {
-                setLoading(false);
+                setSavePending(false);
                 return;
               }
             }
@@ -2563,7 +2615,7 @@ export default function CostPage() {
 
             if (validationMode === "block") {
               alert(errorMessage);
-              setLoading(false);
+              setSavePending(false);
               return;
             } else if (validationMode === "notify") {
               console.log(
@@ -2582,7 +2634,7 @@ export default function CostPage() {
                 confirmed,
               });
               if (!confirmed) {
-                setLoading(false);
+                setSavePending(false);
                 return;
               }
             }
@@ -3195,7 +3247,7 @@ export default function CostPage() {
       }
       alert(`保存に失敗しました: ${message}`);
     } finally {
-      setLoading(false);
+      setSavePending(false);
     }
   };
 
@@ -3953,6 +4005,47 @@ export default function CostPage() {
     return true;
   });
 
+  const handleCostingItemsNameSortClick = () => {
+    setCostingItemsSort((prev) => {
+      const next: CostingItemsSortState =
+        prev.key !== "name"
+          ? { key: "name", ascending: true }
+          : { key: "name", ascending: !prev.ascending };
+      if (typeof window !== "undefined") {
+        localStorage.setItem(
+          COSTING_ITEMS_SORT_STORAGE_KEY,
+          JSON.stringify(next),
+        );
+      }
+      return next;
+    });
+  };
+
+  const displayItemsForCostTable = useMemo(() => {
+    if (activeMode !== "costing") {
+      return filteredItems;
+    }
+    const { key, ascending } = costingItemsSort;
+    const dir = ascending ? 1 : -1;
+    const nameCompare = (a: PreppedItem, b: PreppedItem): number => {
+      if (key === null) {
+        return a.id.localeCompare(b.id);
+      }
+      const cmp = getItemDisplayName(a, baseItems)
+        .trim()
+        .localeCompare(getItemDisplayName(b, baseItems).trim(), undefined, {
+          sensitivity: "base",
+        });
+      if (cmp !== 0) return dir * cmp;
+      return a.id.localeCompare(b.id);
+    };
+    const stable = [...filteredItems];
+    const draftRows = stable.filter((item) => item.isNew);
+    const existingRows = stable.filter((item) => !item.isNew);
+    existingRows.sort(nameCompare);
+    return [...existingRows, ...draftRows];
+  }, [activeMode, filteredItems, costingItemsSort, baseItems]);
+
   // 検索クリア
   const handleClearSearch = () => {
     setSearchTerm("");
@@ -4003,8 +4096,10 @@ export default function CostPage() {
           >
             <nav className="flex space-x-8">
               <button
+                type="button"
                 onClick={() => handleModeChange("costing")}
-                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                disabled={savePending}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors disabled:pointer-events-none disabled:opacity-50 ${
                   activeMode === "costing"
                     ? "border-blue-500 text-blue-600"
                     : isDark
@@ -4015,8 +4110,10 @@ export default function CostPage() {
                 Costing
               </button>
               <button
+                type="button"
                 onClick={() => handleModeChange("access-control")}
-                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                disabled={savePending}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors disabled:pointer-events-none disabled:opacity-50 ${
                   activeMode === "access-control"
                     ? "border-blue-500 text-blue-600"
                     : isDark
@@ -4027,8 +4124,10 @@ export default function CostPage() {
                 Access Control
               </button>
               <button
+                type="button"
                 onClick={() => handleModeChange("cross-tenant-access-control")}
-                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                disabled={savePending}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors disabled:pointer-events-none disabled:opacity-50 ${
                   activeMode === "cross-tenant-access-control"
                     ? "border-blue-500 text-blue-600"
                     : isDark
@@ -4046,10 +4145,11 @@ export default function CostPage() {
             {/* 左側: Addボタン（Costingモードのみ）または空のdiv（Access Controlモード） */}
             {activeMode === "costing" ? (
               <button
+                type="button"
                 onClick={handleAddButtonClick}
-                disabled={isEditModeCosting}
-                className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
-                  !isEditModeCosting
+                disabled={isEditModeCosting || savePending}
+                className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50 ${
+                  !isEditModeCosting && !savePending
                     ? "bg-green-600 text-white hover:bg-green-700"
                     : isDark
                       ? "bg-slate-700 text-slate-400 cursor-not-allowed"
@@ -4070,15 +4170,19 @@ export default function CostPage() {
                 isEditModeCosting ? (
                   <>
                     <button
-                      onClick={handleSaveClick}
-                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px]"
+                      type="button"
+                      onClick={() => void handleSaveClick()}
+                      disabled={savePending}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50"
                     >
                       <Save className="w-5 h-5" />
-                      Save
+                      {savePending ? "Saving…" : "Save"}
                     </button>
                     <button
+                      type="button"
                       onClick={handleCancelClick}
-                      className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
+                      disabled={savePending}
+                      className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50 ${
                         isDark
                           ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
                           : "bg-gray-200 text-gray-700 hover:bg-gray-300"
@@ -4090,8 +4194,10 @@ export default function CostPage() {
                   </>
                 ) : (
                   <button
+                    type="button"
                     onClick={handleEditClick}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px]"
+                    disabled={savePending}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50"
                   >
                     <Edit className="w-5 h-5" />
                     Edit
@@ -4101,15 +4207,19 @@ export default function CostPage() {
               isEditModeAccessControl ? (
                 <>
                   <button
-                    onClick={handleAccessControlSaveClick}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px]"
+                    type="button"
+                    onClick={() => void handleAccessControlSaveClick()}
+                    disabled={savePending}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50"
                   >
                     <Save className="w-5 h-5" />
-                    Save
+                    {savePending ? "Saving…" : "Save"}
                   </button>
                   <button
+                    type="button"
                     onClick={handleAccessControlCancelClick}
-                    className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
+                    disabled={savePending}
+                    className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50 ${
                       isDark
                         ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
                         : "bg-gray-200 text-gray-700 hover:bg-gray-300"
@@ -4124,15 +4234,19 @@ export default function CostPage() {
                 isEditModeCrossTenant ? (
                   <>
                     <button
-                      onClick={handleCrossTenantSaveClick}
-                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px]"
+                      type="button"
+                      onClick={() => void handleCrossTenantSaveClick()}
+                      disabled={savePending}
+                      className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50"
                     >
                       <Save className="w-5 h-5" />
-                      Save
+                      {savePending ? "Saving…" : "Save"}
                     </button>
                     <button
+                      type="button"
                       onClick={handleCrossTenantCancelClick}
-                      className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] ${
+                      disabled={savePending}
+                      className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50 ${
                         isDark
                           ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
                           : "bg-gray-200 text-gray-700 hover:bg-gray-300"
@@ -4144,8 +4258,10 @@ export default function CostPage() {
                   </>
                 ) : isTenantAdminOrDirector ? (
                   <button
+                    type="button"
                     onClick={handleCrossTenantEditClick}
-                    className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px]"
+                    disabled={savePending}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50"
                   >
                     <Edit className="w-5 h-5" />
                     Edit
@@ -4155,8 +4271,10 @@ export default function CostPage() {
                 )
               ) : (
                 <button
+                  type="button"
                   onClick={handleAccessControlEditClick}
-                  className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px]"
+                  disabled={savePending}
+                  className="flex items-center justify-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors min-w-[100px] disabled:pointer-events-none disabled:opacity-50"
                 >
                   <Edit className="w-5 h-5" />
                   Edit
@@ -4273,22 +4391,34 @@ export default function CostPage() {
             getAvailableVendorProducts={getAvailableVendorProducts}
             getAvailableUnitsForItem={getAvailableUnitsForItem}
             calculateCostPerKg={calculateCostPerKg}
+            savePending={savePending}
           />
         )}
 
-        {/* アイテムリスト */}
-        <div
-          className={`rounded-lg shadow-sm border transition-colors ${
-            isDark
-              ? "bg-slate-800 border-slate-700"
-              : "bg-white border-gray-200"
-          }`}
-        >
-          <div className="w-full">
-            <table
-              className="w-full"
-              style={{ tableLayout: "fixed", width: "100%" }}
-            >
+        {/* アイテムリスト（save 中は Vendor Items と同様の Loading） */}
+        {savePending ? (
+          <div
+            className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700 text-slate-300"
+                : "bg-white border-gray-200"
+            }`}
+          >
+            Loading...
+          </div>
+        ) : (
+          <div
+            className={`rounded-lg shadow-sm border transition-colors ${
+              isDark
+                ? "bg-slate-800 border-slate-700"
+                : "bg-white border-gray-200"
+            }`}
+          >
+            <div className="w-full">
+              <table
+                className="w-full"
+                style={{ tableLayout: "fixed", width: "100%" }}
+              >
               <thead
                 className={`border-b transition-colors sticky z-50 ${
                   isDark
@@ -4371,7 +4501,46 @@ export default function CostPage() {
                         }`}
                         style={{ width: "180px" }}
                       >
-                        Name
+                        <button
+                          type="button"
+                          onClick={handleCostingItemsNameSortClick}
+                          disabled={savePending}
+                          className={`flex w-full min-w-0 justify-start text-left text-xs font-medium uppercase tracking-wider disabled:pointer-events-none disabled:opacity-50 ${
+                            isDark
+                              ? "text-slate-300 hover:text-slate-100"
+                              : "text-gray-500 hover:text-gray-800"
+                          }`}
+                        >
+                          <span className="flex min-w-0 max-w-full items-center gap-1.5">
+                            <span className="min-w-0 truncate">Name</span>
+                            {costingItemsSort.key === "name" ? (
+                              costingItemsSort.ascending ? (
+                                <ChevronUp
+                                  className={`h-4 w-4 shrink-0 ${
+                                    isDark ? "text-slate-100" : "text-gray-800"
+                                  }`}
+                                  aria-hidden
+                                />
+                              ) : (
+                                <ChevronDown
+                                  className={`h-4 w-4 shrink-0 ${
+                                    isDark ? "text-slate-100" : "text-gray-800"
+                                  }`}
+                                  aria-hidden
+                                />
+                              )
+                            ) : (
+                              <ChevronDown
+                                className={`h-4 w-4 shrink-0 ${
+                                  isDark
+                                    ? "text-slate-500"
+                                    : "text-gray-400"
+                                }`}
+                                aria-hidden
+                              />
+                            )}
+                          </span>
+                        </button>
                       </th>
                       <th
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
@@ -4548,11 +4717,14 @@ export default function CostPage() {
                     : "bg-white divide-gray-300"
                 }`}
               >
-                {filteredItems.map((item) => {
+                {displayItemsForCostTable.map((item) => {
                   // 新規アイテムのインデックスを計算（isNew: trueのアイテムのみをカウント）
                   const newItemIndex =
-                    filteredItems
-                      .slice(0, filteredItems.indexOf(item) + 1)
+                    displayItemsForCostTable
+                      .slice(
+                        0,
+                        displayItemsForCostTable.indexOf(item) + 1,
+                      )
                       .filter((i) => i.isNew).length - 1;
                   const isNewItem = item.isNew && !item.isMarkedForDeletion;
                   const newItemBgClass =
@@ -8144,6 +8316,7 @@ export default function CostPage() {
             </table>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

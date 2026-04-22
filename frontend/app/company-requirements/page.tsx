@@ -25,6 +25,7 @@ import {
 import {
   companyRequirementRealDataAPI,
   type CompanyRequirementRealDataRow,
+  type CompanyRequirementInboxPick,
 } from "@/lib/api/reminder/company-requirement-real-data";
 import { openPresignedDocumentInNewTab } from "@/lib/open-presigned-document";
 
@@ -222,6 +223,13 @@ export default function CompanyRequirementsPage() {
   >([]);
   const [detailUploadMode, setDetailUploadMode] = useState(false);
   const [detailUploadSaving, setDetailUploadSaving] = useState(false);
+  const [detailInboxPicks, setDetailInboxPicks] = useState<
+    CompanyRequirementInboxPick[]
+  >([]);
+  const [detailInboxPicksLoading, setDetailInboxPicksLoading] = useState(false);
+  const [detailSelectedInboxId, setDetailSelectedInboxId] = useState<
+    string | null
+  >(null);
   // 詳細モーダル Edit 用のフォーム（Save で real_data に保存）
   const [detailEditDueDate, setDetailEditDueDate] = useState("");
   const [detailEditBillDate, setDetailEditBillDate] = useState("");
@@ -436,6 +444,7 @@ export default function CompanyRequirementsPage() {
       setDetailSelectedGroupKey(null);
       setDetailDocuments([]);
       setDetailUploadFile(null);
+      setDetailSelectedInboxId(null);
       setDetailPendingDeleteKeys([]);
       return;
     }
@@ -537,6 +546,19 @@ export default function CompanyRequirementsPage() {
       .finally(() => setDetailDocumentsLoading(false));
   }, [detailModalReqId, detailSelectedGroupKey]);
 
+  useEffect(() => {
+    if (!detailUploadMode || !selectedCompanyId) {
+      setDetailInboxPicks([]);
+      return;
+    }
+    setDetailInboxPicksLoading(true);
+    companyRequirementRealDataAPI
+      .getInboxPicks(selectedCompanyId)
+      .then(setDetailInboxPicks)
+      .catch(() => setDetailInboxPicks([]))
+      .finally(() => setDetailInboxPicksLoading(false));
+  }, [detailUploadMode, selectedCompanyId]);
+
   // 左で選択した group が変わったとき、Edit 中ならフォームをその group の値で更新
   useEffect(() => {
     if (!detailModalEditMode || detailSelectedGroupKey == null) return;
@@ -555,17 +577,26 @@ export default function CompanyRequirementsPage() {
     if (
       !detailModalReqId ||
       detailSelectedGroupKey == null ||
-      !detailUploadFile
+      (!detailUploadFile && !detailSelectedInboxId)
     )
       return;
     setDetailUploadSaving(true);
     try {
-      await companyRequirementRealDataAPI.uploadDocument(
-        detailModalReqId,
-        detailSelectedGroupKey,
-        detailUploadFile,
-      );
+      if (detailSelectedInboxId) {
+        await companyRequirementRealDataAPI.uploadDocumentFromInbox(
+          detailModalReqId,
+          detailSelectedGroupKey,
+          detailSelectedInboxId,
+        );
+      } else if (detailUploadFile) {
+        await companyRequirementRealDataAPI.uploadDocument(
+          detailModalReqId,
+          detailSelectedGroupKey,
+          detailUploadFile,
+        );
+      }
       setDetailUploadFile(null);
+      setDetailSelectedInboxId(null);
       const list = await companyRequirementRealDataAPI.getDocuments(
         detailModalReqId,
         detailSelectedGroupKey,
@@ -1098,7 +1129,7 @@ export default function CompanyRequirementsPage() {
             {!statusPanelFullBleedLoading &&
               !statusError &&
               selectedCompanyId && (
-                <div className="flex flex-col gap-2 w-full">
+                <div className="flex flex-col gap-6 w-full">
                   <div className="flex w-full items-center justify-between gap-4">
                     <button
                       type="button"
@@ -1118,7 +1149,7 @@ export default function CompanyRequirementsPage() {
                       }`}
                     >
                       <Plus className="w-5 h-5" />
-                      Add
+                      Add requirement
                     </button>
                     <div className="flex items-center gap-2 shrink-0">
                       {statusRequirements.length > 0 &&
@@ -1146,7 +1177,8 @@ export default function CompanyRequirementsPage() {
                     <div
                       className={`text-sm ${isDark ? "text-slate-400" : "text-gray-600"}`}
                     >
-                      No requirements for this company. Use Add to create one.
+                      No requirements for this company. Use Add requirement to
+                      create one.
                     </div>
                   ) : (
                   <div
@@ -1801,6 +1833,7 @@ export default function CompanyRequirementsPage() {
                             type="button"
                             onClick={() => {
                               setDetailUploadFile(null);
+                              setDetailSelectedInboxId(null);
                               setDetailUploadMode(false);
                             }}
                             disabled={detailUploadSaving}
@@ -1811,7 +1844,10 @@ export default function CompanyRequirementsPage() {
                           <button
                             type="button"
                             onClick={handleSaveDetailUpload}
-                            disabled={detailUploadSaving || !detailUploadFile}
+                            disabled={
+                              detailUploadSaving ||
+                              (!detailUploadFile && !detailSelectedInboxId)
+                            }
                             className={`flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 text-white transition-colors hover:bg-blue-700 disabled:opacity-60`}
                           >
                             <Save className="w-4 h-4" />
@@ -1847,6 +1883,7 @@ export default function CompanyRequirementsPage() {
                             setDetailModalEditMode(false);
                             setDetailUploadMode(false);
                             setDetailUploadFile(null);
+                            setDetailSelectedInboxId(null);
                           }}
                           className={`p-2 rounded-lg transition-colors `}
                           title="Close"
@@ -1935,6 +1972,8 @@ export default function CompanyRequirementsPage() {
                                   type="button"
                                   onClick={() => {
                                     if (detailSelectedGroupKey == null) return;
+                                    setDetailUploadFile(null);
+                                    setDetailSelectedInboxId(null);
                                     setDetailUploadMode(true);
                                   }}
                                   disabled={detailSelectedGroupKey == null}
@@ -2273,7 +2312,83 @@ export default function CompanyRequirementsPage() {
                           >
                             Upload
                           </div>
-                          {!detailUploadFile ? (
+                          <div className="space-y-2">
+                            <label
+                              className={`block text-xs font-medium ${
+                                isDark ? "text-slate-400" : "text-gray-600"
+                              }`}
+                            >
+                              From Document Box
+                            </label>
+                            {detailInboxPicksLoading ? (
+                              <p
+                                className={`text-xs ${
+                                  isDark ? "text-slate-500" : "text-gray-500"
+                                }`}
+                              >
+                                Loading…
+                              </p>
+                            ) : (
+                              <select
+                                value={detailSelectedInboxId ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setDetailSelectedInboxId(v || null);
+                                  if (v) setDetailUploadFile(null);
+                                }}
+                                disabled={!!detailUploadFile}
+                                className={`w-full text-sm rounded-lg border px-3 py-2 ${
+                                  isDark
+                                    ? "bg-slate-700 border-slate-600 text-slate-100"
+                                    : "bg-white border-gray-300 text-gray-900"
+                                } ${detailUploadFile ? "opacity-60 cursor-not-allowed" : ""}`}
+                              >
+                                <option value="">— None —</option>
+                                {detailInboxPicks.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.file_name}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
+                          <p
+                            className={`text-xs ${
+                              isDark ? "text-slate-500" : "text-gray-500"
+                            }`}
+                          >
+                            Or upload a file from your device
+                          </p>
+                          {detailSelectedInboxId ? (
+                            <div
+                              className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border ${
+                                isDark
+                                  ? "bg-slate-700 border-slate-600"
+                                  : "bg-gray-50 border-gray-200"
+                              }`}
+                            >
+                              <span
+                                className={`text-sm truncate ${
+                                  isDark ? "text-slate-200" : "text-gray-700"
+                                }`}
+                              >
+                                {detailInboxPicks.find(
+                                  (p) => p.id === detailSelectedInboxId,
+                                )?.file_name ?? "Document Box item"}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setDetailSelectedInboxId(null)}
+                                className={`text-sm px-2 py-1 rounded shrink-0 ${
+                                  isDark
+                                    ? "text-slate-300 hover:bg-slate-600"
+                                    : "text-gray-600 hover:bg-gray-200"
+                                }`}
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          ) : !detailUploadFile ? (
                             <label
                               className={`flex flex-col items-center justify-center gap-2 w-full py-6 rounded-lg border-2 border-dashed cursor-pointer transition-colors ${
                                 isDark
@@ -2288,7 +2403,10 @@ export default function CompanyRequirementsPage() {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 const file = e.dataTransfer.files?.[0];
-                                if (file) setDetailUploadFile(file);
+                                if (file) {
+                                  setDetailSelectedInboxId(null);
+                                  setDetailUploadFile(file);
+                                }
                               }}
                             >
                               <UploadCloud
@@ -2309,7 +2427,10 @@ export default function CompanyRequirementsPage() {
                                 className="hidden"
                                 onChange={(e) => {
                                   const f = e.target.files?.[0];
-                                  if (f) setDetailUploadFile(f);
+                                  if (f) {
+                                    setDetailSelectedInboxId(null);
+                                    setDetailUploadFile(f);
+                                  }
                                   e.target.value = "";
                                 }}
                               />

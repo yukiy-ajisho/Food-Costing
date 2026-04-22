@@ -1,11 +1,15 @@
 import { Router } from "express";
 import multer from "multer";
 import { supabase } from "../../config/supabase";
-import { authorizeUnified, UnifiedCompanyAction } from "../../authz/unified/authorize";
+import {
+  authorizeUnified,
+  UnifiedCompanyAction,
+} from "../../authz/unified/authorize";
 import {
   getDocumentPresignedUrl,
   uploadCompanyDocumentToR2,
 } from "../../lib/r2-upload";
+import { markDocumentInboxReviewed } from "../../lib/mark-document-inbox-reviewed";
 
 const router = Router();
 const upload = multer({
@@ -18,7 +22,7 @@ const upload = multer({
  */
 async function ensureCompanyRequirementAccess(
   userId: string,
-  requirementIds: string[]
+  requirementIds: string[],
 ): Promise<boolean> {
   if (requirementIds.length === 0) return true;
 
@@ -39,7 +43,7 @@ async function ensureCompanyRequirementAccess(
     const allowed = await authorizeUnified(
       userId,
       UnifiedCompanyAction.manage_members,
-      { type: "Company", id: companyId }
+      { type: "Company", id: companyId },
     );
     if (!allowed) return false;
   }
@@ -49,21 +53,38 @@ async function ensureCompanyRequirementAccess(
 
 /**
  * GET /company-requirement-real-data/document-url
- * Query: key (R2 object key, e.g. company-documents/{requirement_id}/{uuid}.pdf)
+ * Query: key (R2 object key)
  */
 router.get("/document-url", async (req, res) => {
   try {
     const userId = req.user!.id;
     const key = req.query.key as string | undefined;
-    if (!key || !key.startsWith("company-documents/")) {
+    if (!key) {
       return res.status(400).json({ error: "Invalid or missing key" });
     }
-    const parts = key.split("/");
-    const requirementId = parts[1];
-    if (!requirementId) {
-      return res.status(400).json({ error: "Invalid key format" });
+    const { data: docType } = await supabase
+      .from("company_requirement_value_types")
+      .select("id")
+      .eq("name", "Document")
+      .maybeSingle();
+    if (!docType) {
+      return res.status(500).json({ error: "Document value type not found" });
     }
-    const allowed = await ensureCompanyRequirementAccess(userId, [requirementId]);
+    const { data: row, error } = await supabase
+      .from("company_requirement_real_data")
+      .select("company_requirement_id")
+      .eq("type_id", docType.id)
+      .eq("value", key)
+      .maybeSingle();
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    if (!row) {
+      return res.status(404).json({ error: "Document not found" });
+    }
+    const allowed = await ensureCompanyRequirementAccess(userId, [
+      row.company_requirement_id,
+    ]);
     if (!allowed) {
       return res.status(403).json({ error: "Access denied" });
     }
@@ -82,13 +103,22 @@ router.get("/document-url", async (req, res) => {
 router.get("/documents", async (req, res) => {
   try {
     const userId = req.user!.id;
-    const requirementId = req.query.company_requirement_id as string | undefined;
+    const requirementId = req.query.company_requirement_id as
+      | string
+      | undefined;
     const groupKeyParam = req.query.group_key as string | undefined;
-    const groupKeyFilter = groupKeyParam != null && groupKeyParam !== "" ? parseInt(groupKeyParam, 10) : null;
+    const groupKeyFilter =
+      groupKeyParam != null && groupKeyParam !== ""
+        ? parseInt(groupKeyParam, 10)
+        : null;
     if (!requirementId?.trim()) {
-      return res.status(400).json({ error: "company_requirement_id is required" });
+      return res
+        .status(400)
+        .json({ error: "company_requirement_id is required" });
     }
-    const allowed = await ensureCompanyRequirementAccess(userId, [requirementId]);
+    const allowed = await ensureCompanyRequirementAccess(userId, [
+      requirementId,
+    ]);
     if (!allowed) {
       return res.status(403).json({ error: "Access denied" });
     }
@@ -166,16 +196,26 @@ router.get("/", async (req, res) => {
     const userId = req.user!.id;
     const idsParam = req.query.company_requirement_ids as string | undefined;
     if (!idsParam || !idsParam.trim()) {
-      return res.status(400).json({ error: "company_requirement_ids is required" });
+      return res
+        .status(400)
+        .json({ error: "company_requirement_ids is required" });
     }
-    const requirementIds = idsParam.split(",").map((s) => s.trim()).filter(Boolean);
+    const requirementIds = idsParam
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (requirementIds.length === 0) {
       return res.json([]);
     }
 
-    const allowed = await ensureCompanyRequirementAccess(userId, requirementIds);
+    const allowed = await ensureCompanyRequirementAccess(
+      userId,
+      requirementIds,
+    );
     if (!allowed) {
-      return res.status(403).json({ error: "Access denied to one or more requirements" });
+      return res
+        .status(403)
+        .json({ error: "Access denied to one or more requirements" });
     }
 
     const { data, error } = await supabase
@@ -202,6 +242,53 @@ type RealDataRow = {
   type_id: string;
   value?: string | null;
 };
+
+async function insertCompanyRequirementDocument(params: {
+  requirementId: string;
+  groupKey: number;
+  r2Key: string;
+  fileName: string;
+  contentType: string | null;
+  sizeBytes: number | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { data: docType } = await supabase
+    .from("company_requirement_value_types")
+    .select("id")
+    .eq("name", "Document")
+    .maybeSingle();
+  if (!docType) {
+    return { ok: false, error: "Document value type not found" };
+  }
+  const { data: inserted, error: insertError } = await supabase
+    .from("company_requirement_real_data")
+    .insert({
+      company_requirement_id: params.requirementId,
+      group_key: params.groupKey,
+      type_id: docType.id,
+      value: params.r2Key,
+    })
+    .select("id")
+    .single();
+  if (insertError || !inserted) {
+    return {
+      ok: false,
+      error:
+        insertError?.message ?? "Failed to insert company_requirement_real_data",
+    };
+  }
+  const { error: metaError } = await supabase
+    .from("company_document_metadata")
+    .insert({
+      real_data_id: inserted.id,
+      file_name: params.fileName,
+      content_type: params.contentType,
+      size_bytes: params.sizeBytes,
+    });
+  if (metaError) {
+    return { ok: false, error: metaError.message };
+  }
+  return { ok: true };
+}
 
 async function upsertRealDataRows(rows: RealDataRow[]): Promise<void> {
   const now = new Date().toISOString();
@@ -234,63 +321,181 @@ async function upsertRealDataRows(rows: RealDataRow[]): Promise<void> {
 }
 
 /**
+ * GET /company-requirement-real-data/inbox-picks
+ * Query: company_id — unreviewed company_requirement inbox rows for tenants linked to that company.
+ */
+router.get("/inbox-picks", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const companyId = (req.query.company_id as string | undefined)?.trim();
+    if (!companyId) {
+      return res.status(400).json({ error: "company_id is required" });
+    }
+    const allowed = await authorizeUnified(
+      userId,
+      UnifiedCompanyAction.manage_members,
+      { type: "Company", id: companyId },
+    );
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    const { data: ctRows, error: ctErr } = await supabase
+      .from("company_tenants")
+      .select("tenant_id")
+      .eq("company_id", companyId);
+    if (ctErr) {
+      return res.status(500).json({ error: ctErr.message });
+    }
+    const tenantIds = [...new Set((ctRows ?? []).map((r) => r.tenant_id))];
+    if (tenantIds.length === 0) {
+      return res.json([]);
+    }
+    const { data: picks, error: inErr } = await supabase
+      .from("document_inbox")
+      .select("id, file_name, created_at, tenant_id")
+      .eq("document_type", "company_requirement")
+      .is("reviewed_at", null)
+      .in("tenant_id", tenantIds)
+      .order("created_at", { ascending: false });
+    if (inErr) {
+      return res.status(500).json({ error: inErr.message });
+    }
+    res.json(picks ?? []);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * POST /company-requirement-real-data/document
- * Multipart: company_requirement_id, group_key, file.
+ * Multipart: company_requirement_id, group_key, and either file or document_inbox_id.
  */
 router.post("/document", upload.single("file"), async (req, res) => {
   try {
     const userId = req.user!.id;
     const requirementId = (req.body?.company_requirement_id as string)?.trim();
     const groupKeyRaw = req.body?.group_key;
-    const groupKey = typeof groupKeyRaw === "string" ? parseInt(groupKeyRaw, 10) : Number(groupKeyRaw);
+    const groupKey =
+      typeof groupKeyRaw === "string"
+        ? parseInt(groupKeyRaw, 10)
+        : Number(groupKeyRaw);
+    const documentInboxId = (
+      req.body?.document_inbox_id as string | undefined
+    )?.trim();
     if (!requirementId || Number.isNaN(groupKey) || groupKey < 1) {
-      return res.status(400).json({ error: "company_requirement_id and group_key (number >= 1) are required" });
+      return res
+        .status(400)
+        .json({
+          error:
+            "company_requirement_id and group_key (number >= 1) are required",
+        });
     }
     const file = req.file;
-    if (!file) {
-      return res.status(400).json({ error: "file is required" });
+    if (file && documentInboxId) {
+      return res.status(400).json({
+        error: "Provide either file or document_inbox_id, not both",
+      });
     }
-    const allowed = await ensureCompanyRequirementAccess(userId, [requirementId]);
+    if (!file && !documentInboxId) {
+      return res
+        .status(400)
+        .json({ error: "file or document_inbox_id is required" });
+    }
+    const allowed = await ensureCompanyRequirementAccess(userId, [
+      requirementId,
+    ]);
     if (!allowed) {
       return res.status(403).json({ error: "Access denied" });
     }
-    const r2Key = await uploadCompanyDocumentToR2(
-      requirementId,
-      file.buffer,
-      file.originalname,
-      file.mimetype,
-    );
-    const { data: docType } = await supabase
-      .from("company_requirement_value_types")
-      .select("id")
-      .eq("name", "Document")
+
+    if (file) {
+      const r2Key = await uploadCompanyDocumentToR2(
+        requirementId,
+        file.buffer,
+        file.originalname,
+        file.mimetype,
+      );
+      const ins = await insertCompanyRequirementDocument({
+        requirementId,
+        groupKey,
+        r2Key,
+        fileName: file.originalname,
+        contentType: file.mimetype,
+        sizeBytes: file.size,
+      });
+      if (ins.ok === false) {
+        return res.status(500).json({ error: ins.error });
+      }
+      return res.status(200).json({ ok: true });
+    }
+
+    if (!documentInboxId) {
+      return res.status(400).json({ error: "document_inbox_id is required" });
+    }
+
+    const { data: crRow, error: crErr } = await supabase
+      .from("company_requirements")
+      .select("company_id")
+      .eq("id", requirementId)
       .maybeSingle();
-    if (!docType) {
-      return res.status(500).json({ error: "Document value type not found" });
+    if (crErr) {
+      return res.status(500).json({ error: crErr.message });
     }
-    const { data: inserted, error: insertError } = await supabase
-      .from("company_requirement_real_data")
-      .insert({
-        company_requirement_id: requirementId,
-        group_key: groupKey,
-        type_id: docType.id,
-        value: r2Key,
-      })
-      .select("id")
-      .single();
-    if (insertError || !inserted) {
-      const message =
-        insertError?.message ?? "Failed to insert company_requirement_real_data";
-      return res.status(500).json({ error: message });
+    if (!crRow) {
+      return res.status(404).json({ error: "Requirement not found" });
     }
-    const { error: metaError } = await supabase.from("company_document_metadata").insert({
-      real_data_id: inserted.id,
-      file_name: file.originalname,
-      content_type: file.mimetype,
-      size_bytes: file.size,
+    const { data: inbox, error: inErr } = await supabase
+      .from("document_inbox")
+      .select(
+        "id, tenant_id, value, file_name, content_type, size_bytes, document_type, reviewed_at",
+      )
+      .eq("id", documentInboxId)
+      .maybeSingle();
+    if (inErr) {
+      return res.status(500).json({ error: inErr.message });
+    }
+    if (!inbox) {
+      return res.status(404).json({ error: "Inbox row not found" });
+    }
+    if (inbox.document_type !== "company_requirement") {
+      return res.status(400).json({ error: "Invalid inbox document type" });
+    }
+    if (inbox.reviewed_at) {
+      return res.status(400).json({ error: "Inbox already completed" });
+    }
+    const { data: link, error: linkErr } = await supabase
+      .from("company_tenants")
+      .select("tenant_id")
+      .eq("company_id", crRow.company_id)
+      .eq("tenant_id", inbox.tenant_id)
+      .maybeSingle();
+    if (linkErr) {
+      return res.status(500).json({ error: linkErr.message });
+    }
+    if (!link) {
+      return res
+        .status(403)
+        .json({ error: "Inbox tenant not linked to company" });
+    }
+    const ins = await insertCompanyRequirementDocument({
+      requirementId,
+      groupKey,
+      r2Key: inbox.value,
+      fileName: inbox.file_name,
+      contentType: inbox.content_type,
+      sizeBytes: inbox.size_bytes,
     });
-    if (metaError) {
-      return res.status(500).json({ error: metaError.message });
+    if (ins.ok === false) {
+      return res.status(500).json({ error: ins.error });
+    }
+    const marked = await markDocumentInboxReviewed({
+      inboxId: documentInboxId,
+      userId,
+      tenantId: inbox.tenant_id,
+    });
+    if (marked.ok === false) {
+      return res.status(500).json({ error: marked.error });
     }
     res.status(200).json({ ok: true });
   } catch (error: unknown) {
@@ -301,23 +506,14 @@ router.post("/document", upload.single("file"), async (req, res) => {
 
 /**
  * DELETE /company-requirement-real-data/document
- * Query: key (R2 key, e.g. company-documents/{requirement_id}/...)
+ * Query: key (R2 key)
  */
 router.delete("/document", async (req, res) => {
   try {
     const userId = req.user!.id;
     const key = req.query.key as string | undefined;
-    if (!key || !key.startsWith("company-documents/")) {
+    if (!key) {
       return res.status(400).json({ error: "Invalid or missing key" });
-    }
-    const parts = key.split("/");
-    const requirementId = parts[1];
-    if (!requirementId) {
-      return res.status(400).json({ error: "Invalid key format" });
-    }
-    const allowed = await ensureCompanyRequirementAccess(userId, [requirementId]);
-    if (!allowed) {
-      return res.status(403).json({ error: "Access denied" });
     }
     const { data: docType } = await supabase
       .from("company_requirement_value_types")
@@ -329,14 +525,23 @@ router.delete("/document", async (req, res) => {
     }
     const { data: row } = await supabase
       .from("company_requirement_real_data")
-      .select("id")
-      .eq("company_requirement_id", requirementId)
+      .select("id, company_requirement_id")
       .eq("type_id", docType.id)
       .eq("value", key)
       .maybeSingle();
-    if (row) {
-      await supabase.from("company_requirement_real_data").delete().eq("id", row.id);
+    if (!row) {
+      return res.status(404).json({ error: "Document not found" });
     }
+    const allowed = await ensureCompanyRequirementAccess(userId, [
+      row.company_requirement_id,
+    ]);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    await supabase
+      .from("company_requirement_real_data")
+      .delete()
+      .eq("id", row.id);
     res.status(200).json({ ok: true });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -365,10 +570,17 @@ router.post("/record-payment", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "rows array must not be empty" });
     }
 
-    const requirementIds = [...new Set(rows.map((r) => r.company_requirement_id))];
-    const allowed = await ensureCompanyRequirementAccess(userId, requirementIds);
+    const requirementIds = [
+      ...new Set(rows.map((r) => r.company_requirement_id)),
+    ];
+    const allowed = await ensureCompanyRequirementAccess(
+      userId,
+      requirementIds,
+    );
     if (!allowed) {
-      return res.status(403).json({ error: "Access denied to one or more requirements" });
+      return res
+        .status(403)
+        .json({ error: "Access denied to one or more requirements" });
     }
 
     const file = req.file;
@@ -379,7 +591,7 @@ router.post("/record-payment", upload.single("file"), async (req, res) => {
         requirementId,
         file.buffer,
         file.originalname,
-        file.mimetype
+        file.mimetype,
       );
 
       const { data: docType } = await supabase
@@ -434,18 +646,36 @@ router.post("/", async (req, res) => {
     const userId = req.user!.id;
     const body = req.body as { rows?: RealDataRow[] };
     if (!Array.isArray(body.rows) || body.rows.length === 0) {
-      return res.status(400).json({ error: "rows array is required and must not be empty" });
+      return res
+        .status(400)
+        .json({ error: "rows array is required and must not be empty" });
     }
     for (const row of body.rows) {
-      if (!row.company_requirement_id || typeof row.group_key !== "number" || !row.type_id) {
-        return res.status(400).json({ error: "Each row must have company_requirement_id, group_key (number), type_id" });
+      if (
+        !row.company_requirement_id ||
+        typeof row.group_key !== "number" ||
+        !row.type_id
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              "Each row must have company_requirement_id, group_key (number), type_id",
+          });
       }
     }
 
-    const requirementIds = [...new Set(body.rows.map((r) => r.company_requirement_id))];
-    const allowed = await ensureCompanyRequirementAccess(userId, requirementIds);
+    const requirementIds = [
+      ...new Set(body.rows.map((r) => r.company_requirement_id)),
+    ];
+    const allowed = await ensureCompanyRequirementAccess(
+      userId,
+      requirementIds,
+    );
     if (!allowed) {
-      return res.status(403).json({ error: "Access denied to one or more requirements" });
+      return res
+        .status(403)
+        .json({ error: "Access denied to one or more requirements" });
     }
 
     await upsertRealDataRows(body.rows);

@@ -7,8 +7,63 @@ import {
   getUnifiedVendorProductResource,
 } from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
+import { utcMidnightIsoFromYyyyMmDd } from "../utils/invoiceEffectiveTimestamp";
 
 const router = Router();
+
+/**
+ * case_unit / case_purchased / unit_purchased を body から取り出してバリデーションする。
+ * 3列すべて省略された場合は unit_purchased = 1（ばら1個）とみなす。
+ */
+function parsePurchaseFields(body: Record<string, unknown>): {
+  error?: string;
+  fields: {
+    case_unit: number | null;
+    case_purchased: number | null;
+    unit_purchased: number | null;
+  };
+} {
+  const toPositiveIntOrNull = (
+    v: unknown
+  ): { ok: true; value: number | null } | { ok: false; raw: string } => {
+    if (v === undefined || v === null || v === "") return { ok: true, value: null };
+    const n = Number(v);
+    if (!Number.isInteger(n) || n <= 0) return { ok: false, raw: String(v) };
+    return { ok: true, value: n };
+  };
+
+  const cuR = toPositiveIntOrNull(body?.case_unit);
+  if (!cuR.ok)
+    return {
+      error: "case_unit must be a positive integer",
+      fields: { case_unit: null, case_purchased: null, unit_purchased: null },
+    };
+
+  const cpR = toPositiveIntOrNull(body?.case_purchased);
+  if (!cpR.ok)
+    return {
+      error: "case_purchased must be a positive integer",
+      fields: { case_unit: null, case_purchased: null, unit_purchased: null },
+    };
+
+  const upR = toPositiveIntOrNull(body?.unit_purchased);
+  if (!upR.ok)
+    return {
+      error: "unit_purchased must be a positive integer",
+      fields: { case_unit: null, case_purchased: null, unit_purchased: null },
+    };
+
+  const cu = cuR.value;
+  const cp = cpR.value;
+  const up = upR.value;
+
+  // 3列すべて省略 → ばら1個扱い
+  if (cu === null && cp === null && up === null) {
+    return { fields: { case_unit: null, case_purchased: null, unit_purchased: 1 } };
+  }
+
+  return { fields: { case_unit: cu, case_purchased: cp, unit_purchased: up } };
+}
 
 export type PriceHistoryRow = {
   price_event_id: string;
@@ -22,6 +77,9 @@ export type PriceHistoryRow = {
   brand_name: string | null;
   purchase_quantity: number | null;
   purchase_unit: string | null;
+  case_unit: number | null;
+  case_purchased: number | null;
+  unit_purchased: number | null;
 };
 
 /**
@@ -46,6 +104,9 @@ router.get(
           invoice_id,
           created_at,
           virtual_vendor_product_id,
+          case_unit,
+          case_purchased,
+          unit_purchased,
           virtual_vendor_products (
             product_name,
             brand_name,
@@ -124,6 +185,11 @@ router.get(
               ? Number(vp.purchase_quantity)
               : null,
           purchase_unit: (vp?.purchase_unit as string | null) ?? null,
+          case_unit: ev.case_unit != null ? Number(ev.case_unit) : null,
+          case_purchased:
+            ev.case_purchased != null ? Number(ev.case_purchased) : null,
+          unit_purchased:
+            ev.unit_purchased != null ? Number(ev.unit_purchased) : null,
         };
       });
 
@@ -161,6 +227,11 @@ router.post(
         return res.status(400).json({ error: "No tenant associated" });
       }
 
+      const purchaseFields = parsePurchaseFields(req.body);
+      if (purchaseFields.error) {
+        return res.status(400).json({ error: purchaseFields.error });
+      }
+
       const { data, error } = await supabase
         .from("price_events")
         .insert([
@@ -170,8 +241,98 @@ router.post(
             price,
             source_type: "manual",
             user_id: req.user!.id,
+            ...purchaseFields.fields,
           },
         ])
+        .select()
+        .single();
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+
+      return res.status(201).json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ error: message });
+    }
+  }
+);
+
+/**
+ * POST /price-events/vendor-products/:id/invoice
+ * 請求書取り込みなどの価格イベント（append-only、source_type = invoice）
+ */
+router.post(
+  "/vendor-products/:id/invoice",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.update_item,
+    getUnifiedVendorProductResource
+  ),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const priceRaw = req.body?.price;
+      const price = Number(priceRaw);
+
+      if (!Number.isFinite(price) || price <= 0) {
+        return res.status(400).json({ error: "price must be a positive number" });
+      }
+
+      const selectedTenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+      if (!selectedTenantId) {
+        return res.status(400).json({ error: "No tenant associated" });
+      }
+
+      const applyRaw = req.body?.apply_to_current_price;
+      const applyToCurrent =
+        applyRaw === false || applyRaw === "false" ? false : true;
+
+      const rawInvDate = req.body?.invoice_date;
+      let effectiveAt: string | undefined;
+      if (
+        rawInvDate !== undefined &&
+        rawInvDate !== null &&
+        String(rawInvDate).trim() !== ""
+      ) {
+        const iso = utcMidnightIsoFromYyyyMmDd(rawInvDate);
+        if (!iso) {
+          return res
+            .status(400)
+            .json({ error: "invoice_date must be YYYY-MM-DD" });
+        }
+        effectiveAt = iso;
+      }
+
+      const purchaseFields = parsePurchaseFields(req.body);
+      if (purchaseFields.error) {
+        return res.status(400).json({ error: purchaseFields.error });
+      }
+
+      const rawInvoiceId = req.body?.invoice_id;
+      const invoiceId =
+        typeof rawInvoiceId === "string" && rawInvoiceId.trim() !== ""
+          ? rawInvoiceId.trim()
+          : null;
+
+      const insertRow: Record<string, unknown> = {
+        tenant_id: selectedTenantId,
+        virtual_vendor_product_id: id,
+        price,
+        source_type: "invoice",
+        user_id: req.user!.id,
+        invoice_id: invoiceId,
+        apply_to_current_price: applyToCurrent,
+        ...purchaseFields.fields,
+      };
+      if (effectiveAt !== undefined) {
+        insertRow.created_at = effectiveAt;
+      }
+
+      const { data, error } = await supabase
+        .from("price_events")
+        .insert([insertRow])
         .select()
         .single();
 

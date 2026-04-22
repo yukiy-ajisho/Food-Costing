@@ -12,32 +12,40 @@ import {
   Utensils,
   ChevronDown,
   ChevronRight,
+  Inbox,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
 import { CompanySelector } from "./CompanySelector";
 import { TenantSelector } from "./TenantSelector";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { apiRequest } from "@/lib/api";
+import { documentInboxAPI } from "@/lib/api/document-inbox";
+import { useCompany } from "@/contexts/CompanyContext";
 
 /**
- * サイドバー各行: 2行ラベル(text-sm leading-tight)+h-5アイコン+py-2 を収容。
+ * サイドバー親行: 2行ラベル(text-sm leading-tight)+h-5アイコン+py-2 を収容。
  * 畳み・展開で行高が変わらないように最低高を固定し、items-center でアイコン縦位置を統一。
  */
 const SIDEBAR_NAV_ROW_MIN = "min-h-14";
 const SIDEBAR_NAV_ROW_ALIGN = `${SIDEBAR_NAV_ROW_MIN} flex items-center gap-2`;
 
+/** Food costing / License 直下のサブリンク用（親より詰めて同じ密度に揃える） */
+const SIDEBAR_SUB_NAV_ROW_MIN = "min-h-11";
+const SIDEBAR_SUB_NAV_ROW_ALIGN = `${SIDEBAR_SUB_NAV_ROW_MIN} flex items-center gap-2`;
+
 /** 外側クリップ用の幅（内側レイアウト幅と一致） */
 const SIDEBAR_COLLAPSED_PX = 64;
 const SIDEBAR_EXPANDED_PX = 178;
 
-/** Recipes / Items / History / Settings いずれかのパスか */
+/** Recipes / Items / History / Settings / Vendors いずれかのパスか */
 function isFoodCostingPath(pathname: string): boolean {
   return (
     pathname.startsWith("/cost") ||
     pathname.startsWith("/items") ||
     pathname.startsWith("/history") ||
-    pathname.startsWith("/settings")
+    pathname.startsWith("/settings") ||
+    pathname.startsWith("/vendors")
   );
 }
 
@@ -46,6 +54,7 @@ const foodCostingSubItems = [
   { id: "cost", label: "Recipes", href: "/cost" },
   { id: "items", label: "Items", href: "/items" },
   { id: "history", label: "History", href: "/history" },
+  { id: "vendors", label: "Vendors", href: "/vendors" },
   { id: "settings", label: "Settings", href: "/settings" },
 ];
 
@@ -79,12 +88,19 @@ const licenseSubItems = [
 // レイアウトコンテンツコンポーネント
 export function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { companies, selectedCompanyId } = useCompany();
+  const canAccessDocumentBox = useMemo(() => {
+    if (!selectedCompanyId) return false;
+    const role = companies.find((c) => c.id === selectedCompanyId)?.role;
+    return role === "company_admin" || role === "company_director";
+  }, [companies, selectedCompanyId]);
   const { theme, toggleTheme } = useTheme();
   const [sidebarMode, setSidebarMode] = useState<"compact" | "full">("compact");
   const [isHovered, setIsHovered] = useState(false);
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
   const [licenseExpanded, setLicenseExpanded] = useState(false);
   const [foodCostingExpanded, setFoodCostingExpanded] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const isFoodCostingSectionActive = isFoodCostingPath(pathname);
 
@@ -106,6 +122,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setFoodCostingExpanded(isFoodCostingPath(pathname));
   }, [pathname]);
+
+  // Document Box: 未承認件数（会社オフィサーのみ）
+  useEffect(() => {
+    if (pathname === "/join") return;
+    if (!canAccessDocumentBox) {
+      setPendingCount(0);
+      return;
+    }
+    documentInboxAPI
+      .forDocumentBox()
+      .then((rows) => setPendingCount(rows.length))
+      .catch(() => {
+        setPendingCount(0);
+      });
+  }, [pathname, canAccessDocumentBox]);
 
   // System Adminチェック
   useEffect(() => {
@@ -133,6 +164,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       return "Tenant Requirements";
     if (pathname.startsWith("/company-requirements"))
       return "Company Requirements";
+    if (pathname.startsWith("/document-box")) return "Document Box";
     const foodItem = foodCostingSubItems.find(
       (item) => pathname === item.href || pathname.startsWith(item.href + "/"),
     );
@@ -349,7 +381,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       <Link
                         key={sub.id}
                         href={sub.href}
-                        className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} pl-9 pr-3 py-2 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                        className={`w-full ${SIDEBAR_SUB_NAV_ROW_ALIGN} pl-9 pr-3 py-1.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
                           isActive ? "font-semibold" : ""
                         }`}
                         style={{
@@ -447,6 +479,61 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 )}
               </Link>
 
+              {canAccessDocumentBox ? (
+                <Link
+                  href="/document-box"
+                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md`}
+                  style={{
+                    backgroundColor: isDark ? "#1e293b" : "white",
+                    transition:
+                      "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
+                    color: pathname.startsWith("/document-box")
+                      ? isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8"
+                      : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#334155"
+                      : "#dbeafe";
+                    e.currentTarget.style.color = isDark
+                      ? "#60a5fa"
+                      : "#1d4ed8";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = isDark
+                      ? "#1e293b"
+                      : "white";
+                    e.currentTarget.style.color = pathname.startsWith(
+                      "/document-box"
+                    )
+                      ? isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8"
+                      : isDark
+                        ? "#cbd5e1"
+                        : "#6b7280";
+                  }}
+                >
+                  <div className="relative shrink-0">
+                    <Inbox className="h-5 w-5" />
+                    {pendingCount > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white leading-none">
+                        {pendingCount > 9 ? "9+" : pendingCount}
+                      </span>
+                    )}
+                  </div>
+                  {isSidebarExpanded && (
+                    <span className="text-sm whitespace-nowrap">
+                      Document Box
+                    </span>
+                  )}
+                </Link>
+              ) : null}
+
               {/* License & certification（クリックで開閉、サブの Requirements で遷移） */}
               <div className="flex flex-col gap-0">
                 <button
@@ -518,7 +605,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       <Link
                         key={sub.id}
                         href={sub.href}
-                        className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} pl-9 pr-3 py-2 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                        className={`w-full ${SIDEBAR_SUB_NAV_ROW_ALIGN} pl-9 pr-3 py-1.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
                           isActive ? "font-semibold" : ""
                         }`}
                         style={{

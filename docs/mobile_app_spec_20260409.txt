@@ -1,0 +1,233 @@
+React Native モバイルアプリ仕様書（スマホ側）
+================================================================================
+作成: 2026-04-09
+
+================================================================================
+【概要】
+================================================================================
+飲食店向け食材コスト管理システムの一部として、スマホからインボイス（請求書・
+納品書）の写真を撮影・送信するアプリ。
+Web アプリ側でそのドキュメントを確認・OCR・承認し、食材コストに反映する。
+
+================================================================================
+【使用技術】
+================================================================================
+  - フレームワーク: React Native（Expo 想定）
+  - 認証:          Supabase Auth（Google ログインのみ。新規ユーザー登録なし）
+  - バックエンド:   Supabase（DB / Auth / RLS）と Supabase Edge Function のみ
+                   Express 等のサーバーは使わない
+  - ストレージ:     Cloudflare R2（Edge Function 経由。アプリは R2 キーを持たない）
+
+================================================================================
+【プロジェクト作成 & パッケージインストール】
+================================================================================
+
+■ 1. Expo プロジェクトを作成
+
+  npx create-expo-app@latest <アプリ名> --template blank-typescript
+
+  ※ TypeScript テンプレートを使う。plain JS は使わない。
+  ※ 作成後は cd <アプリ名> でプロジェクトディレクトリに移動。
+
+■ 2. パッケージインストール
+
+  Expo 管理パッケージは必ず「npx expo install」を使う。
+  （npm install ではなく。SDK バージョンに合った互換バージョンが自動で選ばれる）
+
+  # Supabase クライアント本体
+  npx expo install @supabase/supabase-js
+
+  # 認証トークンの保存（AsyncStorage = 一般的な KV ストア、SecureStore = 暗号化ストレージ）
+  # Supabase の auth storage adapter として両方使う（モバイルは SecureStore、Web は AsyncStorage）
+  npx expo install @react-native-async-storage/async-storage expo-secure-store
+
+  # スプラッシュスクリーン（認証状態ロード中の表示制御）
+  npx expo install expo-splash-screen
+
+  # Google OAuth に必要な3点:
+  #   expo-web-browser  → Google の認証画面をブラウザで開く
+  #   expo-auth-session → makeRedirectUri() で OAuth リダイレクト先 URL を生成する
+  #   expo-crypto       → PKCE（認可コードフロー）の code_verifier 生成に使う
+  npx expo install expo-web-browser expo-auth-session expo-crypto
+
+  # カメラ / フォトライブラリ（インボイス写真の撮影・選択）
+  npx expo install expo-image-picker
+
+■ 3. .env ファイルを作成（プロジェクトルート）
+
+  EXPO_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
+  EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
+
+  ※ EXPO_PUBLIC_ プレフィックスが必須。これが付いた変数のみアプリから参照できる。
+  ※ .env は .gitignore に追加して Git にコミットしない。
+  ※ Google の Client ID は Supabase ダッシュボード側にのみ設定する。
+    アプリコードには不要（signInWithOAuth + expo-web-browser の場合）。
+
+■ 4. app.json の設定（Google OAuth に必要）
+
+  {
+    "expo": {
+      "scheme": "<アプリ名>",   ← OAuth のリダイレクト URI に使われる
+      "plugins": [
+        [
+          "expo-web-browser",
+          { "experimentalLauncherActivity": false }
+        ]
+      ]
+    }
+  }
+
+■ 5. Google Cloud Console の設定（事前に必要）
+
+  - Google Cloud Console でプロジェクトを作成
+  - OAuth 2.0 クライアント ID を「Web アプリケーション」として作成
+  - 承認済みリダイレクト URI に Supabase の Callback URL を追加:
+      https://xxxxx.supabase.co/auth/v1/callback
+  - Supabase ダッシュボード → Authentication → Providers → Google で
+    Client ID / Client Secret を設定する
+  ※ Client ID はアプリの .env には入れない（Supabase ダッシュボード側のみ）
+
+■ 6. 開発サーバーの起動
+
+  npx expo start
+
+  ※ 実機確認は Expo Go アプリ（App Store / Google Play）でQRコードをスキャン
+  ※ ただし expo-image-picker など一部のネイティブモジュールは
+    Expo Go では動作しない場合がある → その場合は Development Build を使う:
+
+  npx expo run:ios   （Mac + Xcode が必要）
+  npx expo run:android  （Android Studio が必要）
+
+================================================================================
+【Supabase のテーブル構造（参照用）】
+================================================================================
+
+■ profiles テーブル（ユーザーとテナントの紐付け）
+
+  id         uuid   PK
+  user_id    uuid   → auth.users.id（ログインユーザー）
+  tenant_id  uuid   → tenants.id
+  role       text   ('admin' | 'manager' | 'staff' | 'director')
+  created_at timestamptz
+
+  ※ 1人のユーザー（user_id）が複数テナントに所属できる
+    → profiles に同じ user_id で複数行存在することがある
+
+■ tenants テーブル（テナント情報）
+
+  id         uuid   PK
+  name       text   テナント名
+  type       text   ('restaurant' | 'vendor')
+  created_at timestamptz
+
+■ document_metadata_invoices テーブル（アップロードしたインボイスのメタデータ）
+
+  id           uuid        PK
+  tenant_id    uuid        → tenants.id（NOT NULL）
+  vendor_id    uuid        → vendors.id（モバイル由来は NULL を許容予定。詳細は下記）
+  value        text        R2 オブジェクトキー（Edge Function が生成）
+  file_name    text        元のファイル名
+  content_type text        'image/jpeg' 等
+  size_bytes   bigint      ファイルサイズ（バイト）
+  invoice_date date        請求書の日付（YYYY-MM-DD）
+  total_amount numeric     請求書の合計金額（正の数）
+  created_at   timestamptz 自動挿入
+  created_by   uuid        → auth.users.id（ログインユーザー）
+  approved_at  timestamptz NULL = 未承認、値あり = Web で承認済み
+
+  ※ vendor_id はモバイルからのアップロード時点では不明のため NULL を許容する。
+    Web 側の Document Box でレビュー時に確定する。
+    （NOT NULL 制約はすでにマイグレーションで削除済み。NULL で INSERT して問題ない）
+
+================================================================================
+【アプリの機能要件】
+================================================================================
+
+  1. Google ログイン（Supabase Auth）
+     - 新規ユーザー登録はなし。既存アカウントでのログインのみ
+     - ログインしたユーザーは profiles テーブルに必ず存在している前提
+
+  2. テナント選択
+     - ログイン後、以下のクエリで自分が所属するテナント一覧を取得する:
+
+       SELECT p.tenant_id, t.name
+       FROM profiles p
+       JOIN tenants t ON t.id = p.tenant_id
+       WHERE p.user_id = auth.uid()
+
+     - 取得結果が1件なら自動選択（選択 UI を省略してよい）
+     - 2件以上なら選択 UI を表示し、ユーザーに選ばせる
+     - 選択した tenant_id をアプリ内で保持し、アップロード時に使用する
+
+  3. インボイス送信フォーム
+     以下の情報をユーザーに入力・選択させてからアップロードする。
+
+     ┌─────────────────┬────────────────────────────────────────────┐
+     │ 項目            │ 内容                                        │
+     ├─────────────────┼────────────────────────────────────────────┤
+     │ 写真            │ カメラ撮影 または カメラロールから選択        │
+     │ Invoice Date    │ 日付ピッカー（YYYY-MM-DD 形式で送信）         │
+     │ Total Amount    │ 数値入力（請求書の合計金額、正の数）           │
+     └─────────────────┴────────────────────────────────────────────┘
+
+     ※ vendor（仕入先）の選択はアプリ側では行わない。Web 側で後から確定する
+
+  4. アップロード送信
+     - 上記3項目が全て入力済みの場合のみ送信ボタンを有効にする
+     - Edge Function に multipart/form-data で送信する（詳細は下記）
+     - 完了後にトーストやダイアログで「送信しました」を表示する
+
+================================================================================
+【Edge Function との通信仕様】
+================================================================================
+
+■ エンドポイント
+  POST https://xxxxx.supabase.co/functions/v1/upload-invoice
+  （URL は将来確定次第置き換える）
+
+■ リクエスト
+  ヘッダー:
+    Authorization: Bearer <Supabase Auth の JWT トークン>
+    Content-Type: multipart/form-data
+
+  ボディ（multipart/form-data）:
+    file           : 画像ファイル（jpg / png / pdf）
+    tenant_id      : 選択中のテナント ID（UUID 文字列）
+    invoice_date   : 請求書日付（"YYYY-MM-DD" 文字列）
+    total_amount   : 合計金額（数値を文字列で。例: "15000"）
+
+■ レスポンス（成功: HTTP 200）
+  {
+    "id": "<document_metadata_invoices の UUID>"
+  }
+
+■ レスポンス（失敗: HTTP 4xx / 5xx）
+  {
+    "error": "エラーメッセージ"
+  }
+
+■ Edge Function 側がやること（アプリは意識不要）
+  - Authorization ヘッダーの JWT を検証してログインユーザーを特定
+  - Secrets から Cloudflare R2 の認証情報を取得
+  - R2 にファイルを PUT（キー: invoices/{tenant_id}/{uuid}.jpg）
+  - document_metadata_invoices に INSERT:
+      tenant_id    : リクエストの tenant_id
+      vendor_id    : NULL（Web 側で後から確定）
+      value        : R2 オブジェクトキー
+      file_name    : 元のファイル名
+      content_type : 'image/jpeg' 等
+      size_bytes   : ファイルサイズ
+      invoice_date : リクエストの invoice_date
+      total_amount : リクエストの total_amount
+      created_by   : JWT から取得した user_id
+      approved_at  : NULL（未承認）
+
+================================================================================
+【アプリ側が意識しなくていいこと】
+================================================================================
+  - R2 へのアップロード処理（Edge Function が行う）
+  - vendor（仕入先）の紐付け（Web 側の Document Box で行う）
+  - OCR 処理（Web 側で行う）
+  - 承認フロー（Web 側の Document Box で行う）
+
+================================================================================

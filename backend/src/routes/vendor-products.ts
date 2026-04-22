@@ -8,6 +8,7 @@ import {
   getUnifiedVendorProductResource,
 } from "../middleware/unified-resource-helpers";
 import { withTenantFilter } from "../middleware/tenant-filter";
+import { utcMidnightIsoFromYyyyMmDd } from "../utils/invoiceEffectiveTimestamp";
 
 const router = Router();
 
@@ -87,8 +88,14 @@ router.post(
   ),
   async (req, res) => {
   try {
-    const vendorProduct: Partial<VendorProduct> & { base_item_id?: string } =
-      req.body;
+    const vendorProduct: Partial<VendorProduct> & {
+      base_item_id?: string;
+      initial_price_event_source?: "manual" | "invoice";
+      invoice_date?: string;
+      invoice_id?: string | null;
+      initial_case_purchased?: number | null;
+      initial_unit_purchased?: number | null;
+    } = req.body;
 
     const currentPrice = Number(vendorProduct.current_price);
     const qty = Number(vendorProduct.purchase_quantity);
@@ -109,6 +116,17 @@ router.post(
     const selectedTenantId =
       req.user!.selected_tenant_id || req.user!.tenant_ids[0];
 
+    const rawCaseUnit = vendorProduct.case_unit;
+    const caseUnit =
+      rawCaseUnit !== undefined && rawCaseUnit !== null
+        ? Number(rawCaseUnit)
+        : null;
+    if (caseUnit !== null && (!Number.isInteger(caseUnit) || caseUnit <= 0)) {
+      return res
+        .status(400)
+        .json({ error: "case_unit must be a positive integer" });
+    }
+
     const insertRow = {
       vendor_id: vendorProduct.vendor_id,
       product_name: vendorProduct.product_name ?? null,
@@ -116,6 +134,7 @@ router.post(
       purchase_unit: vendorProduct.purchase_unit,
       purchase_quantity: qty,
       current_price: currentPrice,
+      case_unit: caseUnit,
       tenant_id: selectedTenantId,
       deprecated: vendorProduct.deprecated ?? null,
     };
@@ -140,14 +159,49 @@ router.post(
       return res.status(400).json({ error: vpError.message });
     }
 
+    const initialSource =
+      vendorProduct.initial_price_event_source === "invoice"
+        ? "invoice"
+        : "manual";
+
+    const initialInvoiceId =
+      typeof vendorProduct.invoice_id === "string" &&
+      vendorProduct.invoice_id.trim() !== ""
+        ? vendorProduct.invoice_id.trim()
+        : null;
+
+    // VVP の case_unit を initial price event の case_unit として引き継ぐ
+    const peRow: Record<string, unknown> = {
+      tenant_id: selectedTenantId,
+      virtual_vendor_product_id: newVendorProduct.id,
+      price: currentPrice,
+      source_type: initialSource,
+      user_id: req.user!.id,
+      invoice_id: initialInvoiceId,
+      case_unit: caseUnit,
+      case_purchased: vendorProduct.initial_case_purchased ?? null,
+      unit_purchased: vendorProduct.initial_unit_purchased ?? (caseUnit == null ? 1 : null),
+    };
+
+    if (initialSource === "invoice") {
+      const raw = vendorProduct.invoice_date;
+      if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
+        const iso = utcMidnightIsoFromYyyyMmDd(raw);
+        if (!iso) {
+          await supabase
+            .from("virtual_vendor_products")
+            .delete()
+            .eq("id", newVendorProduct.id);
+          return res
+            .status(400)
+            .json({ error: "invoice_date must be YYYY-MM-DD" });
+        }
+        peRow.created_at = iso;
+      }
+    }
+
     const { error: peError } = await supabase.from("price_events").insert([
-      {
-        tenant_id: selectedTenantId,
-        virtual_vendor_product_id: newVendorProduct.id,
-        price: currentPrice,
-        source_type: "manual",
-        user_id: req.user!.id,
-      },
+      peRow,
     ]);
 
     if (peError) {

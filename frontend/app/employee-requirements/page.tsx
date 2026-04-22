@@ -82,6 +82,14 @@ function getStatus(expiration: string | null): "ok" | "overdue" | "none" {
   return expiration <= today ? "overdue" : "ok";
 }
 
+/** Status 一覧で赤（overdue）を先頭に並べるための昇順キー */
+function statusSortPriority(expiration: string | null): number {
+  const st = getStatus(expiration);
+  if (st === "overdue") return 0;
+  if (st === "ok") return 1;
+  return 2;
+}
+
 function formatExpirationDate(expiration: string): string {
   const d = new Date(expiration + "T12:00:00");
   return d.toLocaleDateString(undefined, {
@@ -269,6 +277,15 @@ export default function RequirementsPage() {
   const [documentsLoadingByPersonKey, setDocumentsLoadingByPersonKey] =
     useState<Record<string, boolean>>({});
 
+  const [employeeDetailPerson, setEmployeeDetailPerson] =
+    useState<StatusPerson | null>(null);
+  const [recordNewOpenReqId, setRecordNewOpenReqId] = useState<string | null>(
+    null,
+  );
+  const [recordNewDateValue, setRecordNewDateValue] = useState("");
+  const [recordNewSaving, setRecordNewSaving] = useState(false);
+  const [recordNewError, setRecordNewError] = useState<string | null>(null);
+
   const isPermissionErrorMessage = (message: string) => {
     return (
       message.includes("Forbidden: Insufficient permissions") ||
@@ -361,6 +378,10 @@ export default function RequirementsPage() {
 
   useEffect(() => {
     statusDataReadyCompanyIdRef.current = null;
+    setEmployeeDetailPerson(null);
+    setRecordNewOpenReqId(null);
+    setRecordNewDateValue("");
+    setRecordNewError(null);
     if (!selectedCompanyId) return;
     setStatusPeople([]);
     setUserJurisdictionRows([]);
@@ -510,6 +531,44 @@ export default function RequirementsPage() {
     },
     [statusAssignments, statusJurisdictionFilterId],
   );
+
+  const employeeDetailJurisdictions = useMemo(() => {
+    if (!employeeDetailPerson) return [];
+    const jids = userJurisdictionRows
+      .filter((r) => r.user_id === employeeDetailPerson.id)
+      .map((r) => r.jurisdiction_id);
+    return [...new Set(jids)]
+      .map((id) => ({
+        id,
+        name: jurisdictionNameById.get(id) ?? id,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [employeeDetailPerson, userJurisdictionRows, jurisdictionNameById]);
+
+  const employeeDetailRequirements = useMemo(() => {
+    if (!employeeDetailPerson) return [];
+    const person = employeeDetailPerson;
+    return requirements
+      .filter((req) => requirementPassesStatusViewFilter(req, person.id))
+      .sort((a, b) => {
+        const entryA = statusMapping[person.id]?.[a.id] ?? {
+          issuedDate: null,
+          deadline: null,
+        };
+        const entryB = statusMapping[person.id]?.[b.id] ?? {
+          issuedDate: null,
+          deadline: null,
+        };
+        const expA = getExpiration(a, entryA, person).expiration;
+        const expB = getExpiration(b, entryB, person).expiration;
+        return statusSortPriority(expA) - statusSortPriority(expB);
+      });
+  }, [
+    employeeDetailPerson,
+    requirements,
+    requirementPassesStatusViewFilter,
+    statusMapping,
+  ]);
 
   const statusVisiblePeople = useMemo(() => {
     const withJur = new Set(userJurisdictionRows.map((r) => r.user_id));
@@ -683,6 +742,58 @@ export default function RequirementsPage() {
     setFormJurisdictionInput("");
     setFormJurisdictionMenuOpen(false);
   };
+
+  const closeEmployeeDetailModal = () => {
+    setEmployeeDetailPerson(null);
+    setRecordNewOpenReqId(null);
+    setRecordNewDateValue("");
+    setRecordNewError(null);
+  };
+
+  const openEmployeeDetailModal = (person: StatusPerson) => {
+    setEmployeeDetailPerson(person);
+    setRecordNewOpenReqId(null);
+    setRecordNewDateValue("");
+    setRecordNewError(null);
+  };
+
+  const cancelRecordNew = () => {
+    setRecordNewOpenReqId(null);
+    setRecordNewDateValue("");
+    setRecordNewError(null);
+  };
+
+  const saveRecordNewForRequirement = useCallback(
+    async (req: UserRequirement) => {
+      if (!employeeDetailPerson) return;
+      const ymd = recordNewDateValue.trim();
+      if (!ymd) {
+        setRecordNewError("Please select a date.");
+        return;
+      }
+      setRecordNewSaving(true);
+      setRecordNewError(null);
+      try {
+        await mappingUserRequirementsAPI.create({
+          user_id: employeeDetailPerson.id,
+          user_requirement_id: req.id,
+          issued_date: req.auto ? ymd : null,
+          specific_date: !req.auto ? ymd : null,
+        });
+        setRecordNewOpenReqId(null);
+        setRecordNewDateValue("");
+        setRecordNewError(null);
+        await fetchStatusData();
+      } catch (err) {
+        setRecordNewError(
+          err instanceof Error ? err.message : "Failed to save record",
+        );
+      } finally {
+        setRecordNewSaving(false);
+      }
+    },
+    [employeeDetailPerson, recordNewDateValue, fetchStatusData],
+  );
 
   const syncJurisdictionSelectionFromInput = (rawValue: string) => {
     const normalized = normalizeJurisdictionName(rawValue);
@@ -1575,10 +1686,20 @@ export default function RequirementsPage() {
                                     : "border-b border-gray-200"
                                 }
                               >
-                                <td
-                                  className={`px-4 py-3 font-medium ${isDark ? "text-slate-200" : "text-gray-900"}`}
-                                >
-                                  {person.name}
+                                <td className="px-4 py-3">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      openEmployeeDetailModal(person)
+                                    }
+                                    className={`font-medium text-left hover:underline focus:outline-none focus-visible:ring-2 rounded ${
+                                      isDark
+                                        ? "text-slate-200 focus-visible:ring-slate-500"
+                                        : "text-gray-900 focus-visible:ring-blue-500"
+                                    }`}
+                                  >
+                                    {person.name}
+                                  </button>
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="flex flex-wrap gap-1.5">
@@ -1589,6 +1710,32 @@ export default function RequirementsPage() {
                                           person.id,
                                         ),
                                       )
+                                      .sort((a, b) => {
+                                        const entryA =
+                                          statusMapping[person.id]?.[a.id] ?? {
+                                            issuedDate: null,
+                                            deadline: null,
+                                          };
+                                        const entryB =
+                                          statusMapping[person.id]?.[b.id] ?? {
+                                            issuedDate: null,
+                                            deadline: null,
+                                          };
+                                        const expA = getExpiration(
+                                          a,
+                                          entryA,
+                                          person,
+                                        ).expiration;
+                                        const expB = getExpiration(
+                                          b,
+                                          entryB,
+                                          person,
+                                        ).expiration;
+                                        return (
+                                          statusSortPriority(expA) -
+                                          statusSortPriority(expB)
+                                        );
+                                      })
                                       .map((req) => {
                                         const entry = statusMapping[person.id]?.[
                                           req.id
@@ -1599,22 +1746,21 @@ export default function RequirementsPage() {
                                         const { expiration, message } =
                                           getExpiration(req, entry, person);
                                         const st = getStatus(expiration);
-                                        const badgeSurface =
-                                          st === "ok"
+                                        const badgeSurface = isDark
+                                          ? "border-slate-600 bg-slate-800/70 text-slate-200"
+                                          : "border-gray-200 bg-white text-gray-900";
+                                        const dotClass =
+                                          st === "overdue"
                                             ? isDark
-                                              ? "border-emerald-700/80 bg-emerald-950/55 text-emerald-100"
-                                              : "border-green-200 bg-green-100 text-green-950"
-                                            : st === "overdue"
-                                              ? isDark
-                                                ? "border-red-800/80 bg-red-950/50 text-red-100"
-                                                : "border-red-200 bg-red-100 text-red-950"
-                                              : isDark
-                                                ? "border-slate-600 bg-slate-700/80 text-slate-100"
-                                                : "border-gray-200 bg-gray-100 text-gray-900";
+                                              ? "bg-red-400"
+                                              : "bg-red-500"
+                                            : isDark
+                                              ? "bg-slate-500"
+                                              : "bg-gray-400";
                                         return (
                                           <span
                                             key={req.id}
-                                            className={`inline-flex items-center px-2 py-1 rounded-md text-sm border max-w-full ${badgeSurface}`}
+                                            className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-sm border max-w-full ${badgeSurface}`}
                                             title={
                                               expiration
                                                 ? `Expiration: ${formatExpirationDate(expiration)}`
@@ -1622,6 +1768,10 @@ export default function RequirementsPage() {
                                                   "No expiration date"
                                             }
                                           >
+                                            <span
+                                              className={`shrink-0 size-2 rounded-full ${dotClass}`}
+                                              aria-hidden
+                                            />
                                             <span className="break-words">
                                               {req.title}
                                             </span>
@@ -1999,6 +2149,263 @@ export default function RequirementsPage() {
         )}
 
       </div>
+
+      {employeeDetailPerson && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !recordNewSaving && closeEmployeeDetailModal()}
+        >
+          <div
+            className={`rounded-xl shadow-xl w-full flex flex-col max-h-[min(90vh,40rem)] ${
+              isDark
+                ? "bg-slate-800 border border-slate-700"
+                : "bg-white border border-gray-200"
+            }`}
+            style={{ maxWidth: "min(36rem, 100%)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className={`flex items-start justify-between gap-4 px-6 py-4 border-b shrink-0 ${
+                isDark ? "border-slate-700" : "border-gray-200"
+              }`}
+            >
+              <div className="min-w-0">
+                <h3
+                  className={`text-lg font-semibold ${isDark ? "text-slate-100" : "text-gray-900"}`}
+                >
+                  {employeeDetailPerson.name}
+                </h3>
+                {employeeDetailJurisdictions.length > 0 && (
+                  <div className="mt-2">
+                    <p
+                      className={`text-xs font-medium uppercase tracking-wide mb-1.5 ${
+                        isDark ? "text-slate-500" : "text-gray-500"
+                      }`}
+                    >
+                      Jurisdiction
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {employeeDetailJurisdictions.map((j) => (
+                        <span
+                          key={j.id}
+                          className={`inline-flex items-center max-w-full truncate rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                            isDark
+                              ? "border-slate-600 bg-slate-700/80 text-slate-200"
+                              : "border-gray-200 bg-gray-100 text-gray-800"
+                          }`}
+                        >
+                          {j.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={recordNewSaving}
+                onClick={closeEmployeeDetailModal}
+                className={`shrink-0 p-1 rounded-md ${
+                  isDark
+                    ? "text-slate-400 hover:bg-slate-700 hover:text-slate-200 disabled:opacity-50"
+                    : "text-gray-500 hover:bg-gray-100 hover:text-gray-800 disabled:opacity-50"
+                }`}
+                aria-label="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
+              {recordNewError && (
+                <div className="text-sm text-red-600 dark:text-red-400">
+                  {recordNewError}
+                </div>
+              )}
+              {employeeDetailRequirements.map((req) => {
+                const entry = statusMapping[employeeDetailPerson.id]?.[
+                  req.id
+                ] ?? {
+                  issuedDate: null,
+                  deadline: null,
+                };
+                const { expiration, message } = getExpiration(
+                  req,
+                  entry,
+                  employeeDetailPerson,
+                );
+                const st = getStatus(expiration);
+                const dotClass =
+                  st === "overdue"
+                    ? isDark
+                      ? "bg-red-400"
+                      : "bg-red-500"
+                    : isDark
+                      ? "bg-slate-500"
+                      : "bg-gray-400";
+                const isRecording = recordNewOpenReqId === req.id;
+                return (
+                  <div
+                    key={req.id}
+                    className={`rounded-lg border p-4 ${
+                      isDark
+                        ? "border-slate-600 bg-slate-800/50"
+                        : "border-gray-200 bg-gray-50/80"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <h4
+                        className={`text-base font-medium min-w-0 flex-1 ${
+                          isDark ? "text-slate-100" : "text-gray-900"
+                        }`}
+                      >
+                        {req.title}
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-3 shrink-0">
+                        <span
+                          className={`text-sm ${
+                            isDark ? "text-slate-500" : "text-gray-500"
+                          }`}
+                          title="Document upload will be available in a later update"
+                        >
+                          Document
+                        </span>
+                        <button
+                          type="button"
+                          disabled={recordNewSaving || isRecording}
+                          onClick={() => {
+                            setRecordNewOpenReqId(req.id);
+                            setRecordNewDateValue("");
+                            setRecordNewError(null);
+                          }}
+                          className={`text-sm px-3 py-1.5 rounded-md border transition-colors ${
+                            isDark
+                              ? "border-slate-500 text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                              : "border-gray-400 text-gray-800 hover:bg-gray-100 disabled:opacity-50"
+                          }`}
+                        >
+                          Record new
+                        </button>
+                      </div>
+                    </div>
+                    <div
+                      className={`my-3 border-t ${
+                        isDark ? "border-slate-600" : "border-gray-200"
+                      }`}
+                    />
+                    {isRecording ? (
+                      <div className="space-y-2">
+                        <label
+                          className={`block text-sm font-medium ${
+                            isDark ? "text-slate-300" : "text-gray-700"
+                          }`}
+                        >
+                          {req.auto ? "Issue date" : "Deadline"}
+                        </label>
+                        <div className="flex flex-wrap items-end gap-3">
+                          <input
+                            type="date"
+                            value={recordNewDateValue}
+                            onChange={(e) =>
+                              setRecordNewDateValue(e.target.value)
+                            }
+                            disabled={recordNewSaving}
+                            className={`min-w-0 flex-1 max-w-xs px-3 py-2 rounded-md border text-sm ${
+                              isDark
+                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                : "bg-white border-gray-300 text-gray-900"
+                            }`}
+                          />
+                          <div className="flex flex-wrap gap-2 shrink-0">
+                            <button
+                              type="button"
+                              disabled={recordNewSaving}
+                              onClick={() =>
+                                void saveRecordNewForRequirement(req)
+                              }
+                              className={`text-sm px-4 py-2 rounded-md text-white ${
+                                isDark
+                                  ? "bg-slate-600 hover:bg-slate-500 disabled:opacity-50"
+                                  : "bg-gray-700 hover:bg-gray-600 disabled:opacity-50"
+                              }`}
+                            >
+                              {recordNewSaving ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={recordNewSaving}
+                              onClick={cancelRecordNew}
+                              className={`text-sm px-4 py-2 rounded-md border ${
+                                isDark
+                                  ? "border-slate-500 text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+                                  : "border-gray-300 text-gray-800 hover:bg-gray-100 disabled:opacity-50"
+                              }`}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 text-sm">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={
+                              isDark ? "text-slate-400" : "text-gray-600"
+                            }
+                          >
+                            Due date
+                          </span>
+                          <span
+                            className={`shrink-0 size-2 rounded-full ${dotClass}`}
+                            title={
+                              expiration
+                                ? `Expiration: ${formatExpirationDate(expiration)}`
+                                : message || "No due date"
+                            }
+                            aria-hidden
+                          />
+                          <span
+                            className={`font-medium ${
+                              isDark ? "text-slate-100" : "text-gray-900"
+                            }`}
+                            title={
+                              expiration
+                                ? `Expiration: ${formatExpirationDate(expiration)}`
+                                : message || "No due date"
+                            }
+                          >
+                            {expiration
+                              ? formatExpirationDate(expiration)
+                              : "—"}
+                          </span>
+                        </div>
+                        {req.auto ? (
+                          <div
+                            className={
+                              isDark ? "text-slate-300" : "text-gray-800"
+                            }
+                          >
+                            <span
+                              className={
+                                isDark ? "text-slate-400" : "text-gray-600"
+                              }
+                            >
+                              Issued date:{" "}
+                            </span>
+                            {entry.issuedDate
+                              ? formatExpirationDate(entry.issuedDate)
+                              : "—"}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* モーダル */}
       {modalOpen && (

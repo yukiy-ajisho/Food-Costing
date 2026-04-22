@@ -9,6 +9,12 @@ interface SearchableSelectProps {
     id: string;
     name: string;
     subLabel?: string;
+    /** If set, the search box matches against this text instead of `name` (e.g. product_name only). */
+    searchText?: string;
+    /** Highlight row as a ranked match (e.g. invoice link candidate). */
+    matchCandidate?: boolean;
+    /** Red dot (e.g. base item incompatible with non-mass invoice line). */
+    warningDot?: boolean;
     disabled?: boolean;
     deprecated?: boolean;
     isUnused?: boolean;
@@ -42,10 +48,12 @@ export function SearchableSelect({
   // 選択されたアイテムの名前を取得
   const selectedItem = options.find((opt) => opt.id === value);
 
-  // 検索でフィルタリング
-  const filteredOptions = options.filter((option) =>
-    option.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredOptions = options.filter((option) => {
+    const q = searchTerm.toLowerCase().trim();
+    if (!q) return true;
+    const hay = (option.searchText ?? option.name).toLowerCase();
+    return hay.includes(q);
+  });
 
   // メニューの位置を計算
   useEffect(() => {
@@ -114,6 +122,14 @@ export function SearchableSelect({
           }}
         >
           <span className="flex items-center gap-1 overflow-hidden">
+            {selectedItem?.warningDot && (
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${
+                  isDark ? "bg-red-400" : "bg-red-600"
+                }`}
+                aria-hidden
+              />
+            )}
             {selectedItem ? (
               <>
                 <span className={isDark ? "text-slate-100" : "text-gray-900"}>
@@ -196,6 +212,16 @@ export function SearchableSelect({
                       ? "hover:bg-slate-700 text-slate-100"
                       : "hover:bg-blue-50"
                   } ${
+                    option.matchCandidate
+                      ? "border-l-2 border-amber-500"
+                      : ""
+                  } ${
+                    option.matchCandidate && value !== option.id
+                      ? isDark
+                        ? "bg-amber-900/25"
+                        : "bg-amber-50"
+                      : ""
+                  } ${
                     value === option.id
                       ? isDark
                         ? "bg-slate-700 font-semibold"
@@ -203,8 +229,17 @@ export function SearchableSelect({
                       : ""
                   }`}
                 >
-                  <span className="flex items-center gap-1">
-                    <span>
+                  <span className="flex items-center gap-1 min-w-0">
+                    {option.warningDot && (
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${
+                          isDark ? "bg-red-400" : "bg-red-600"
+                        }`}
+                        title="Needs specific weight for non-mass units"
+                        aria-hidden
+                      />
+                    )}
+                    <span className="min-w-0 truncate">
                       {option.deprecated && "[Deprecated] "}
                       {option.name}
                     </span>

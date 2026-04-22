@@ -1,0 +1,224 @@
+モバイル Invoice アップロード & Document Box 設計書
+================================================================================
+作成: 2026-04-09
+
+================================================================================
+【概要】
+================================================================================
+将来的に React Native スマホアプリからインボイス写真をアップロードできるようにする。
+アップロードされたドキュメントは Web アプリの "Document Box" で確認・承認し、
+承認後に既存の Invoice Import モーダルへ接続して処理を完了する。
+
+全データは tenant_id でスコープされる（テナントベース設計）。
+
+================================================================================
+【確定済み設計判断】
+================================================================================
+  A. approved_at（承認日時）を document_metadata_invoices に追加する。
+     - NULL    = 未承認（モバイルから届いたがまだレビュー前）
+     - NOT NULL = 承認済み（Import 完了済み）
+
+  B. Web の既存 Import invoice でアップロードしたものは
+     INSERT 時から approved_at = now() を入れる（最初から承認済み）。
+
+  C. モバイルからアップロードされたものは approved_at = NULL で INSERT される。
+
+  D. vendor_id はモバイルアップロード時点では NULL でよい。
+     Web 側で Document Box から Invoice Import モーダルを開いたときに確定する。
+
+  E. Document Box は tenant スコープ。
+     承認待ち（approved_at IS NULL）のドキュメントのみ表示する。
+
+  F. Document Box のアクションボタンを押すと Invoice Import モーダルが開き、
+     すでに PDF/写真データが読み込まれた状態から Extract を押せばすぐに OCR が始まる。
+     以降のフロー（Review → Match → Confirm → Import）はこれまで通り。
+     Import 完了時に approved_at = now() で UPDATE する。
+
+================================================================================
+【DB 変更】
+================================================================================
+
+■ document_metadata_invoices に approved_at 列を追加
+
+  ALTER TABLE public.document_metadata_invoices
+    ADD COLUMN approved_at timestamptz;
+
+  -- 既存行（Web の Import invoice 由来）は最初から承認済みとして埋める
+  UPDATE public.document_metadata_invoices
+    SET approved_at = created_at
+    WHERE approved_at IS NULL;
+
+  ※ vendor_id は将来的にモバイル由来の行では NULL を許容できるよう
+    NOT NULL 制約を外すか、nullable にする対応が必要。（マイグレーション要検討）
+
+================================================================================
+【モバイルアーキテクチャ（将来実装）】
+================================================================================
+
+■ 使用技術
+  - フロントエンド: React Native（Expo 想定）
+  - 認証: Supabase Auth（Google 認証のみ。新規登録はなくログインのみ）
+  - バックエンド: Express などのサーバーは使わない
+    → Supabase（DB / Auth / RLS）と Cloudflare（R2 / Workers）に直接接続
+  - ストレージ: 既存の R2 バケットを共用
+
+■ React Native アプリのデプロイについて
+
+  Web（Next.js）は Vercel などのサーバーにコードが置かれ、ユーザーは毎回サーバーから
+  コードを受け取る。React Native は異なり、App Store / Google Play からインストールされた
+  APK/IPA がそのままスマホの中で動く。フロントエンドのサーバーは存在しない。
+
+  環境変数（.env）はビルド時（EAS Build など）にコードへ焼き付けられ、
+  スマホに届く時点では既にバイナリの中に埋め込まれている。
+  .env ファイル自体はビルドするマシンまたは EAS の設定画面にのみ存在する。
+
+■ 認証情報の管理方針
+
+  React Native アプリは APK/IPA を解析すればコードを読める可能性がある。
+  そのため、何をアプリに焼き付けてよいかを厳密に区別する。
+
+  ┌─────────────────────────────────┬──────────────────────────────────────────┐
+  │ 情報                            │ 置き場所                                  │
+  ├─────────────────────────────────┼──────────────────────────────────────────┤
+  │ SUPABASE_URL                    │ Expo の .env（EXPO_PUBLIC_ プレフィックス）│
+  │ SUPABASE_ANON_KEY               │ Expo の .env（EXPO_PUBLIC_ プレフィックス）│
+  │ CF R2 Access Key ID             │ Supabase Edge Functions Secrets のみ      │
+  │ CF R2 Secret Access Key         │ Supabase Edge Functions Secrets のみ      │
+  │ SUPABASE_SERVICE_ROLE_KEY       │ どこにも置かない（Edge Function は自動注入）│
+  └─────────────────────────────────┴──────────────────────────────────────────┘
+
+  SUPABASE_URL / SUPABASE_ANON_KEY をアプリに含めても問題ない理由:
+    - Anon Key は「RLS（Row Level Security）を通じて制御される公開鍵」として設計されている
+    - RLS が機能している限り、Anon Key が漏れてもデータは保護される
+    - Supabase の公式設計でクライアント（ブラウザ・モバイル）に持たせることを想定している
+
+  Expo での記述例:
+    # .env（Expo プロジェクトのルート）
+    EXPO_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
+    EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
+
+    // コード内での参照
+    const supabase = createClient(
+      process.env.EXPO_PUBLIC_SUPABASE_URL!,
+      process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!
+    )
+
+■ Cloudflare アクセスキーの管理
+  Cloudflare R2 の認証情報（Access Key ID / Secret Access Key）は
+  Supabase Edge Functions の Secrets に保存する。
+
+  理由:
+    - React Native アプリに直接キーを埋め込むのは危険（リバースエンジニアリング可能）
+    - Supabase Edge Functions の Secrets は Dashboard または CLI で安全に管理できる
+    - `supabase secrets set CF_R2_ACCESS_KEY_ID=xxx` のように設定
+    - Edge Function 内で `Deno.env.get('CF_R2_ACCESS_KEY_ID')` でアクセス
+    - モバイルは Supabase Auth トークンで Edge Function を叩き、
+      Edge Function が R2 に対して署名付きリクエストを行う（キーはモバイルに渡さない）
+
+■ モバイルアップロードのフロー
+
+  1. ユーザーがスマホアプリで Google ログイン（Supabase Auth）
+  2. ユーザーがインボイス写真を選択（カメラまたはカメラロール）
+  3. Supabase Edge Function（例: /functions/v1/upload-invoice）を呼び出す
+     - リクエストに Supabase Auth JWT トークンを付与
+     - Edge Function 側で JWT を検証しユーザーを特定
+     - profiles からユーザーが選択しているテナントを確認
+     - Cloudflare R2 に写真を PUT（キー: invoices/{tenant_id}/{uuid}.jpg）
+     - document_metadata_invoices に INSERT:
+         tenant_id:    ユーザーの選択テナント
+         created_by:   Supabase Auth の user id
+         vendor_id:    NULL（Web 側で後から確定）
+         value:        R2 オブジェクトキー
+         file_name:    元のファイル名
+         invoice_date: モバイル側で簡易入力（またはOCR）
+         total_amount: モバイル側で簡易入力（またはOCR）
+         approved_at:  NULL（未承認）
+  4. Web アプリの Document Box に未承認レコードとして表示される
+
+================================================================================
+【Web UI: Document Box】
+================================================================================
+
+■ サイドバー
+
+  Food Costing のサブメニューではなく、Team・License と同じ階層の独立項目として追加。
+  未承認ドキュメント（approved_at IS NULL）が存在する場合は件数バッジを表示。
+
+  例:
+    [ 📥 Document Box ]  3
+
+■ Document Box ページ（/document-box）
+
+  テナントスコープの未承認ドキュメント一覧を表示（created_at 降順）。
+
+  テーブルカラム:
+    Received       | Sent by       | File          | Action
+    ───────────────┼───────────────┼───────────────┼──────────────
+    [受信日時]      | [送信者名]     | [ファイル名]   | [Review] ボタン
+
+  - Received: document_metadata_invoices.created_at
+  - Sent by:  created_by → profiles.display_name（JOIN で取得）
+  - File:     file_name
+  - Action:   [Review] ボタン
+
+■ Review フロー
+
+  [Review] ボタンを押す
+    → Invoice Import モーダルが開く
+    → R2 から presigned URL を取得して PDF/写真を表示
+    → Extract ボタンを押すとすぐに OCR 処理開始
+    → Review Lines → Match → Confirm → Import（これまでのフローと同じ）
+    → Import 完了時に approved_at = now() で UPDATE
+    → Document Box の一覧から該当行が消える
+
+================================================================================
+【修正が必要なファイル】
+================================================================================
+
+■ 今やること（Web 側の受け入れ準備）
+
+  [1] DB マイグレーション（新規）
+      - document_metadata_invoices に approved_at 列追加
+      - 既存行を approved_at = created_at に UPDATE
+      - vendor_id の NOT NULL 制約を外す（モバイル由来は NULL になるため）
+
+  [2] backend/src/routes/document-metadata-invoices.ts
+      - POST /document: approved_at = now() を入れるよう修正
+      - GET /pending: 未承認一覧（approved_at IS NULL）を返すエンドポイント追加
+      - PATCH /:id/approve: approved_at = now() にセット
+
+  [3] frontend/lib/api/document-metadata-invoices.ts
+      - listPending / approve 追加
+
+  [4] frontend/app/document-box/page.tsx（新規）
+      - 未承認一覧テーブル（Received / Sent by / File / Action）
+      - Review ボタン → Invoice Import モーダルへ（初期ファイル渡し）
+
+  [5] frontend/components/InvoiceImportModal.tsx
+      - 外部から初期ファイル（R2 の URL または File オブジェクト）を受け取れるよう対応
+      - Import 完了時に approve エンドポイントを呼ぶ
+
+  [6] frontend/components/Layout.tsx
+      - Document Box をサイドバーに独立項目として追加
+      - 未承認件数バッジを表示（初回ロード時または定期取得）
+
+■ 将来やること（モバイル実装時）
+
+  [7] Supabase Edge Function（新規: upload-invoice）
+      - Supabase Auth JWT 検証
+      - Secrets から Cloudflare R2 認証情報を取得（Deno.env.get）
+      - R2 に PUT → document_metadata_invoices に INSERT（approved_at = NULL）
+
+  [8] Cloudflare R2 認証情報の登録
+      - supabase secrets set CF_R2_ACCESS_KEY_ID=xxx
+      - supabase secrets set CF_R2_SECRET_ACCESS_KEY=xxx
+      - supabase secrets set CF_R2_BUCKET_NAME=xxx
+      - supabase secrets set CF_R2_ENDPOINT=xxx
+
+  [9] React Native アプリ（Expo）
+      - Google 認証（Supabase Auth）
+      - 写真選択（カメラ / カメラロール）
+      - Edge Function 呼び出し（JWT 付き）
+      - テナント選択 UI
+
+================================================================================

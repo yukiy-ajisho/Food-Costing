@@ -21,6 +21,13 @@ export interface CompanyRealDataRowPayload {
   value?: string | null;
 }
 
+export interface CompanyRequirementInboxPick {
+  id: string;
+  file_name: string;
+  created_at: string;
+  tenant_id: string;
+}
+
 export const companyRequirementRealDataAPI = {
   getByRequirementIds: (companyRequirementIds: string[]) => {
     if (companyRequirementIds.length === 0) return Promise.resolve([]);
@@ -57,6 +64,29 @@ export const companyRequirementRealDataAPI = {
     form.append("company_requirement_id", companyRequirementId);
     form.append("group_key", String(groupKey));
     form.append("file", file);
+    return apiRequest<{ ok: boolean }>("/company-requirement-real-data/document", {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  getInboxPicks: (companyId: string) => {
+    const params = new URLSearchParams();
+    params.set("company_id", companyId);
+    return apiRequest<CompanyRequirementInboxPick[]>(
+      `/company-requirement-real-data/inbox-picks?${params.toString()}`
+    );
+  },
+
+  uploadDocumentFromInbox: (
+    companyRequirementId: string,
+    groupKey: number,
+    documentInboxId: string,
+  ) => {
+    const form = new FormData();
+    form.append("company_requirement_id", companyRequirementId);
+    form.append("group_key", String(groupKey));
+    form.append("document_inbox_id", documentInboxId);
     return apiRequest<{ ok: boolean }>("/company-requirement-real-data/document", {
       method: "POST",
       body: form,
