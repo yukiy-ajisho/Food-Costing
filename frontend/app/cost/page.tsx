@@ -4090,7 +4090,7 @@ export default function CostPage() {
         >
           {/* タブ */}
           <div
-            className={`mb-6 border-b transition-colors ${
+            className={`mb-4 border-b transition-colors ${
               isDark ? "border-slate-700" : "border-gray-200"
             }`}
           >
@@ -4141,7 +4141,7 @@ export default function CostPage() {
           </div>
 
           {/* ヘッダーとEdit/Save/Cancelボタン */}
-          <div className="flex justify-between items-center mb-6 gap-2">
+          <div className="flex justify-between items-center mb-4 gap-2">
             {/* 左側: Addボタン（Costingモードのみ）または空のdiv（Access Controlモード） */}
             {activeMode === "costing" ? (
               <button
@@ -4285,7 +4285,7 @@ export default function CostPage() {
 
           {/* 検索・フィルターセクション */}
           <div
-            className={`mb-6 rounded-lg shadow-sm border p-4 transition-colors ${
+            className={`mb-0 rounded-lg shadow-sm border p-4 transition-colors ${
               isDark
                 ? "bg-slate-800 border-slate-700"
                 : "bg-white border-gray-200"
@@ -4489,7 +4489,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "48px" }}
+                        style={{ width: "2.5%" }}
                       >
                         {/* 展開アイコン用 */}
                       </th>
@@ -4499,7 +4499,7 @@ export default function CostPage() {
                             ? "bg-slate-700 text-slate-300"
                             : "bg-gray-50 text-gray-500"
                         }`}
-                        style={{ width: "180px" }}
+                        style={{ width: "13%" }}
                       >
                         <button
                           type="button"
@@ -4546,7 +4546,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "120px" }}
+                        style={{ width: "6%" }}
                       >
                         Type
                       </th>
@@ -4554,7 +4554,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "250px" }}
+                        style={{ width: "7.5%" }}
                       >
                         Finish Amount
                       </th>
@@ -4563,7 +4563,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "230px" }}
+                        style={{ width: "6.5%" }}
                       >
                         COG
                       </th>
@@ -4572,7 +4572,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "230px" }}
+                        style={{ width: "6.5%" }}
                       >
                         LABOR
                       </th>
@@ -4581,10 +4581,10 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "230px" }}
+                        style={{ width: "11%" }}
                       >
-                        <div className="flex items-center gap-3">
-                          <span className="min-w-[70px]">Cost</span>
+                        <div className="flex items-center gap-0.5">
+                          <span className="min-w-[56px]">Cost</span>
                           <div className="flex items-center gap-1">
                             <span
                               className={`text-xs normal-case ${
@@ -4637,7 +4637,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider whitespace-nowrap ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "140px" }}
+                        style={{ width: "7%" }}
                       >
                         WHOLESALE ($/kg)
                       </th>
@@ -4645,7 +4645,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "100px" }}
+                        style={{ width: "5%" }}
                       >
                         LABOR%
                       </th>
@@ -4653,7 +4653,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "100px" }}
+                        style={{ width: "5%" }}
                       >
                         COG%
                       </th>
@@ -4661,7 +4661,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "100px" }}
+                        style={{ width: "5%" }}
                       >
                         LCOG%
                       </th>
@@ -4670,7 +4670,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "120px" }}
+                        style={{ width: "7%" }}
                       >
                         RETAIL ($/kg)
                       </th>
@@ -4678,7 +4678,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "100px" }}
+                        style={{ width: "5%" }}
                       >
                         LABOR%
                       </th>
@@ -4686,7 +4686,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "100px" }}
+                        style={{ width: "5%" }}
                       >
                         COG%
                       </th>
@@ -4694,7 +4694,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "100px" }}
+                        style={{ width: "5%" }}
                       >
                         LCOG%
                       </th>
@@ -4702,7 +4702,7 @@ export default function CostPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "64px" }}
+                        style={{ width: "3%" }}
                       >
                         {/* ゴミ箱列のヘッダー */}
                       </th>
@@ -4745,17 +4745,25 @@ export default function CostPage() {
                   const expandedBgClass =
                     expandedColorIndex !== undefined
                       ? (() => {
-                          const colors = [
-                            // 色1: 緑
-                            isDark ? "bg-green-900" : "bg-green-100",
-                            // 色2: 黄
-                            isDark ? "bg-yellow-900" : "bg-yellow-100",
-                            // 色3: 紫
-                            isDark ? "bg-purple-900" : "bg-purple-100",
-                            // 色4: オレンジ
-                            isDark ? "bg-orange-900" : "bg-orange-100",
+                          // 旧仕様（4色ローテーション）。戻す可能性があるためコメントアウトで保持。
+                          // const colors = [
+                          //   // 色1: 緑
+                          //   isDark ? "bg-green-900" : "bg-green-100",
+                          //   // 色2: 黄
+                          //   isDark ? "bg-yellow-900" : "bg-yellow-100",
+                          //   // 色3: 紫
+                          //   isDark ? "bg-purple-900" : "bg-purple-100",
+                          //   // 色4: オレンジ
+                          //   isDark ? "bg-orange-900" : "bg-orange-100",
+                          // ];
+                          // return colors[expandedColorIndex] || "";
+
+                          // 新仕様: Add と同じ青系 2色を交互に使用
+                          const addLikeColors = [
+                            isDark ? "bg-blue-900" : "bg-blue-100",
+                            isDark ? "bg-blue-800" : "bg-blue-50",
                           ];
-                          return colors[expandedColorIndex] || "";
+                          return addLikeColors[expandedColorIndex % 2] || "";
                         })()
                       : "";
 
@@ -5313,9 +5321,15 @@ export default function CostPage() {
                         >
                           {/* 展開アイコン */}
                           <td
-                            className="px-6 whitespace-nowrap"
+                            className={`px-6 whitespace-nowrap ${
+                              item.isExpanded
+                                ? isDark
+                                  ? "border-l-2 border-blue-500/70"
+                                  : "border-l-2 border-blue-400"
+                                : ""
+                            }`}
                             style={{
-                              width: "48px",
+                              width: "2.5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -5360,7 +5374,7 @@ export default function CostPage() {
                                         : "bg-white group-hover:bg-gray-50 peer-hover:bg-gray-50"
                             } ${isDark ? "text-slate-100" : "text-gray-900"}`}
                             style={{
-                              width: "180px",
+                              width: "13%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -5405,7 +5419,7 @@ export default function CostPage() {
                                 />
                               ) : (
                                 <div
-                                  className="flex items-center gap-2"
+                                  className="flex items-center gap-2 min-w-0"
                                   style={{
                                     height: "20px",
                                     minHeight: "20px",
@@ -5417,7 +5431,7 @@ export default function CostPage() {
                                       isDark
                                         ? "text-slate-100"
                                         : "text-gray-900"
-                                    }`}
+                                    } min-w-0 truncate`}
                                     style={{
                                       lineHeight: "20px",
                                       height: "20px",
@@ -5473,7 +5487,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap text-left"
                             style={{
-                              width: "120px",
+                              width: "6%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -5539,7 +5553,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "250px",
+                              width: "7.5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -5741,15 +5755,14 @@ export default function CostPage() {
                                 </div>
                               ) : (
                                 <div
-                                  className="flex items-center gap-2"
-                                  style={{ height: "20px" }}
+                                  className="flex flex-col items-start gap-0.5 min-w-0"
                                 >
                                   <span
                                     className={`text-sm ${
                                       isDark
                                         ? "text-slate-100"
                                         : "text-gray-900"
-                                    }`}
+                                    } min-w-0`}
                                     style={{ lineHeight: "20px" }}
                                   >
                                     {item.proceed_yield_amount}{" "}
@@ -5758,8 +5771,10 @@ export default function CostPage() {
                                   {/* Yield Unitが"each"の場合、each_gramsを表示 */}
                                   {item.proceed_yield_unit === "each" && (
                                     <span
-                                      className="text-xs text-gray-500"
-                                      style={{ lineHeight: "20px" }}
+                                      className={`text-xs ${
+                                        isDark ? "text-slate-400" : "text-gray-500"
+                                      }`}
+                                      style={{ lineHeight: "16px" }}
                                     >
                                       {(() => {
                                         const eachGrams =
@@ -5791,7 +5806,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "230px",
+                              width: "6.5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -5840,7 +5855,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "230px",
+                              width: "6.5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -5889,7 +5904,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "230px",
+                              width: "11%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -5957,7 +5972,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "140px",
+                              width: "7%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6085,7 +6100,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "100px",
+                              width: "5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6143,7 +6158,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "100px",
+                              width: "5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6201,7 +6216,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "100px",
+                              width: "5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6259,7 +6274,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "120px",
+                              width: "7%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6387,7 +6402,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "100px",
+                              width: "5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6444,7 +6459,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "100px",
+                              width: "5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6501,7 +6516,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "100px",
+                              width: "5%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6558,7 +6573,7 @@ export default function CostPage() {
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
-                              width: "64px",
+                              width: "3%",
                               paddingTop: "16px",
                               paddingBottom: "16px",
                               boxSizing: "border-box",
@@ -6636,6 +6651,10 @@ export default function CostPage() {
                                     : hoveredItemId === item.id
                                       ? "bg-gray-50"
                                       : "bg-white peer-hover:bg-gray-50"
+                            } ${
+                              isDark
+                                ? "border-l-2 border-blue-500/70"
+                                : "border-l-2 border-blue-400"
                             }`}
                             style={{
                               width: "100%",
@@ -6644,9 +6663,7 @@ export default function CostPage() {
                             }}
                           >
                             <div
-                              className={`space-y-6 px-6 ${
-                                expandedBgClass || ""
-                              }`}
+                                className={`space-y-6 px-6 ${expandedBgClass || ""}`}
                               style={{
                                 width: "100%",
                                 minWidth: "100%",
