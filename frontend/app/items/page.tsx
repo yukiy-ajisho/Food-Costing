@@ -1957,7 +1957,7 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className={`text-sm ${
+                                  className={`w-full min-w-0 truncate text-sm ${
                                     isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
@@ -2006,7 +2006,7 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className={`text-sm ${
+                                  className={`w-full min-w-0 truncate text-sm ${
                                     isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
@@ -2066,7 +2066,7 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className={`text-sm ${
+                                  className={`w-full min-w-0 truncate text-sm ${
                                     isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
@@ -2125,7 +2125,7 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className={`text-sm ${
+                                  className={`w-full min-w-0 truncate text-sm ${
                                     isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
@@ -2213,7 +2213,7 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className={`text-sm ${
+                                  className={`w-full min-w-0 truncate text-sm ${
                                     isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
@@ -2323,11 +2323,11 @@ export default function ItemsPage() {
                                   </select>
                                 ) : (
                                   <div
-                                    className="flex items-center gap-2"
+                                    className="flex w-full min-w-0 items-center gap-2"
                                     style={{ height: "20px" }}
                                   >
                                     <span
-                                      className={`text-sm ${
+                                      className={`min-w-0 truncate text-sm ${
                                         isDark
                                           ? "text-slate-100"
                                           : "text-gray-900"
@@ -2411,7 +2411,7 @@ export default function ItemsPage() {
                                 />
                               ) : (
                                 <div
-                                  className={`text-sm ${
+                                  className={`w-full min-w-0 truncate text-sm ${
                                     isDark ? "text-slate-100" : "text-gray-900"
                                   }`}
                                   style={{ height: "20px", lineHeight: "20px" }}

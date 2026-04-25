@@ -42,6 +42,17 @@ CREATE TYPE "public"."company_requirement_data_type" AS ENUM (
 ALTER TYPE "public"."company_requirement_data_type" OWNER TO "postgres";
 
 
+CREATE TYPE "public"."document_inbox_document_type" AS ENUM (
+    'invoice',
+    'company_requirement',
+    'tenant_requirement',
+    'employee_requirement'
+);
+
+
+ALTER TYPE "public"."document_inbox_document_type" OWNER TO "postgres";
+
+
 CREATE TYPE "public"."tenant_requirement_data_type" AS ENUM (
     'date',
     'int',
@@ -1359,6 +1370,19 @@ $$;
 ALTER FUNCTION "public"."prevent_price_events_update_delete"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."set_document_inbox_updated_at"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."set_document_inbox_updated_at"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."set_updated_at_cross_tenant_item_shares"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -1657,6 +1681,33 @@ COMMENT ON COLUMN "public"."cross_tenant_item_shares"."allowed_actions" IS 'read
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."document_inbox" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "value" "text" NOT NULL,
+    "file_name" "text" NOT NULL,
+    "content_type" "text",
+    "size_bytes" bigint,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_by" "uuid" NOT NULL,
+    "document_type" "public"."document_inbox_document_type",
+    "classified_at" timestamp with time zone,
+    "classified_by" "uuid",
+    "reviewed_at" timestamp with time zone,
+    "reviewed_by" "uuid",
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "document_inbox_classify_consistency" CHECK (((("document_type" IS NULL) AND ("classified_at" IS NULL) AND ("classified_by" IS NULL)) OR (("document_type" IS NOT NULL) AND ("classified_at" IS NOT NULL) AND ("classified_by" IS NOT NULL)))),
+    CONSTRAINT "document_inbox_reviewed_requires_classify" CHECK ((("reviewed_at" IS NULL) OR (("document_type" IS NOT NULL) AND ("reviewed_by" IS NOT NULL))))
+);
+
+
+ALTER TABLE "public"."document_inbox" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."document_inbox" IS '一次受け inbox。仕分け後に invoice / requirement 系へ連携する。';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."document_metadata" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "real_data_id" "uuid" NOT NULL,
@@ -1702,7 +1753,6 @@ CREATE TABLE IF NOT EXISTS "public"."document_metadata_invoices" (
     "total_amount" numeric(12,2),
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "created_by" "uuid" NOT NULL,
-    "approved_at" timestamp with time zone,
     CONSTRAINT "document_metadata_invoices_total_amount_positive" CHECK (("total_amount" > (0)::numeric))
 );
 
@@ -2285,6 +2335,11 @@ ALTER TABLE ONLY "public"."cross_tenant_item_shares"
 
 
 
+ALTER TABLE ONLY "public"."document_inbox"
+    ADD CONSTRAINT "document_inbox_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."document_metadata_invoices"
     ADD CONSTRAINT "document_metadata_invoices_pkey" PRIMARY KEY ("id");
 
@@ -2554,6 +2609,14 @@ CREATE INDEX "idx_cross_tenant_item_shares_owner_tenant" ON "public"."cross_tena
 
 
 CREATE INDEX "idx_cross_tenant_item_shares_target" ON "public"."cross_tenant_item_shares" USING "btree" ("target_type", "target_id");
+
+
+
+CREATE INDEX "idx_document_inbox_tenant_created" ON "public"."document_inbox" USING "btree" ("tenant_id", "created_at" DESC);
+
+
+
+CREATE INDEX "idx_document_inbox_tenant_unreviewed" ON "public"."document_inbox" USING "btree" ("tenant_id") WHERE ("reviewed_at" IS NULL);
 
 
 
@@ -2889,6 +2952,10 @@ CREATE OR REPLACE TRIGGER "trg_cross_tenant_item_shares_updated_at" BEFORE UPDAT
 
 
 
+CREATE OR REPLACE TRIGGER "trg_document_inbox_updated_at" BEFORE UPDATE ON "public"."document_inbox" FOR EACH ROW EXECUTE FUNCTION "public"."set_document_inbox_updated_at"();
+
+
+
 CREATE OR REPLACE TRIGGER "trg_prevent_price_events_delete" BEFORE DELETE ON "public"."price_events" FOR EACH ROW EXECUTE FUNCTION "public"."prevent_price_events_update_delete"();
 
 
@@ -2990,6 +3057,26 @@ ALTER TABLE ONLY "public"."cross_tenant_item_shares"
 
 ALTER TABLE ONLY "public"."cross_tenant_item_shares"
     ADD CONSTRAINT "cross_tenant_item_shares_owner_tenant_id_fkey" FOREIGN KEY ("owner_tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."document_inbox"
+    ADD CONSTRAINT "document_inbox_classified_by_fkey" FOREIGN KEY ("classified_by") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."document_inbox"
+    ADD CONSTRAINT "document_inbox_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."document_inbox"
+    ADD CONSTRAINT "document_inbox_reviewed_by_fkey" FOREIGN KEY ("reviewed_by") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."document_inbox"
+    ADD CONSTRAINT "document_inbox_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
 
 
 
@@ -3282,6 +3369,15 @@ CREATE POLICY "Users can view their own proceed_validation_settings" ON "public"
 ALTER TABLE "public"."allowlist" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."companies" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."company_members" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."company_tenants" ENABLE ROW LEVEL SECURITY;
+
+
 ALTER TABLE "public"."cross_tenant_item_shares" ENABLE ROW LEVEL SECURITY;
 
 
@@ -3316,6 +3412,9 @@ CREATE POLICY "cross_tenant_item_shares_update" ON "public"."cross_tenant_item_s
    FROM "public"."company_members" "cm"
   WHERE (("cm"."user_id" = "auth"."uid"()) AND ("cm"."role" = ANY (ARRAY['company_admin'::"public"."company_member_role", 'company_director'::"public"."company_member_role"])))))));
 
+
+
+ALTER TABLE "public"."document_inbox" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."document_metadata_invoices" ENABLE ROW LEVEL SECURITY;
@@ -3401,6 +3500,12 @@ GRANT ALL ON FUNCTION "public"."handle_new_user"() TO "service_role";
 GRANT ALL ON FUNCTION "public"."prevent_price_events_update_delete"() TO "anon";
 GRANT ALL ON FUNCTION "public"."prevent_price_events_update_delete"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."prevent_price_events_update_delete"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."set_document_inbox_updated_at"() TO "anon";
+GRANT ALL ON FUNCTION "public"."set_document_inbox_updated_at"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."set_document_inbox_updated_at"() TO "service_role";
 
 
 
@@ -3497,6 +3602,12 @@ GRANT ALL ON TABLE "public"."company_tenants" TO "service_role";
 GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "anon";
 GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "authenticated";
 GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."document_inbox" TO "anon";
+GRANT ALL ON TABLE "public"."document_inbox" TO "authenticated";
+GRANT ALL ON TABLE "public"."document_inbox" TO "service_role";
 
 
 
