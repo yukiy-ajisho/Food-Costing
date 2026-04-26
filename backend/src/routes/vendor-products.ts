@@ -237,6 +237,61 @@ router.post(
 );
 
 /**
+ * POST /vendor-products/bulk/manual-prices
+ * Record manual prices atomically (all-or-nothing)
+ */
+router.post(
+  "/bulk/manual-prices",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource
+  ),
+  async (req, res) => {
+    try {
+      const selectedTenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+      const operations = req.body?.operations;
+
+      if (!Array.isArray(operations) || operations.length === 0) {
+        return res.status(400).json({ error: "operations must be a non-empty array" });
+      }
+
+      const { data, error } = await supabase.rpc("record_manual_prices_atomic", {
+        p_tenant_id: selectedTenantId,
+        p_user_id: req.user!.id,
+        p_operations: operations,
+      });
+
+      if (error) {
+        if (
+          error.code === "23505" ||
+          error.message.includes("duplicate key") ||
+          error.message.includes("unique constraint")
+        ) {
+          return res.status(400).json({
+            error:
+              "A vendor product with the same item, supplier, and product name already exists for your account.",
+          });
+        }
+        return res.status(400).json({ error: error.message });
+      }
+
+      const changedVendorProductIds: string[] =
+        Array.isArray(data) && data.length > 0 && data[0]?.changed_vendor_product_ids
+          ? data[0].changed_vendor_product_ids
+          : [];
+
+      return res.status(201).json({
+        changed_vendor_product_ids: changedVendorProductIds,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ error: message });
+    }
+  }
+);
+
+/**
  * PUT /vendor-products/:id
  * vendor productを更新
  */

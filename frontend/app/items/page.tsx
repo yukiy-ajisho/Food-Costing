@@ -17,7 +17,6 @@ import {
   baseItemsAPI,
   vendorsAPI,
   productMappingsAPI,
-  priceEventsAPI,
   saveChangeHistory,
   type Item,
   type BaseItem as APIBaseItem,
@@ -510,7 +509,24 @@ export default function ItemsPage() {
     if (isRecordPriceModeItems) {
       try {
         setLoadingItems(true);
-        const changedVendorProductIds: string[] = [];
+        const operations: Array<
+          | {
+              kind: "existing";
+              vendor_product_id: string;
+              price: number;
+            }
+          | {
+              kind: "new";
+              vendor_id: string;
+              base_item_id: string;
+              product_name: string | null;
+              brand_name: string | null;
+              purchase_unit: string;
+              purchase_quantity: number;
+              case_unit: number | null;
+              price: number;
+            }
+        > = [];
 
         for (const vp of vendorProducts) {
           const raw = newPriceInputs.get(vp.id);
@@ -539,36 +555,37 @@ export default function ItemsPage() {
               return;
             }
 
-            const newVp = await vendorProductsAPI.create({
+            operations.push({
+              kind: "new",
               vendor_id: vp.vendor_id,
+              base_item_id: vp.base_item_id,
               product_name: vp.product_name || null,
               brand_name: vp.brand_name || null,
               purchase_unit: vp.purchase_unit,
               purchase_quantity: qty,
-              current_price: parsed,
               case_unit: vp.case_unit ?? null,
-              // 手動作成の initial price event はばら1個として記録
-              initial_unit_purchased: vp.case_unit ? null : 1,
-              initial_case_purchased: null,
-            });
-            changedVendorProductIds.push(newVp.id);
-
-            await productMappingsAPI.create({
-              base_item_id: vp.base_item_id,
-              virtual_product_id: newVp.id,
+              price: parsed,
             });
           } else {
-            await priceEventsAPI.recordManual(vp.id, parsed);
-            changedVendorProductIds.push(vp.id);
+            operations.push({
+              kind: "existing",
+              vendor_product_id: vp.id,
+              price: parsed,
+            });
           }
         }
 
-        if (changedVendorProductIds.length === 0) {
+        if (operations.length === 0) {
           setNewPriceInputs(new Map());
           setIsRecordPriceModeItems(false);
           setLoadingItems(false);
           return;
         }
+
+        const bulkResult = await vendorProductsAPI.recordManualPricesBulk(
+          operations,
+        );
+        const changedVendorProductIds = bulkResult.changed_vendor_product_ids;
 
         saveChangeHistory({
           changed_vendor_product_ids: changedVendorProductIds,
