@@ -621,6 +621,33 @@ export const vendorProductsAPI = {
         method: "PATCH",
       }
     ),
+  recordManualPricesBulk: (
+    operations: Array<
+      | {
+          kind: "existing";
+          vendor_product_id: string;
+          price: number;
+        }
+      | {
+          kind: "new";
+          vendor_id: string;
+          base_item_id: string;
+          product_name: string | null;
+          brand_name: string | null;
+          purchase_unit: string;
+          purchase_quantity: number;
+          case_unit: number | null;
+          price: number;
+        }
+    >
+  ) =>
+    fetchAPI<{ changed_vendor_product_ids: string[] }>(
+      "/vendor-products/bulk/manual-prices",
+      {
+        method: "POST",
+        body: JSON.stringify({ operations }),
+      }
+    ),
 };
 
 export type PriceHistoryRow = {
