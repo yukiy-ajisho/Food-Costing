@@ -58,4 +58,9 @@ export const documentInboxAPI = {
       `/document-inbox/${encodeURIComponent(inboxId)}/mark-reviewed`,
       { method: "POST" }
     ),
+
+  remove: (inboxId: string) =>
+    apiRequest<{ ok: boolean }>(`/document-inbox/${encodeURIComponent(inboxId)}`, {
+      method: "DELETE",
+    }),
 };

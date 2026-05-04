@@ -2694,7 +2694,7 @@ export default function TenantRequirementsPage() {
                                 isDark ? "text-slate-400" : "text-gray-600"
                               }`}
                             >
-                              From Document Box
+                              From Uploaded Document Box
                             </label>
                             {detailInboxPicksLoading ? (
                               <p
@@ -2736,7 +2736,7 @@ export default function TenantRequirementsPage() {
                                 isDark ? "text-slate-500" : "text-gray-500"
                               }`}
                             >
-                              No unreviewed tenant documents in Document Box
+                              No unreviewed tenant documents in Uploaded Document Box
                               for this tenant.
                             </p>
                           ) : null}
@@ -2762,7 +2762,7 @@ export default function TenantRequirementsPage() {
                               >
                                 {detailInboxPicks.find(
                                   (p) => p.id === detailSelectedInboxId,
-                                )?.file_name ?? "Document Box item"}
+                                )?.file_name ?? "Uploaded Document Box item"}
                               </span>
                               <button
                                 type="button"

@@ -19,7 +19,7 @@ router.get(
   "/",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.list_resources,
-    getUnifiedTenantResource
+    getUnifiedTenantResource,
   ),
   async (req, res) => {
     try {
@@ -58,7 +58,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -69,7 +69,7 @@ router.get(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.read_resource,
-    getUnifiedResourceShareResource
+    getUnifiedResourceShareResource,
   ),
   async (req, res) => {
     try {
@@ -98,7 +98,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -109,7 +109,7 @@ router.post(
   "/",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.create_item,
-    getUnifiedTenantResource
+    getUnifiedTenantResource,
   ),
   async (req, res) => {
     try {
@@ -199,12 +199,11 @@ router.post(
       const resourceId = share.resource_id;
 
       let ownerTenantId: string | null = null;
-      let resourceUserId: string | null = null;
       let resourceResponsibleUserId: string | null = null;
       if (resourceType === "item") {
         const { data, error } = await supabase
           .from("items")
-          .select("id, tenant_id, user_id, responsible_user_id")
+          .select("id, tenant_id, responsible_user_id")
           .eq("id", resourceId)
           .in("tenant_id", req.user!.tenant_ids)
           .single();
@@ -214,7 +213,6 @@ router.post(
           });
         }
         ownerTenantId = data.tenant_id;
-        resourceUserId = data.user_id;
         resourceResponsibleUserId = data.responsible_user_id;
       } else if (resourceType === "base_item") {
         const { data, error } = await supabase
@@ -266,22 +264,14 @@ router.post(
         });
       }
 
-      // 権限チェック: Admin/Director、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
-      const isTenantAdminOrDirector =
-        role === "admin" || role === "director";
-      const isCreatorAndResponsible =
-        resourceUserId === currentUserId &&
-        resourceResponsibleUserId === currentUserId;
+      // 権限チェック: Admin/Director、または responsible_user_id が自分
+      const isTenantAdminOrDirector = role === "admin" || role === "director";
       const isResponsibleUser = resourceResponsibleUserId === currentUserId;
 
-      if (
-        !isTenantAdminOrDirector &&
-        !isCreatorAndResponsible &&
-        !isResponsibleUser
-      ) {
+      if (!isTenantAdminOrDirector && !isResponsibleUser) {
         return res.status(403).json({
           error:
-            "Only admins, directors, creators (if they are the responsible user), or the responsible user can create resource shares",
+            "Only admins, directors, or the responsible user can create resource shares",
         });
       }
 
@@ -291,12 +281,12 @@ router.post(
       // バリデーション: allowed_actionsは空配列（hide状態）、'read'、または'read'と'update'のみ
       const validActions = ["read", "update"];
       const invalidActions = allowedActions.filter(
-        (action) => !validActions.includes(action)
+        (action) => !validActions.includes(action),
       );
       if (invalidActions.length > 0) {
         return res.status(400).json({
           error: `allowed_actions must only contain: ${validActions.join(
-            ", "
+            ", ",
           )} (or empty array for hide state)`,
         });
       }
@@ -351,7 +341,7 @@ router.post(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -362,7 +352,7 @@ router.put(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.update_item,
-    getUnifiedResourceShareResource
+    getUnifiedResourceShareResource,
   ),
   async (req, res) => {
     try {
@@ -386,38 +376,28 @@ router.put(
         req.user!.selected_tenant_id || req.user!.tenant_ids[0];
       const role = req.user!.roles.get(currentTenantId);
       const currentUserId = req.user!.id;
-      let resourceUserId: string | null = null;
       let resourceResponsibleUserId: string | null = null;
 
       if (existingShare.resource_type === "item") {
         const { data: resourceData, error: resourceError } = await supabase
           .from("items")
-          .select("user_id, responsible_user_id")
+          .select("responsible_user_id")
           .eq("id", existingShare.resource_id)
           .eq("tenant_id", currentTenantId)
           .single();
         if (!resourceError && resourceData) {
-          resourceUserId = resourceData.user_id;
           resourceResponsibleUserId = resourceData.responsible_user_id;
         }
       }
 
-      // 権限チェック: Admin/Director、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
-      const isTenantAdminOrDirector =
-        role === "admin" || role === "director";
-      const isCreatorAndResponsible =
-        resourceUserId === currentUserId &&
-        resourceResponsibleUserId === currentUserId;
+      // 権限チェック: Admin/Director、または responsible_user_id が自分
+      const isTenantAdminOrDirector = role === "admin" || role === "director";
       const isResponsibleUser = resourceResponsibleUserId === currentUserId;
 
-      if (
-        !isTenantAdminOrDirector &&
-        !isCreatorAndResponsible &&
-        !isResponsibleUser
-      ) {
+      if (!isTenantAdminOrDirector && !isResponsibleUser) {
         return res.status(403).json({
           error:
-            "Only admins, directors, creators (if they are the responsible user), or the responsible user can update resource shares",
+            "Only admins, directors, or the responsible user can update resource shares",
         });
       }
 
@@ -525,12 +505,12 @@ router.put(
       if (share.allowed_actions !== undefined) {
         const validActions = ["read", "update"];
         const invalidActions = share.allowed_actions.filter(
-          (action) => !validActions.includes(action)
+          (action) => !validActions.includes(action),
         );
         if (invalidActions.length > 0) {
           return res.status(400).json({
             error: `allowed_actions must only contain: ${validActions.join(
-              ", "
+              ", ",
             )} (or empty array for hide state)`,
           });
         }
@@ -606,7 +586,7 @@ router.put(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -617,7 +597,7 @@ router.delete(
   "/:id",
   unifiedAuthorizationMiddleware(
     UnifiedTenantAction.delete_item,
-    getUnifiedResourceShareResource
+    getUnifiedResourceShareResource,
   ),
   async (req, res) => {
     try {
@@ -640,38 +620,28 @@ router.delete(
         req.user!.selected_tenant_id || req.user!.tenant_ids[0];
       const role = req.user!.roles.get(currentTenantId);
       const currentUserId = req.user!.id;
-      let resourceUserId: string | null = null;
       let resourceResponsibleUserId: string | null = null;
 
       if (existingShare.resource_type === "item") {
         const { data: resourceData, error: resourceError } = await supabase
           .from("items")
-          .select("user_id, responsible_user_id")
+          .select("responsible_user_id")
           .eq("id", existingShare.resource_id)
           .eq("tenant_id", currentTenantId)
           .single();
         if (!resourceError && resourceData) {
-          resourceUserId = resourceData.user_id;
           resourceResponsibleUserId = resourceData.responsible_user_id;
         }
       }
 
-      // 権限チェック: Admin/Director、または作成者かつresponsible_user_idが自分、またはresponsible_user_idが自分
-      const isTenantAdminOrDirector =
-        role === "admin" || role === "director";
-      const isCreatorAndResponsible =
-        resourceUserId === currentUserId &&
-        resourceResponsibleUserId === currentUserId;
+      // 権限チェック: Admin/Director、または responsible_user_id が自分
+      const isTenantAdminOrDirector = role === "admin" || role === "director";
       const isResponsibleUser = resourceResponsibleUserId === currentUserId;
 
-      if (
-        !isTenantAdminOrDirector &&
-        !isCreatorAndResponsible &&
-        !isResponsibleUser
-      ) {
+      if (!isTenantAdminOrDirector && !isResponsibleUser) {
         return res.status(403).json({
           error:
-            "Only admins, directors, creators (if they are the responsible user), or the responsible user can delete resource shares",
+            "Only admins, directors, or the responsible user can delete resource shares",
         });
       }
 
@@ -690,7 +660,7 @@ router.delete(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 export default router;

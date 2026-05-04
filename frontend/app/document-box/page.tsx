@@ -133,9 +133,9 @@ export default function DocumentBoxPage() {
     return (
       <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
         <div className="max-w-lg mx-auto rounded-lg border border-red-200 bg-red-50 p-6 text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
-          <h1 className="text-lg font-semibold mb-2">Document Box</h1>
+          <h1 className="text-lg font-semibold mb-2">Uploaded Document Box</h1>
           <p className="text-sm">
-            Document Box is available to company administrators and directors
+            Uploaded Document Box is available to company administrators and directors
             only. Use Items → Import invoice for tenant-level imports.
           </p>
         </div>
@@ -147,7 +147,7 @@ export default function DocumentBoxPage() {
     <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
       <div className="max-w-5xl mx-auto">
         <h1 className={`text-xl font-semibold mb-6 ${textPrimary}`}>
-          Document Box
+          Uploaded Document Box
         </h1>
 
         <div className={`rounded-lg border ${border} ${bg} overflow-hidden`}>
@@ -251,6 +251,9 @@ export default function DocumentBoxPage() {
         onClose={handleCloseReview}
         row={reviewRow}
         onStartInvoiceImport={handleStartInvoiceImport}
+        onRemoved={() => {
+          void fetchRows();
+        }}
       />
 
       <InvoiceImportModal

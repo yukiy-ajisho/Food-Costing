@@ -87,11 +87,11 @@ export async function authorize(
   action: string,
   resource: Resource,
   context?: AuthContext,
-  checkResourceShares: boolean = true
+  checkResourceShares: boolean = true,
 ): Promise<boolean> {
   if (!policySetText || !schemaText) {
     console.error(
-      "Authorizer not initialized. Call initializeAuthorizer() first."
+      "Authorizer not initialized. Call initializeAuthorizer() first.",
     );
     // セキュリティのため、初期化されていない場合は拒否
     return false;
@@ -112,12 +112,8 @@ export async function authorize(
     if (principal.role === "manager" && resource.resource_type === "item") {
       // item_kindがpreppedの場合のみ制限を適用
       if (resource.item_kind === "prepped") {
-        // 自分が作ったものかチェック
-        if (resource.user_id && resource.user_id === principal.id) {
-          // 自分が作ったもの → フルアクセス許可
-          context = context || {};
-          context.is_owner = true;
-        } else if (
+        // owner 判定は responsible_user_id に統一
+        if (
           resource.responsible_user_id &&
           resource.responsible_user_id === principal.id
         ) {
@@ -127,39 +123,39 @@ export async function authorize(
         } else {
           // コレクションリソースまたは一時リソースの場合はresource_sharesチェックをスキップ
           if (!shouldSkipResourceSharesCheck) {
-          // 自分が作ったものではない → resource_sharesをチェック
-          const shares = await getResourceShares(
-            resource.resource_type,
-            resource.id,
-            principal.tenant_id,
-            roleForShareMatching,
-            principal.id
-          );
+            // 自分が責任者ではない → resource_sharesをチェック
+            const shares = await getResourceShares(
+              resource.resource_type,
+              resource.id,
+              principal.tenant_id,
+              roleForShareMatching,
+              principal.id,
+            );
 
-          // 除外（FORBID）チェック: is_exclusion = TRUEの場合は即座に拒否
-          if (isExcluded(shares)) {
-            return false;
-          }
+            // 除外（FORBID）チェック: is_exclusion = TRUEの場合は即座に拒否
+            if (isExcluded(shares)) {
+              return false;
+            }
 
-          // 共有されているかチェック
-          if (isShared(shares)) {
-            // 許可されたアクションを取得
-            const allowedActions = getAllowedActions(shares);
+            // 共有されているかチェック
+            if (isShared(shares)) {
+              // 許可されたアクションを取得
+              const allowedActions = getAllowedActions(shares);
               // hide状態（allowed_actionsが空）の場合は、responsible_user_idのユーザー以外はアクセスできない
               if (allowedActions.length === 0) {
                 // hide状態 → 拒否（responsible_user_idのユーザーは上記で処理済み）
                 return false;
               }
-            // リクエストのactionが許可されているかチェック
-            if (!allowedActions.includes(action)) {
-              return false; // 許可されていないaction
-            }
-            // 共有情報をContextに追加（Cedarポリシーで使用）
-            context = context || {};
-            context.is_shared = true;
-          } else {
-            // 共有されていない → 拒否
-            return false;
+              // リクエストのactionが許可されているかチェック
+              if (!allowedActions.includes(action)) {
+                return false; // 許可されていないaction
+              }
+              // 共有情報をContextに追加（Cedarポリシーで使用）
+              context = context || {};
+              context.is_shared = true;
+            } else {
+              // 共有されていない → 拒否
+              return false;
             }
           }
         }
@@ -174,7 +170,7 @@ export async function authorize(
           resource.id,
           principal.tenant_id,
           roleForShareMatching,
-          principal.id
+          principal.id,
         );
 
         // 除外（FORBID）チェック: is_exclusion = TRUEの場合は即座に拒否
@@ -233,8 +229,8 @@ export async function authorize(
           // （authorize.tsのロジックで使用されるが、Cedarポリシーでは使用されない）
           ...(resource.user_id !== undefined &&
             resource.user_id !== null && {
-            user_id: resource.user_id,
-          }),
+              user_id: resource.user_id,
+            }),
         },
         parents: [],
       },
@@ -292,7 +288,7 @@ export function authorizeSync(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _resource: Resource,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _context?: AuthContext
+  _context?: AuthContext,
 ): boolean {
   // 同期版は非推奨。非同期版を使用することを推奨
   throw new Error("authorizeSync is deprecated. Use authorizeAsync instead.");
@@ -306,7 +302,7 @@ export async function authorizeAsync(
   action: string,
   resource: Resource,
   context?: AuthContext,
-  checkResourceShares: boolean = true
+  checkResourceShares: boolean = true,
 ): Promise<boolean> {
   return authorize(principal, action, resource, context, checkResourceShares);
 }

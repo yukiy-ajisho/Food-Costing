@@ -88,16 +88,14 @@ function mapTenantActionToLegacyCrud(actionId: string): LegacyCrudAction {
   }
 }
 
-function normalizeTenantRoleForShares(
-  tenantRole: string | undefined
-): string {
+function normalizeTenantRoleForShares(tenantRole: string | undefined): string {
   // director は shares の target_type=role では admin と同等扱い
   if (!tenantRole) return "";
   return tenantRole === "director" ? "admin" : tenantRole;
 }
 
 function normalizeTenantRoleForPolicy(
-  tenantRole: string | undefined
+  tenantRole: string | undefined,
 ): string | undefined {
   if (!tenantRole) return undefined;
   // company 経由で見えている会社オフィサーは、tenant 認可では director 相当として扱う
@@ -149,7 +147,7 @@ async function resolveResourceSharesForPrincipal(
   principalTenantId: string,
   principalRole: string,
   principalId: string,
-  prefetched: Map<string, ResourceShare[]> | undefined
+  prefetched: Map<string, ResourceShare[]> | undefined,
 ): Promise<ResourceShare[]> {
   if (prefetched !== undefined && prefetched.has(resourceId)) {
     const raw = prefetched.get(resourceId)!;
@@ -157,7 +155,7 @@ async function resolveResourceSharesForPrincipal(
       raw,
       principalTenantId,
       principalRole,
-      principalId
+      principalId,
     );
   }
   return getResourceShares(
@@ -165,7 +163,7 @@ async function resolveResourceSharesForPrincipal(
     resourceId,
     principalTenantId,
     principalRole,
-    principalId
+    principalId,
   );
 }
 
@@ -177,7 +175,7 @@ async function resolveResourceSharesForPrincipal(
 async function isCrossTenantSharedForPrincipal(
   itemId: string,
   itemTenantId: string,
-  principalTenantId: string
+  principalTenantId: string,
 ): Promise<boolean> {
   // 自分のテナントのアイテムは cross-tenant ではない
   if (itemTenantId === principalTenantId) return false;
@@ -199,7 +197,7 @@ async function isCrossTenantSharedForPrincipal(
 
   // 共通の company_id を探す
   const sharedCompanyId = ownerCompanyIds.find((id) =>
-    viewerCompanyIds.includes(id)
+    viewerCompanyIds.includes(id),
   );
   if (!sharedCompanyId) return false;
 
@@ -210,14 +208,15 @@ async function isCrossTenantSharedForPrincipal(
     .eq("item_id", itemId)
     .eq("company_id", sharedCompanyId)
     .or(
-      `and(target_type.eq.company,target_id.eq.${sharedCompanyId}),and(target_type.eq.tenant,target_id.eq.${principalTenantId})`
+      `and(target_type.eq.company,target_id.eq.${sharedCompanyId}),and(target_type.eq.tenant,target_id.eq.${principalTenantId})`,
     );
 
   if (!shares || shares.length === 0) return false;
 
   // allowed_actions に 'read' が含まれるレコードが 1 つでもあれば OK
   return shares.some(
-    (s) => Array.isArray(s.allowed_actions) && s.allowed_actions.includes("read")
+    (s) =>
+      Array.isArray(s.allowed_actions) && s.allowed_actions.includes("read"),
   );
 }
 
@@ -226,7 +225,7 @@ async function isCrossTenantSharedForPrincipal(
  */
 async function getCompanyRole(
   userId: string,
-  companyId: string
+  companyId: string,
 ): Promise<string | null> {
   const { data: member, error } = await supabase
     .from("company_members")
@@ -246,7 +245,7 @@ async function getCompanyRole(
  */
 async function canListTenantViaCompanyManageMembers(
   userId: string,
-  tenantId: string
+  tenantId: string,
 ): Promise<boolean> {
   const { data: link, error } = await supabase
     .from("company_tenants")
@@ -254,11 +253,10 @@ async function canListTenantViaCompanyManageMembers(
     .eq("tenant_id", tenantId)
     .maybeSingle();
   if (error || !link?.company_id) return false;
-  return authorizeUnified(
-    userId,
-    UnifiedCompanyAction.manage_members,
-    { type: "Company", id: link.company_id }
-  );
+  return authorizeUnified(userId, UnifiedCompanyAction.manage_members, {
+    type: "Company",
+    id: link.company_id,
+  });
 }
 
 /**
@@ -266,7 +264,7 @@ async function canListTenantViaCompanyManageMembers(
  */
 async function getTenantRole(
   userId: string,
-  tenantId: string
+  tenantId: string,
 ): Promise<string | null> {
   const { data: profile, error } = await supabase
     .from("profiles")
@@ -295,11 +293,11 @@ export async function authorizeUnified(
   action: string,
   resource: UnifiedResource,
   context?: UnifiedContext,
-  options?: UnifiedAuthorizeOptions
+  options?: UnifiedAuthorizeOptions,
 ): Promise<boolean> {
   if (!unifiedPolicySetText || !unifiedSchemaText) {
     console.error(
-      "Unified Authorizer not initialized. Call initializeUnifiedAuthorizer() first."
+      "Unified Authorizer not initialized. Call initializeUnifiedAuthorizer() first.",
     );
     return false;
   }
@@ -321,7 +319,7 @@ export async function authorizeUnified(
       if (isManageTenantTeam) {
         if (resource.type !== "Tenant") {
           console.error(
-            "Unified authorize: manage_tenant_team requires Tenant resource"
+            "Unified authorize: manage_tenant_team requires Tenant resource",
           );
           return false;
         }
@@ -335,7 +333,7 @@ export async function authorizeUnified(
           if (error || !data?.company_id) {
             console.error(
               "Unified authorize: failed to resolve company_id for tenant (team)",
-              error
+              error,
             );
             return false;
           }
@@ -349,7 +347,7 @@ export async function authorizeUnified(
       } else {
         if (resource.type !== "Company") {
           console.error(
-            "Unified authorize: company action requires Company resource"
+            "Unified authorize: company action requires Company resource",
           );
           return false;
         }
@@ -380,7 +378,7 @@ export async function authorizeUnified(
       ) {
         const viaCompany = await canListTenantViaCompanyManageMembers(
           userId,
-          tenantId
+          tenantId,
         );
         return viaCompany;
       }
@@ -473,24 +471,20 @@ export async function authorizeUnified(
             const isCrossShared = await isCrossTenantSharedForPrincipal(
               resource.id,
               resource.tenant_id,
-              tenantId
+              tenantId,
             );
             // cross-tenant アクセスは read のみ・共有設定が必要
             if (!isCrossShared || legacyCrud !== "read") return false;
             computed.is_cross_tenant_shared = true;
             // intra-tenant チェック（is_owner / is_shared）はスキップして Cedar へ
             contextAttrs = computed as CedarContext;
-          } else
-
-          // manager: prepped items は owner/responsible か、shared かつ allowed_actions に CRUD が含まれる場合のみ
-          if (
+          } else if (
             tenantRole === "manager" &&
             resource.resourceType === "item" &&
             resource.item_kind === "prepped"
           ) {
-            const isOwner =
-              resource.user_id === userId ||
-              resource.responsible_user_id === userId;
+            // manager: prepped items は responsible_user_id が自分、または shared かつ allowed_actions に CRUD が含まれる場合のみ
+            const isOwner = resource.responsible_user_id === userId;
 
             if (isOwner) {
               computed.is_owner = true;
@@ -501,7 +495,7 @@ export async function authorizeUnified(
                 tenantId,
                 sharesRole,
                 userId,
-                options?.prefetchedRawSharesByResourceId
+                options?.prefetchedRawSharesByResourceId,
               );
 
               if (isExcluded(shares)) return false;
@@ -530,7 +524,7 @@ export async function authorizeUnified(
               tenantId,
               sharesRole,
               userId,
-              options?.prefetchedRawSharesByResourceId
+              options?.prefetchedRawSharesByResourceId,
             );
 
             if (isExcluded(shares)) return false;
@@ -584,7 +578,7 @@ export async function authorizeTeamTenantAccess(
   userId: string,
   tenantId: string,
   mode: TeamTenantAuthMode,
-  rolesMap: Map<string, string>
+  rolesMap: Map<string, string>,
 ): Promise<TeamTenantAuthResult> {
   const resource: UnifiedResource = { type: "Tenant", id: tenantId };
 
@@ -592,7 +586,7 @@ export async function authorizeTeamTenantAccess(
     await authorizeUnified(
       userId,
       UnifiedCompanyAction.manage_tenant_team,
-      resource
+      resource,
     )
   ) {
     return { allowed: true, viaCompany: true };
@@ -610,13 +604,10 @@ export async function authorizeTeamTenantAccess(
         ? UnifiedTenantAction.manage_tenant
         : UnifiedTenantAction.manage_members;
 
-  const ok = await authorizeUnified(
-    userId,
-    action,
-    resource,
-    undefined,
-    { tenantId, tenantRole }
-  );
+  const ok = await authorizeUnified(userId, action, resource, undefined, {
+    tenantId,
+    tenantRole,
+  });
   return ok
     ? { allowed: true, viaCompany: false }
     : { allowed: false, viaCompany: false };

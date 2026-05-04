@@ -23,6 +23,7 @@ interface DocumentBoxReviewModalProps {
   onClose: () => void;
   row: InboxRow | null;
   onStartInvoiceImport: (row: InboxRow) => void;
+  onRemoved: () => void;
 }
 
 export function DocumentBoxReviewModal({
@@ -30,6 +31,7 @@ export function DocumentBoxReviewModal({
   onClose,
   row,
   onStartInvoiceImport,
+  onRemoved,
 }: DocumentBoxReviewModalProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -39,6 +41,7 @@ export function DocumentBoxReviewModal({
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [classifyError, setClassifyError] = useState<string | null>(null);
   const [classifyBusy, setClassifyBusy] = useState(false);
+  const [removeBusy, setRemoveBusy] = useState(false);
 
   const border = isDark ? "border-slate-600" : "border-gray-200";
   const shell = isDark
@@ -93,6 +96,26 @@ export function DocumentBoxReviewModal({
     },
     [row],
   );
+
+  const onRemove = useCallback(async () => {
+    if (!row || removeBusy) return;
+    const ok = window.confirm(
+      `Remove "${row.file_name}" permanently from Uploaded Document Box?`,
+    );
+    if (!ok) return;
+
+    setClassifyError(null);
+    setRemoveBusy(true);
+    try {
+      await documentInboxAPI.remove(row.id);
+      onRemoved();
+      onClose();
+    } catch (e) {
+      setClassifyError(e instanceof Error ? e.message : "Failed to remove file");
+    } finally {
+      setRemoveBusy(false);
+    }
+  }, [row, removeBusy, onRemoved, onClose]);
 
   if (!open || !row) return null;
 
@@ -177,7 +200,7 @@ export function DocumentBoxReviewModal({
             {docType === "invoice" ? (
               <button
                 type="button"
-                disabled={classifyBusy}
+                disabled={classifyBusy || removeBusy}
                 onClick={() => onStartInvoiceImport(row)}
                 className={`mt-2 rounded-lg px-4 py-2 text-sm font-medium text-white ${
                   isDark
@@ -194,7 +217,23 @@ export function DocumentBoxReviewModal({
                 implemented.
               </p>
             ) : null}
+
           </div>
+        </div>
+
+        <div
+          className={`flex shrink-0 justify-end border-t px-5 py-3 ${border}`}
+        >
+          <button
+            type="button"
+            onClick={() => void onRemove()}
+            disabled={classifyBusy || removeBusy}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 ${
+              isDark ? "bg-red-700 hover:bg-red-600" : "bg-red-600 hover:bg-red-700"
+            }`}
+          >
+            {removeBusy ? "Removing..." : "Remove"}
+          </button>
         </div>
       </div>
     </div>

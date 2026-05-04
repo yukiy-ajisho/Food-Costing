@@ -115,9 +115,7 @@ function JoinCompanyPageContent() {
         body: JSON.stringify({ token }),
       });
 
-      alert(
-        "You've joined the company as a director. Redirecting to Team...",
-      );
+      alert("You've joined the company as a director. Redirecting to Team...");
       setTimeout(() => {
         router.push("/team");
       }, 1500);

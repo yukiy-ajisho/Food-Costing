@@ -3,7 +3,10 @@ import { randomUUID } from "crypto";
 import { supabase } from "../config/supabase";
 import { authMiddleware } from "../middleware/auth";
 import { sendCompanyInvitationEmail } from "../services/email";
-import { authorizeUnified, UnifiedCompanyAction } from "../authz/unified/authorize";
+import {
+  authorizeUnified,
+  UnifiedCompanyAction,
+} from "../authz/unified/authorize";
 
 const router = Router();
 
@@ -40,13 +43,15 @@ router.post(
         });
       }
 
-      const { error: memberError } = await supabase.from("company_members").insert([
-        {
-          company_id: company.id,
-          user_id: req.user!.id,
-          role: "company_admin",
-        },
-      ]);
+      const { error: memberError } = await supabase
+        .from("company_members")
+        .insert([
+          {
+            company_id: company.id,
+            user_id: req.user!.id,
+            role: "company_admin",
+          },
+        ]);
 
       if (memberError) {
         await supabase.from("companies").delete().eq("id", company.id);
@@ -63,7 +68,7 @@ router.post(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -88,7 +93,7 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
     const companies = rows
       .filter((r) => r.companies != null)
       .map((r) => ({
-        ...((r.companies as unknown) as Record<string, unknown>),
+        ...(r.companies as unknown as Record<string, unknown>),
         role: r.role,
       }));
 
@@ -116,10 +121,12 @@ router.get(
       const allowed = await authorizeUnified(
         req.user!.id,
         UnifiedCompanyAction.manage_members,
-        { type: "Company", id: companyId }
+        { type: "Company", id: companyId },
       );
       if (!allowed) {
-        return res.status(403).json({ error: "You do not have access to this company" });
+        return res
+          .status(403)
+          .json({ error: "You do not have access to this company" });
       }
 
       const { data: rows, error } = await supabase
@@ -138,7 +145,7 @@ router.get(
       const members = await Promise.all(
         rows.map(async (r) => {
           const { data: authUser } = await supabase.auth.admin.getUserById(
-            r.user_id
+            r.user_id,
           );
           return {
             user_id: r.user_id,
@@ -150,7 +157,7 @@ router.get(
               authUser?.user?.email ||
               null,
           };
-        })
+        }),
       );
 
       res.json({ members });
@@ -158,7 +165,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -178,10 +185,12 @@ router.get(
       const allowed = await authorizeUnified(
         req.user!.id,
         UnifiedCompanyAction.manage_invitations,
-        { type: "Company", id: companyId }
+        { type: "Company", id: companyId },
       );
       if (!allowed) {
-        return res.status(403).json({ error: "You do not have access to this company" });
+        return res
+          .status(403)
+          .json({ error: "You do not have access to this company" });
       }
 
       const status = req.query.status as string | undefined;
@@ -207,7 +216,7 @@ router.get(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
@@ -227,10 +236,12 @@ router.post(
       const allowed = await authorizeUnified(
         req.user!.id,
         UnifiedCompanyAction.manage_invitations,
-        { type: "Company", id: companyId }
+        { type: "Company", id: companyId },
       );
       if (!allowed) {
-        return res.status(403).json({ error: "You do not have access to this company" });
+        return res
+          .status(403)
+          .json({ error: "You do not have access to this company" });
       }
 
       const { email } = req.body;
@@ -260,7 +271,7 @@ router.post(
 
       const token = randomUUID();
       const expiresAt = new Date(
-        Date.now() + 7 * 24 * 60 * 60 * 1000
+        Date.now() + 7 * 24 * 60 * 60 * 1000,
       ).toISOString();
 
       const { data: invitation, error: inviteError } = await supabase
@@ -290,9 +301,15 @@ router.post(
         source: "invitation",
         note: `Company director invitation for company ${companyId}`,
       });
-      if (allowlistErr && (allowlistErr as { code?: string }).code !== "23505") {
+      if (
+        allowlistErr &&
+        (allowlistErr as { code?: string }).code !== "23505"
+      ) {
         // log but do not fail; invitation is already created
-        console.warn("[POST /companies/:id/invitations] Allowlist insert:", allowlistErr);
+        console.warn(
+          "[POST /companies/:id/invitations] Allowlist insert:",
+          allowlistErr,
+        );
       }
 
       const { data: company } = await supabase
@@ -302,7 +319,7 @@ router.post(
         .single();
 
       const { data: inviterAuth } = await supabase.auth.admin.getUserById(
-        req.user!.id
+        req.user!.id,
       );
       const inviterName =
         inviterAuth?.user?.user_metadata?.full_name ||
@@ -343,12 +360,14 @@ router.post(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
  * DELETE /companies/:id/invitations/:invitationId
- * 招待をキャンセル。認可: 当該会社の admin/director。
+ * pending（メール失敗以外）: 招待を物理削除し allowlist からも削除（キャンセル相当）
+ * それ以外: 物理削除（accepted 以外なら allowlist からも削除）
+ * 認可: 当該会社の admin/director。
  */
 router.delete(
   "/:id/invitations/:invitationId",
@@ -358,21 +377,25 @@ router.delete(
       const companyId = req.params.id;
       const invitationId = req.params.invitationId;
       if (!companyId || !invitationId) {
-        return res.status(400).json({ error: "company id and invitation id are required" });
+        return res
+          .status(400)
+          .json({ error: "company id and invitation id are required" });
       }
 
       const allowed = await authorizeUnified(
         req.user!.id,
         UnifiedCompanyAction.manage_invitations,
-        { type: "Company", id: companyId }
+        { type: "Company", id: companyId },
       );
       if (!allowed) {
-        return res.status(403).json({ error: "You do not have access to this company" });
+        return res
+          .status(403)
+          .json({ error: "You do not have access to this company" });
       }
 
       const { data: inv, error: fetchErr } = await supabase
         .from("company_invitations")
-        .select("id, status")
+        .select("id, status, email_status, email")
         .eq("id", invitationId)
         .eq("company_id", companyId)
         .single();
@@ -381,79 +404,118 @@ router.delete(
         return res.status(404).json({ error: "Invitation not found" });
       }
 
-      if (inv.status !== "pending") {
-        return res.status(400).json({
-          error: "Invitation cannot be canceled",
-          details: `Invitation is already ${inv.status}`,
-        });
+      if (inv.status === "pending" && inv.email_status !== "failed") {
+        const { error: deletePendingErr } = await supabase
+          .from("company_invitations")
+          .delete()
+          .eq("id", invitationId)
+          .eq("company_id", companyId);
+
+        if (deletePendingErr) {
+          return res.status(500).json({ error: deletePendingErr.message });
+        }
+
+        // Rule: accepted 以外（pending cancel）では allowlist も削除
+        const { error: allowlistDeleteError } = await supabase
+          .from("allowlist")
+          .delete()
+          .eq("email", inv.email);
+        if (allowlistDeleteError) {
+          console.warn(
+            "[DELETE /companies/:id/invitations/:invitationId] Failed to delete allowlist entry:",
+            allowlistDeleteError,
+          );
+        }
+
+        return res.status(200).json({ message: "Invitation canceled" });
       }
 
-      const { error: updateErr } = await supabase
+      const { error: deleteErr } = await supabase
         .from("company_invitations")
-        .update({ status: "canceled" })
-        .eq("id", invitationId);
-
-      if (updateErr) {
-        return res.status(500).json({ error: updateErr.message });
+        .delete()
+        .eq("id", invitationId)
+        .eq("company_id", companyId);
+      if (deleteErr) {
+        return res.status(500).json({ error: deleteErr.message });
       }
 
-      res.status(200).json({ message: "Invitation canceled" });
+      // Rule: accepted 以外を削除した場合は allowlist からも削除
+      if (inv.status !== "accepted") {
+        const { error: allowlistDeleteError } = await supabase
+          .from("allowlist")
+          .delete()
+          .eq("email", inv.email);
+        if (allowlistDeleteError) {
+          console.warn(
+            "[DELETE /companies/:id/invitations/:invitationId] Failed to delete allowlist entry:",
+            allowlistDeleteError,
+          );
+        }
+      }
+
+      return res.status(200).json({ message: "Invitation deleted" });
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 /**
  * GET /companies/:id/tenants
  * その会社に属する tenant 一覧（company_tenants + tenants）。
  */
-router.get("/:id/tenants", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
-  try {
-    const companyId = req.params.id;
-    if (!companyId) {
-      return res.status(400).json({ error: "company id is required" });
-    }
+router.get(
+  "/:id/tenants",
+  authMiddleware({ allowNoProfiles: true }),
+  async (req, res) => {
+    try {
+      const companyId = req.params.id;
+      if (!companyId) {
+        return res.status(400).json({ error: "company id is required" });
+      }
 
       const allowed = await authorizeUnified(
-      req.user!.id,
+        req.user!.id,
         UnifiedCompanyAction.list_tenants,
-        { type: "Company", id: companyId }
-    );
-    if (!allowed) {
-      return res.status(403).json({ error: "You do not have access to this company" });
+        { type: "Company", id: companyId },
+      );
+      if (!allowed) {
+        return res
+          .status(403)
+          .json({ error: "You do not have access to this company" });
+      }
+
+      const { data: links, error: linkError } = await supabase
+        .from("company_tenants")
+        .select("tenant_id")
+        .eq("company_id", companyId);
+
+      if (linkError) {
+        return res.status(500).json({ error: linkError.message });
+      }
+
+      if (!links || links.length === 0) {
+        return res.json({ tenants: [] });
+      }
+
+      const tenantIds = links.map((l) => l.tenant_id);
+      const { data: tenants, error: tenantsError } = await supabase
+        .from("tenants")
+        .select("*")
+        .in("id", tenantIds);
+
+      if (tenantsError) {
+        return res.status(500).json({ error: tenantsError.message });
+      }
+
+      res.json({ tenants: tenants ?? [] });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
     }
-
-    const { data: links, error: linkError } = await supabase
-      .from("company_tenants")
-      .select("tenant_id")
-      .eq("company_id", companyId);
-
-    if (linkError) {
-      return res.status(500).json({ error: linkError.message });
-    }
-
-    if (!links || links.length === 0) {
-      return res.json({ tenants: [] });
-    }
-
-    const tenantIds = links.map((l) => l.tenant_id);
-    const { data: tenants, error: tenantsError } = await supabase
-      .from("tenants")
-      .select("*")
-      .in("id", tenantIds);
-
-    if (tenantsError) {
-      return res.status(500).json({ error: tenantsError.message });
-    }
-
-    res.json({ tenants: tenants ?? [] });
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    res.status(500).json({ error: message });
-  }
-});
+  },
+);
 
 /**
  * POST /companies/:id/tenants
@@ -473,10 +535,12 @@ router.post(
       const allowed = await authorizeUnified(
         req.user!.id,
         UnifiedCompanyAction.create_tenant,
-        { type: "Company", id: companyId }
+        { type: "Company", id: companyId },
       );
       if (!allowed) {
-        return res.status(403).json({ error: "You do not have access to this company" });
+        return res
+          .status(403)
+          .json({ error: "You do not have access to this company" });
       }
 
       const { name, type } = req.body;
@@ -525,9 +589,9 @@ router.post(
         });
       }
 
-      const { error: ctError } = await supabase.from("company_tenants").insert([
-        { company_id: companyId, tenant_id: tenant.id },
-      ]);
+      const { error: ctError } = await supabase
+        .from("company_tenants")
+        .insert([{ company_id: companyId, tenant_id: tenant.id }]);
 
       if (ctError) {
         await supabase
@@ -549,7 +613,7 @@ router.post(
       const message = error instanceof Error ? error.message : String(error);
       res.status(500).json({ error: message });
     }
-  }
+  },
 );
 
 export default router;
