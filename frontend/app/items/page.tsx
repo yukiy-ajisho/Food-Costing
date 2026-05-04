@@ -34,7 +34,7 @@ import {
 import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
 
-type TabType = "items" | "raw-items" | "vendors";
+type TabType = "items" | "raw-items";
 
 // UI用の型定義
 interface VendorProductUI extends VendorProduct {
@@ -86,14 +86,6 @@ function flushBaseItemDraftsIntoRows(
   });
 }
 
-interface VendorUI {
-  id: string;
-  name: string;
-  created_at?: string;
-  isMarkedForDeletion?: boolean;
-  isNew?: boolean;
-}
-
 export default function ItemsPage() {
   const { theme } = useTheme();
   const { selectedTenantId } = useTenant();
@@ -143,12 +135,6 @@ export default function ItemsPage() {
   const [eachGramsInputs, setEachGramsInputs] = useState<Map<string, string>>(
     new Map(),
   );
-
-  // Vendorsタブ用のstate
-  const [vendorsUI, setVendorsUI] = useState<VendorUI[]>([]);
-  const [originalVendors, setOriginalVendors] = useState<VendorUI[]>([]);
-  const [isEditModeVendors, setIsEditModeVendors] = useState(false);
-  const [loadingVendors, setLoadingVendors] = useState(false);
 
   // Vendor Items: 単一アクティブ列＋昇順/降順（localStorage 永続化）
   type VendorItemsSortKey = "base_item" | "vendor" | "product" | "brand";
@@ -219,39 +205,6 @@ export default function ItemsPage() {
   );
   useEffect(() => {
     setBaseItemsSort(readBaseItemsSortFromStorage());
-  }, []);
-
-  // Vendors: Name 列ヘッダのみソート（localStorage 永続化・ハイドレーション安全）
-  type VendorsSortKey = "name";
-  type VendorsSortState = {
-    key: VendorsSortKey | null;
-    ascending: boolean;
-  };
-  const VENDORS_SORT_STORAGE_KEY = "items_vendors_sort_v2";
-  const VENDORS_SORT_SSR_INITIAL: VendorsSortState = {
-    key: null,
-    ascending: true,
-  };
-  const readVendorsSortFromStorage = (): VendorsSortState => {
-    try {
-      const raw = localStorage.getItem(VENDORS_SORT_STORAGE_KEY);
-      if (!raw) return VENDORS_SORT_SSR_INITIAL;
-      const o = JSON.parse(raw) as Partial<VendorsSortState>;
-      const k = o.key;
-      if (k != null && k !== "name") return VENDORS_SORT_SSR_INITIAL;
-      return {
-        key: (k as VendorsSortKey | null) ?? null,
-        ascending: typeof o.ascending === "boolean" ? o.ascending : true,
-      };
-    } catch {
-      return VENDORS_SORT_SSR_INITIAL;
-    }
-  };
-  const [vendorsSort, setVendorsSort] = useState<VendorsSortState>(
-    VENDORS_SORT_SSR_INITIAL,
-  );
-  useEffect(() => {
-    setVendorsSort(readVendorsSortFromStorage());
   }, []);
 
   // 固定ヘッダーの高さ管理
@@ -438,41 +391,6 @@ export default function ItemsPage() {
   }, [activeTab, selectedTenantId]);
 
   // =========================================================
-  // Vendorsタブのデータ取得
-  // =========================================================
-  useEffect(() => {
-    if (activeTab !== "vendors") return;
-    // selectedTenantIdが設定されるまで待つ
-    if (!selectedTenantId) return;
-
-    const fetchData = async () => {
-      try {
-        setLoadingVendors(true);
-        const vendorsData = await vendorsAPI.getAll();
-        const vendorsUI: VendorUI[] = vendorsData.map((vendor) => ({
-          id: vendor.id,
-          name: vendor.name,
-          created_at: vendor.created_at,
-        }));
-        setVendorsUI(vendorsUI);
-        setOriginalVendors(JSON.parse(JSON.stringify(vendorsUI)));
-      } catch (error) {
-        console.error("Failed to fetch data:", error);
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.includes("Forbidden: Insufficient permissions")) {
-          setPermissionDenied(true);
-        } else {
-          alert("データの取得に失敗しました");
-        }
-      } finally {
-        setLoadingVendors(false);
-      }
-    };
-
-    fetchData();
-  }, [activeTab, selectedTenantId]);
-
-  // =========================================================
   // Itemsタブのハンドラー（vendor_productsテーブルを操作）
   // =========================================================
   const handleEditClickItems = () => {
@@ -582,9 +500,8 @@ export default function ItemsPage() {
           return;
         }
 
-        const bulkResult = await vendorProductsAPI.recordManualPricesBulk(
-          operations,
-        );
+        const bulkResult =
+          await vendorProductsAPI.recordManualPricesBulk(operations);
         const changedVendorProductIds = bulkResult.changed_vendor_product_ids;
 
         saveChangeHistory({
@@ -977,7 +894,7 @@ export default function ItemsPage() {
             alert(
               `"${
                 item.name?.trim() || "(untitled)"
-              }" has Specific weight selected but no value was entered.\n\nEnter a positive number or switch to None before saving.`,
+              }" has By liquid specific weight selected but no value was entered.\n\nEnter a positive number or switch to Solid item weight before saving.`,
             );
             setLoadingBaseItems(false);
             return;
@@ -986,7 +903,7 @@ export default function ItemsPage() {
             alert(
               `"${
                 item.name?.trim() || "(untitled)"
-              }": Specific weight cannot be 0 (it would make cost calculations invalid).\n\nEnter a positive number or switch to None before saving.`,
+              }": By liquid specific weight cannot be 0 (it would make cost calculations invalid).\n\nEnter a positive number or switch to Solid item weight before saving.`,
             );
             setLoadingBaseItems(false);
             return;
@@ -998,7 +915,7 @@ export default function ItemsPage() {
             alert(
               `"${
                 item.name?.trim() || "(untitled)"
-              }" has Each (g) selected but no value was entered.\n\nEnter a positive number or switch to None before saving.`,
+              }" has By each (g) selected but no value was entered.\n\nEnter a positive number or switch to Solid item weight before saving.`,
             );
             setLoadingBaseItems(false);
             return;
@@ -1007,7 +924,7 @@ export default function ItemsPage() {
             alert(
               `"${
                 item.name?.trim() || "(untitled)"
-              }": Each (g) cannot be 0 (it would make cost calculations invalid).\n\nEnter a positive number or switch to None before saving.`,
+              }": By each (g) cannot be 0 (it would make cost calculations invalid).\n\nEnter a positive number or switch to Solid item weight before saving.`,
             );
             setLoadingBaseItems(false);
             return;
@@ -1107,32 +1024,57 @@ export default function ItemsPage() {
       const changedBaseItemIds: string[] = [];
       const changedItemIds: string[] = [];
 
+      // raw items を一度だけ取得して、base_item_id で参照できるようにする
+      const rawItemsData = await itemsAPI.getAll({ item_kind: "raw" });
+      const rawItemByBaseItemId = new Map(
+        rawItemsData
+          .filter((i) => i.base_item_id)
+          .map((i) => [i.base_item_id as string, i]),
+      );
+
       for (const item of filteredBaseItems) {
         let baseItemId: string;
+        const desiredSpecificWeight = item.specific_weight ?? null;
+        const desiredEachGrams = item.each_grams ?? null;
 
         if (item.isNew) {
           // Base Itemを作成
           const newBaseItem = await baseItemsAPI.create({
             name: item.name,
-            specific_weight: item.specific_weight ?? null,
+            specific_weight: desiredSpecificWeight,
           });
           baseItemId = newBaseItem.id;
           changedBaseItemIds.push(baseItemId);
-        } else {
-          // Base Itemを更新
-          await baseItemsAPI.update(item.id, {
-            name: item.name,
-            specific_weight: item.specific_weight ?? null,
+          const newItem = await itemsAPI.create({
+            name: null, // Raw Itemのnameはnull（Base Itemのnameを使用）
+            item_kind: "raw",
+            is_menu_item: false,
+            base_item_id: baseItemId,
+            each_grams: desiredEachGrams,
           });
+          changedItemIds.push(newItem.id);
+          continue;
+        } else {
+          const original = originalBaseItems.find((o) => o.id === item.id);
+          if (!original) continue;
+          const originalSpecificWeight = original.specific_weight ?? null;
+          const hasBaseItemChange =
+            original.name !== item.name ||
+            originalSpecificWeight !== desiredSpecificWeight;
+
+          // Base Itemは差分がある場合のみ更新
+          if (hasBaseItemChange) {
+            await baseItemsAPI.update(item.id, {
+              name: item.name,
+              specific_weight: desiredSpecificWeight,
+            });
+            changedBaseItemIds.push(item.id);
+          }
           baseItemId = item.id;
-          changedBaseItemIds.push(baseItemId);
         }
 
         // 対応するitemsレコードを取得または作成
-        const itemsData = await itemsAPI.getAll({ item_kind: "raw" });
-        let correspondingItem = itemsData.find(
-          (i) => i.base_item_id === baseItemId,
-        );
+        const correspondingItem = rawItemByBaseItemId.get(baseItemId);
 
         // itemsレコードが存在しない場合は作成（Raw Itemのnameはnull）
         if (!correspondingItem) {
@@ -1141,17 +1083,22 @@ export default function ItemsPage() {
             item_kind: "raw",
             is_menu_item: false,
             base_item_id: baseItemId,
-            each_grams: item.each_grams ?? null,
+            each_grams: desiredEachGrams,
           });
-          correspondingItem = newItem;
           changedItemIds.push(newItem.id);
+          rawItemByBaseItemId.set(baseItemId, newItem);
         } else {
-          // itemsレコードが存在する場合は、each_gramsのみ更新（nameは更新しない）
-          if (item.each_grams !== undefined) {
+          // itemsレコードが存在する場合は、each_gramsに差分がある時のみ更新（nameは更新しない）
+          const currentEachGrams = correspondingItem.each_grams ?? null;
+          if (currentEachGrams !== desiredEachGrams) {
             await itemsAPI.update(correspondingItem.id, {
-              each_grams: item.each_grams ?? null,
+              each_grams: desiredEachGrams,
             });
             changedItemIds.push(correspondingItem.id);
+            rawItemByBaseItemId.set(baseItemId, {
+              ...correspondingItem,
+              each_grams: desiredEachGrams,
+            });
           }
         }
       }
@@ -1297,93 +1244,6 @@ export default function ItemsPage() {
   };
 
   // =========================================================
-  // Vendorsタブのハンドラー
-  // =========================================================
-  const handleEditClickVendors = () => {
-    setOriginalVendors(JSON.parse(JSON.stringify(vendorsUI)));
-    setIsEditModeVendors(true);
-  };
-
-  const handleCancelClickVendors = () => {
-    setVendorsUI(JSON.parse(JSON.stringify(originalVendors)));
-    setIsEditModeVendors(false);
-  };
-
-  const handleSaveClickVendors = async () => {
-    try {
-      setLoadingVendors(true);
-
-      const filteredVendors = vendorsUI.filter((vendor) => {
-        if (vendor.isMarkedForDeletion) return false;
-        if (vendor.isNew && vendor.name.trim() === "") return false;
-        return true;
-      });
-
-      for (const vendor of filteredVendors) {
-        if (vendor.isNew) {
-          await vendorsAPI.create({ name: vendor.name });
-        } else {
-          await vendorsAPI.update(vendor.id, { name: vendor.name });
-        }
-      }
-
-      for (const vendor of vendorsUI) {
-        if (vendor.isMarkedForDeletion && !vendor.isNew) {
-          await vendorsAPI.delete(vendor.id);
-        }
-      }
-
-      const vendorsData = await vendorsAPI.getAll();
-      const vendorsUIUpdated: VendorUI[] = vendorsData.map((vendor) => ({
-        id: vendor.id,
-        name: vendor.name,
-        created_at: vendor.created_at,
-      }));
-
-      setVendorsUI(vendorsUIUpdated);
-      setOriginalVendors(JSON.parse(JSON.stringify(vendorsUIUpdated)));
-      setIsEditModeVendors(false);
-    } catch (error: unknown) {
-      console.error("Failed to save:", error);
-      const message = error instanceof Error ? error.message : String(error);
-      alert(`保存に失敗しました: ${message}`);
-    } finally {
-      setLoadingVendors(false);
-    }
-  };
-
-  const handleVendorChange = (
-    id: string,
-    field: keyof VendorUI,
-    value: string,
-  ) => {
-    setVendorsUI(
-      vendorsUI.map((vendor) =>
-        vendor.id === id ? { ...vendor, [field]: value } : vendor,
-      ),
-    );
-  };
-
-  const handleDeleteClickVendors = (id: string) => {
-    setVendorsUI(
-      vendorsUI.map((vendor) =>
-        vendor.id === id
-          ? { ...vendor, isMarkedForDeletion: !vendor.isMarkedForDeletion }
-          : vendor,
-      ),
-    );
-  };
-
-  const handleAddClickVendors = () => {
-    const newVendor: VendorUI = {
-      id: `new-${Date.now()}`,
-      name: "",
-      isNew: true,
-    };
-    setVendorsUI([...vendorsUI, newVendor]);
-  };
-
-  // =========================================================
   // レンダリング
   // =========================================================
   // 未使用の関数と変数を削除
@@ -1395,10 +1255,6 @@ export default function ItemsPage() {
 
   // const getLastBaseItemId = () => {
   //   return baseItemsUI.length > 0 ? baseItemsUI[baseItemsUI.length - 1].id : "";
-  // };
-
-  // const getLastVendorId = () => {
-  //   return vendorsUI.length > 0 ? vendorsUI[vendorsUI.length - 1].id : "";
   // };
 
   // Base ItemsとVendorsのオプション（SearchableSelect用）
@@ -1415,29 +1271,25 @@ export default function ItemsPage() {
   // 現在のタブのEditモード
   const isEditMode =
     (activeTab === "items" && (isEditModeItems || isRecordPriceModeItems)) ||
-    (activeTab === "raw-items" && isEditModeBaseItems) ||
-    (activeTab === "vendors" && isEditModeVendors);
+    (activeTab === "raw-items" && isEditModeBaseItems);
 
   const isHeaderSaveCancelDisabled =
     saveActionPending ||
     (activeTab === "items" &&
       loadingItems &&
       (isEditModeItems || isRecordPriceModeItems)) ||
-    (activeTab === "raw-items" && loadingBaseItems && isEditModeBaseItems) ||
-    (activeTab === "vendors" && loadingVendors && isEditModeVendors);
+    (activeTab === "raw-items" && loadingBaseItems && isEditModeBaseItems);
 
   /** タブのデータ取得 or Save 実行中（Manual record を含む通常モードの Edit 押下も抑止） */
   const isActiveTabBusy =
     saveActionPending ||
     (activeTab === "items" && loadingItems) ||
-    (activeTab === "raw-items" && loadingBaseItems) ||
-    (activeTab === "vendors" && loadingVendors);
+    (activeTab === "raw-items" && loadingBaseItems);
 
   // Edit/Save/Cancelボタンのハンドラー
   const handleEditClick = () => {
     if (activeTab === "items") handleEditClickItems();
     else if (activeTab === "raw-items") handleEditClickBaseItems();
-    else if (activeTab === "vendors") handleEditClickVendors();
   };
 
   const handleRecordNewPriceClick = () => {
@@ -1447,7 +1299,6 @@ export default function ItemsPage() {
   const handleCancelClick = () => {
     if (activeTab === "items") handleCancelClickItems();
     else if (activeTab === "raw-items") handleCancelClickBaseItems();
-    else if (activeTab === "vendors") handleCancelClickVendors();
   };
 
   const handleSaveClick = () => {
@@ -1456,7 +1307,6 @@ export default function ItemsPage() {
       try {
         if (activeTab === "items") await handleSaveClickItems();
         else if (activeTab === "raw-items") await handleSaveClickBaseItems();
-        else if (activeTab === "vendors") await handleSaveClickVendors();
       } finally {
         setSaveActionPending(false);
       }
@@ -1548,42 +1398,6 @@ export default function ItemsPage() {
     return [...existingRows, ...draftRows];
   })();
 
-  const compareVendorsUIForSort = (a: VendorUI, b: VendorUI): number => {
-    const { key, ascending } = vendorsSort;
-    const dir = ascending ? 1 : -1;
-    if (key === null) {
-      return a.id.localeCompare(b.id);
-    }
-    const cmp = (a.name ?? "")
-      .trim()
-      .localeCompare((b.name ?? "").trim(), undefined, {
-        sensitivity: "base",
-      });
-    if (cmp !== 0) return dir * cmp;
-    return a.id.localeCompare(b.id);
-  };
-
-  const sortedVendorsUI = (() => {
-    const stable = [...vendorsUI];
-    const draftRows = stable.filter((vendor) => vendor.isNew);
-    const existingRows = stable.filter((vendor) => !vendor.isNew);
-    existingRows.sort(compareVendorsUIForSort);
-    return [...existingRows, ...draftRows];
-  })();
-
-  const handleVendorsNameSortClick = () => {
-    setVendorsSort((prev) => {
-      const next: VendorsSortState =
-        prev.key !== "name"
-          ? { key: "name", ascending: true }
-          : { key: "name", ascending: !prev.ascending };
-      if (typeof window !== "undefined") {
-        localStorage.setItem(VENDORS_SORT_STORAGE_KEY, JSON.stringify(next));
-      }
-      return next;
-    });
-  };
-
   const handleBaseItemsNameSortClick = () => {
     setBaseItemsSort((prev) => {
       const next: BaseItemsSortState =
@@ -1658,18 +1472,6 @@ export default function ItemsPage() {
                 }`}
               >
                 Base Items
-              </button>
-              <button
-                onClick={() => setActiveTab("vendors")}
-                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                  activeTab === "vendors"
-                    ? "border-blue-500 text-blue-600"
-                    : isDark
-                      ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
-                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-                }`}
-              >
-                Vendors
               </button>
             </nav>
           </div>
@@ -2322,7 +2124,7 @@ export default function ItemsPage() {
                                             0;
                                         if (isDisabled) {
                                           disabledReason =
-                                            "Please set specific_weight in the Base Items tab";
+                                            "Please set by liquid specific weight (g/ml) in the Base Items tab";
                                         }
                                       }
 
@@ -2830,7 +2632,7 @@ export default function ItemsPage() {
                         }`}
                         style={{ width: "20%" }}
                       >
-                        NONE
+                        SOLID ITEM WEIGHT
                       </th>
                       <th
                         className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
@@ -2839,14 +2641,15 @@ export default function ItemsPage() {
                         style={{ width: "25%" }}
                       >
                         <div className="flex items-center gap-1">
-                          <span>SPECIFIC WEIGHT (g/ml)</span>
+                          <span>BY LIQUID SPECIFIC WEIGHT (g/ml)</span>
                           <div className="relative group">
                             <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center text-gray-400 text-xs cursor-help">
                               ?
                             </div>
                             <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
-                              Specific weight for volume-based items (e.g.,
-                              liquids, powders). Used to convert ml to grams.
+                              By liquid specific weight: for volume-based items
+                              (e.g., liquids, powders). Used to convert ml to
+                              grams.
                             </div>
                           </div>
                         </div>
@@ -2858,7 +2661,7 @@ export default function ItemsPage() {
                         style={{ width: "25%" }}
                       >
                         <div className="flex items-center gap-1">
-                          <span>EACH (g)</span>
+                          <span>BY EACH (g)</span>
                           <div className="relative group">
                             <div
                               className={`w-4 h-4 rounded-full border flex items-center justify-center text-xs cursor-help ${
@@ -2967,7 +2770,7 @@ export default function ItemsPage() {
                           </div>
                         </td>
 
-                        {/* NONE */}
+                        {/* Solid item weight */}
                         <td
                           className="px-6 whitespace-nowrap"
                           style={{
@@ -3002,7 +2805,7 @@ export default function ItemsPage() {
                           </div>
                         </td>
 
-                        {/* Specific Weight */}
+                        {/* By liquid specific weight */}
                         <td
                           className="px-6 whitespace-nowrap"
                           style={{
@@ -3137,7 +2940,7 @@ export default function ItemsPage() {
                           </div>
                         </td>
 
-                        {/* Each (g) */}
+                        {/* By each (g) */}
                         <td
                           className="px-6 whitespace-nowrap"
                           style={{
@@ -3323,238 +3126,6 @@ export default function ItemsPage() {
                           >
                             <Plus className="w-5 h-5" />
                             <span>Add new base item</span>
-                          </button>
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Vendorsタブ */}
-        {activeTab === "vendors" && (
-          <>
-            {loadingVendors ? (
-              <div
-                className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
-                  isDark
-                    ? "bg-slate-800 border-slate-700 text-slate-300"
-                    : "bg-white border-gray-200"
-                }`}
-              >
-                Loading...
-              </div>
-            ) : (
-              <div
-                className={`rounded-lg shadow-sm border transition-colors ${
-                  isDark
-                    ? "bg-slate-800 border-slate-700"
-                    : "bg-white border-gray-200"
-                }`}
-              >
-                <table
-                  className="w-full"
-                  style={{ tableLayout: "fixed", width: "100%" }}
-                >
-                  <thead
-                    className={`border-b transition-colors sticky z-10 ${
-                      isDark
-                        ? "bg-slate-700 border-slate-600"
-                        : "bg-gray-50 border-gray-200"
-                    }`}
-                    style={{ top: `${fixedHeaderHeight}px` }}
-                  >
-                    <tr>
-                      <th
-                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
-                          isDark ? "text-slate-300" : "text-gray-500"
-                        }`}
-                        style={{ width: "100%" }}
-                      >
-                        <button
-                          type="button"
-                          onClick={handleVendorsNameSortClick}
-                          className={`flex w-full min-w-0 justify-start text-left text-xs font-medium uppercase tracking-wider ${
-                            isDark
-                              ? "text-slate-300 hover:text-slate-100"
-                              : "text-gray-500 hover:text-gray-800"
-                          }`}
-                        >
-                          <span className="flex min-w-0 max-w-full items-center gap-1.5">
-                            <span className="min-w-0 truncate">Name</span>
-                            {vendorsSort.key === "name" ? (
-                              vendorsSort.ascending ? (
-                                <ChevronUp
-                                  className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-100" : "text-gray-800"}`}
-                                  aria-hidden
-                                />
-                              ) : (
-                                <ChevronDown
-                                  className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-100" : "text-gray-800"}`}
-                                  aria-hidden
-                                />
-                              )
-                            ) : (
-                              <ChevronDown
-                                className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-500" : "text-gray-400"}`}
-                                aria-hidden
-                              />
-                            )}
-                          </span>
-                        </button>
-                      </th>
-                      {isEditModeVendors && (
-                        <th
-                          className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider w-16 ${
-                            isDark ? "text-slate-300" : "text-gray-500"
-                          }`}
-                        >
-                          {/* ゴミ箱列のヘッダー */}
-                        </th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody
-                    className={`divide-y transition-colors ${
-                      isDark ? "divide-slate-700" : "divide-gray-200"
-                    }`}
-                  >
-                    {sortedVendorsUI.map((vendor) => (
-                      <tr
-                        key={vendor.id}
-                        className={`transition-colors ${
-                          vendor.isMarkedForDeletion
-                            ? isDark
-                              ? "bg-red-900/30"
-                              : "bg-red-50"
-                            : ""
-                        } ${
-                          isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
-                        }`}
-                        style={{
-                          height: "52px",
-                          minHeight: "52px",
-                          maxHeight: "52px",
-                        }}
-                      >
-                        {/* Name */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            {isEditModeVendors ? (
-                              <input
-                                type="text"
-                                value={vendor.name}
-                                onChange={(e) =>
-                                  handleVendorChange(
-                                    vendor.id,
-                                    "name",
-                                    e.target.value,
-                                  )
-                                }
-                                className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                  isDark
-                                    ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
-                                    : "border-gray-300"
-                                }`}
-                                placeholder="Vendor name"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              />
-                            ) : (
-                              <div
-                                className={`text-sm ${
-                                  isDark ? "text-slate-100" : "text-gray-900"
-                                }`}
-                                style={{ height: "20px", lineHeight: "20px" }}
-                              >
-                                {vendor.name}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* ゴミ箱 */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          {isEditModeVendors && (
-                            <button
-                              onClick={() =>
-                                handleDeleteClickVendors(vendor.id)
-                              }
-                              className={`p-2 rounded-md transition-colors ${
-                                vendor.isMarkedForDeletion
-                                  ? "bg-red-500 text-white hover:bg-red-600"
-                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                              }`}
-                              style={{
-                                height: "20px",
-                                minHeight: "20px",
-                                maxHeight: "20px",
-                                boxSizing: "border-box",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                padding: "0",
-                              }}
-                              title="Mark for deletion"
-                            >
-                              <Trash2 className="w-5 h-5" />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-
-                    {/* プラスマーク行 */}
-                    {isEditModeVendors && (
-                      <tr>
-                        <td
-                          colSpan={isEditModeVendors ? 2 : 1}
-                          className="px-6"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <button
-                            onClick={handleAddClickVendors}
-                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                          >
-                            <Plus className="w-5 h-5" />
-                            <span>Add new vendor</span>
                           </button>
                         </td>
                       </tr>

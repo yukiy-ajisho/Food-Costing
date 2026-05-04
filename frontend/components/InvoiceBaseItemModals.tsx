@@ -20,7 +20,7 @@ const inputStyle: CSSProperties = {
 function SpecificWeightHeader({ isDark }: { isDark: boolean }) {
   return (
     <div className="flex items-center gap-1">
-      <span>SPECIFIC WEIGHT (g/ml)</span>
+      <span>BY LIQUID SPECIFIC WEIGHT (g/ml)</span>
       <div className="group relative">
         <div
           className={`flex h-4 w-4 cursor-help items-center justify-center rounded-full border text-xs ${
@@ -32,8 +32,8 @@ function SpecificWeightHeader({ isDark }: { isDark: boolean }) {
           ?
         </div>
         <div className="invisible absolute left-0 top-full z-50 mt-1 w-64 rounded bg-gray-800 p-2 text-xs text-white opacity-0 shadow-lg transition-opacity group-hover:visible group-hover:opacity-100">
-          Specific weight for volume-based items (e.g., liquids, powders). Used
-          to convert ml to grams.
+          By liquid specific weight: for volume-based items (e.g., liquids,
+          powders). Used to convert ml to grams.
         </div>
       </div>
     </div>
@@ -43,7 +43,7 @@ function SpecificWeightHeader({ isDark }: { isDark: boolean }) {
 function EachHeader({ isDark }: { isDark: boolean }) {
   return (
     <div className="flex items-center gap-1">
-      <span>EACH (g)</span>
+      <span>BY EACH (g)</span>
       <div className="group relative">
         <div
           className={`flex h-4 w-4 cursor-help items-center justify-center rounded-full border text-xs ${
@@ -129,7 +129,7 @@ export function InvoiceBaseItemQuickEditModal({
   const handleSave = async () => {
     const sw = specificWeight.trim() === "" ? null : Number(specificWeight);
     if (sw != null && (Number.isNaN(sw) || sw <= 0)) {
-      alert("Specific weight must be a positive number.");
+      alert("Liquid specific weight (g/ml) must be a positive number.");
       return;
     }
     setSaving(true);
@@ -178,8 +178,8 @@ export function InvoiceBaseItemQuickEditModal({
           <p
             className={`mb-3 text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}
           >
-            Same layout as the Base items tab. Name is read-only; adjust
-            specific weight for non-mass invoice lines.
+            Same layout as the Base items tab. Name is read-only; set by
+            liquid specific weight (g/ml) for non-mass invoice lines.
           </p>
           <div
             className={`min-w-0 overflow-x-hidden rounded-lg border shadow-sm transition-colors ${
@@ -199,7 +199,7 @@ export function InvoiceBaseItemQuickEditModal({
                   <th
                     className={`w-[12%] px-3 py-3 text-left text-xs font-medium uppercase tracking-wider ${thMuted}`}
                   >
-                    NONE
+                    SOLID ITEM WEIGHT
                   </th>
                   <th
                     className={`w-[40%] px-3 py-3 text-left text-xs font-medium tracking-wider whitespace-normal ${thMuted}`}
@@ -361,12 +361,14 @@ export function InvoiceNewBaseItemModal({ open, onClose, onCreated }: NewProps) 
     if (kind === "specific_weight") {
       const raw = specificWeight.trim();
       if (raw === "") {
-        alert("Enter a specific weight or choose None.");
+        alert(
+          "Enter liquid specific weight (g/ml), or choose Solid item weight.",
+        );
         return;
       }
       const n = Number(raw);
       if (Number.isNaN(n) || n <= 0) {
-        alert("Specific weight must be a positive number.");
+        alert("Liquid specific weight (g/ml) must be a positive number.");
         return;
       }
       sw = n;
@@ -438,7 +440,7 @@ export function InvoiceNewBaseItemModal({ open, onClose, onCreated }: NewProps) 
                     className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${thMuted}`}
                     style={{ width: "20%" }}
                   >
-                    NONE
+                    SOLID ITEM WEIGHT
                   </th>
                   <th
                     className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${thMuted}`}

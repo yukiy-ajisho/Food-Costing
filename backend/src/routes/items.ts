@@ -58,18 +58,14 @@ router.get(
         );
         const otherItems = data.filter((item) => item.item_kind !== "prepped");
 
-        // 自分が作ったPrepped Items（user_idまたはresponsible_user_idが自分）
+        // 自分が責任者の Prepped Items（owner 判定は responsible_user_id に統一）
         const ownPreppedItems = preppedItems.filter(
-          (item) =>
-            item.user_id === req.user!.id ||
-            item.responsible_user_id === req.user!.id,
+          (item) => item.responsible_user_id === req.user!.id,
         );
 
-        // 自分が作ったものではないPrepped Items
+        // 自分が責任者ではない Prepped Items
         const otherPreppedItems = preppedItems.filter(
-          (item) =>
-            item.user_id !== req.user!.id &&
-            item.responsible_user_id !== req.user!.id,
+          (item) => item.responsible_user_id !== req.user!.id,
         );
 
         // resource_sharesから共有されているPrepped Itemsを一括取得（パフォーマンス最適化）

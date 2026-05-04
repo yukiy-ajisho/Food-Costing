@@ -1,25 +1,38 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { Edit, Plus, Save, Trash2, X } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
 import {
   documentMetadataInvoicesAPI,
   type DocumentMetadataInvoiceRow,
 } from "@/lib/api/document-metadata-invoices";
+import { vendorsAPI } from "@/lib/api";
 import { openPresignedDocumentInNewTab } from "@/lib/open-presigned-document";
 
-type TabType = "invoices";
+type TabType = "vendors-list" | "invoices";
+interface VendorUI {
+  id: string;
+  name: string;
+  created_at?: string;
+  isMarkedForDeletion?: boolean;
+  isNew?: boolean;
+}
 
 export default function VendorsPage() {
   const { theme } = useTheme();
   const { selectedTenantId, loading: tenantLoading } = useTenant();
   const isDark = theme === "dark";
 
-  const [activeTab, setActiveTab] = useState<TabType>("invoices");
+  const [activeTab, setActiveTab] = useState<TabType>("vendors-list");
   const [invoices, setInvoices] = useState<DocumentMetadataInvoiceRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadingInvoices, setLoadingInvoices] = useState(false);
+  const [invoicesError, setInvoicesError] = useState<string | null>(null);
+  const [vendorsUI, setVendorsUI] = useState<VendorUI[]>([]);
+  const [originalVendors, setOriginalVendors] = useState<VendorUI[]>([]);
+  const [loadingVendors, setLoadingVendors] = useState(false);
+  const [isEditModeVendors, setIsEditModeVendors] = useState(false);
 
   const border = isDark ? "border-slate-700" : "border-gray-200";
   const bg = isDark ? "bg-slate-800" : "bg-white";
@@ -36,15 +49,34 @@ export default function VendorsPage() {
 
   const fetchInvoices = useCallback(async () => {
     if (!selectedTenantId) return;
-    setLoading(true);
-    setError(null);
+    setLoadingInvoices(true);
+    setInvoicesError(null);
     try {
       const data = await documentMetadataInvoicesAPI.list();
       setInvoices(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load invoices");
+      setInvoicesError(e instanceof Error ? e.message : "Failed to load invoices");
     } finally {
-      setLoading(false);
+      setLoadingInvoices(false);
+    }
+  }, [selectedTenantId]);
+
+  const fetchVendors = useCallback(async () => {
+    if (!selectedTenantId) return;
+    setLoadingVendors(true);
+    try {
+      const vendorsData = await vendorsAPI.getAll();
+      const mapped: VendorUI[] = vendorsData.map((vendor) => ({
+        id: vendor.id,
+        name: vendor.name,
+        created_at: vendor.created_at,
+      }));
+      setVendorsUI(mapped);
+      setOriginalVendors(JSON.parse(JSON.stringify(mapped)));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Failed to load vendors");
+    } finally {
+      setLoadingVendors(false);
     }
   }, [selectedTenantId]);
 
@@ -52,12 +84,83 @@ export default function VendorsPage() {
     if (activeTab === "invoices" && selectedTenantId) {
       void fetchInvoices();
     }
-  }, [activeTab, selectedTenantId, fetchInvoices]);
+    if (activeTab === "vendors-list" && selectedTenantId) {
+      void fetchVendors();
+    }
+  }, [activeTab, selectedTenantId, fetchInvoices, fetchVendors]);
 
   const handleOpenInvoice = (row: DocumentMetadataInvoiceRow) => {
     openPresignedDocumentInNewTab(() =>
       documentMetadataInvoicesAPI.getDocumentUrl(row.value)
     );
+  };
+
+  const handleEditClickVendors = () => {
+    setOriginalVendors(JSON.parse(JSON.stringify(vendorsUI)));
+    setIsEditModeVendors(true);
+  };
+
+  const handleCancelClickVendors = () => {
+    setVendorsUI(JSON.parse(JSON.stringify(originalVendors)));
+    setIsEditModeVendors(false);
+  };
+
+  const handleSaveClickVendors = async () => {
+    try {
+      setLoadingVendors(true);
+      const filteredVendors = vendorsUI.filter((vendor) => {
+        if (vendor.isMarkedForDeletion) return false;
+        if (vendor.isNew && vendor.name.trim() === "") return false;
+        return true;
+      });
+
+      for (const vendor of filteredVendors) {
+        if (vendor.isNew) {
+          await vendorsAPI.create({ name: vendor.name });
+        } else {
+          await vendorsAPI.update(vendor.id, { name: vendor.name });
+        }
+      }
+
+      for (const vendor of vendorsUI) {
+        if (vendor.isMarkedForDeletion && !vendor.isNew) {
+          await vendorsAPI.delete(vendor.id);
+        }
+      }
+
+      await fetchVendors();
+      setIsEditModeVendors(false);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      alert(`Failed to save: ${message}`);
+    } finally {
+      setLoadingVendors(false);
+    }
+  };
+
+  const handleVendorChange = (id: string, value: string) => {
+    setVendorsUI((prev) =>
+      prev.map((vendor) => (vendor.id === id ? { ...vendor, name: value } : vendor)),
+    );
+  };
+
+  const handleDeleteClickVendors = (id: string) => {
+    setVendorsUI((prev) =>
+      prev.map((vendor) =>
+        vendor.id === id
+          ? { ...vendor, isMarkedForDeletion: !vendor.isMarkedForDeletion }
+          : vendor,
+      ),
+    );
+  };
+
+  const handleAddClickVendors = () => {
+    const newVendor: VendorUI = {
+      id: `new-${Date.now()}`,
+      name: "",
+      isNew: true,
+    };
+    setVendorsUI((prev) => [...prev, newVendor]);
   };
 
   if (tenantLoading) {
@@ -75,6 +178,15 @@ export default function VendorsPage() {
         <div className={`flex border-b mb-6 ${border}`}>
           <button
             type="button"
+            onClick={() => setActiveTab("vendors-list")}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === "vendors-list" ? tabActive : tabInactive
+            }`}
+          >
+            Vendors List
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab("invoices")}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               activeTab === "invoices" ? tabActive : tabInactive
@@ -87,13 +199,13 @@ export default function VendorsPage() {
         {/* Invoices タブ */}
         {activeTab === "invoices" && (
           <div className={`rounded-lg border ${border} ${bg} overflow-hidden`}>
-            {loading ? (
+            {loadingInvoices ? (
               <div className={`flex items-center justify-center h-40 ${textMuted}`}>
                 Loading…
               </div>
-            ) : error ? (
+            ) : invoicesError ? (
               <div className="flex items-center justify-center h-40 text-red-500 text-sm">
-                {error}
+                {invoicesError}
               </div>
             ) : invoices.length === 0 ? (
               <div className={`flex items-center justify-center h-40 text-sm ${textMuted}`}>
@@ -169,6 +281,149 @@ export default function VendorsPage() {
               </table>
             )}
           </div>
+        )}
+
+        {activeTab === "vendors-list" && (
+          <>
+            <div className="flex justify-end items-center mb-4 gap-2">
+              {isEditModeVendors ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleCancelClickVendors}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                      isDark
+                        ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    }`}
+                  >
+                    <X className="w-5 h-5" />
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveClickVendors()}
+                    disabled={loadingVendors}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    <Save className="w-5 h-5" />
+                    Save
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleEditClickVendors}
+                  className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
+                    isDark
+                      ? "bg-slate-600 hover:bg-slate-500"
+                      : "bg-gray-600 hover:bg-gray-700"
+                  }`}
+                >
+                  <Edit className="w-5 h-5" />
+                  Edit
+                </button>
+              )}
+            </div>
+            <div className={`rounded-lg border ${border} ${bg} overflow-hidden`}>
+              {loadingVendors ? (
+                <div className={`flex items-center justify-center h-40 ${textMuted}`}>
+                  Loading…
+                </div>
+              ) : (
+                <table className="w-full text-sm table-fixed">
+                  <thead
+                    className={`border-b ${
+                      isDark
+                        ? "bg-slate-700 border-slate-600"
+                        : "bg-gray-50 border-gray-200"
+                    }`}
+                  >
+                    <tr>
+                      <th
+                        className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${thCls}`}
+                      >
+                        Name
+                      </th>
+                      {isEditModeVendors && (
+                        <th
+                          className={`px-4 py-3 w-16 text-left text-xs font-medium uppercase tracking-wider ${thCls}`}
+                        />
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody
+                    className={`divide-y ${
+                      isDark ? "divide-slate-700" : "divide-gray-200"
+                    }`}
+                  >
+                    {vendorsUI.map((vendor) => (
+                      <tr
+                        key={vendor.id}
+                        className={`transition-colors ${
+                          vendor.isMarkedForDeletion
+                            ? isDark
+                              ? "bg-red-900/30"
+                              : "bg-red-50"
+                            : rowHover
+                        }`}
+                      >
+                        <td className="px-4 py-3">
+                          {isEditModeVendors ? (
+                            <input
+                              type="text"
+                              value={vendor.name}
+                              onChange={(e) =>
+                                handleVendorChange(vendor.id, e.target.value)
+                              }
+                              className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors px-2 py-1 ${
+                                isDark
+                                  ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                  : "border-gray-300 text-gray-900"
+                              }`}
+                              placeholder="Vendor name"
+                            />
+                          ) : (
+                            <span className={textPrimary}>{vendor.name}</span>
+                          )}
+                        </td>
+                        {isEditModeVendors && (
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteClickVendors(vendor.id)}
+                              className={`p-2 rounded-md transition-colors ${
+                                vendor.isMarkedForDeletion
+                                  ? "bg-red-500 text-white hover:bg-red-600"
+                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                              }`}
+                              title="Mark for deletion"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                    {isEditModeVendors && (
+                      <tr>
+                        <td colSpan={2} className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={handleAddClickVendors}
+                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                          >
+                            <Plus className="w-5 h-5" />
+                            <span>Add new vendor</span>
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>

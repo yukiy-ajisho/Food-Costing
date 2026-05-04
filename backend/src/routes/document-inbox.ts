@@ -5,7 +5,7 @@
  */
 import { Router } from "express";
 import { supabase } from "../config/supabase";
-import { getDocumentPresignedUrl } from "../lib/r2-upload";
+import { deleteObjectFromR2, getDocumentPresignedUrl } from "../lib/r2-upload";
 import { UnifiedCompanyAction } from "../authz/unified/authorize";
 import { unifiedAuthorizationMiddleware } from "../middleware/unified-authorization";
 import { getUnifiedTenantResource } from "../middleware/unified-resource-helpers";
@@ -332,6 +332,67 @@ router.post(
       });
       if (marked.ok === false) {
         return res.status(500).json({ error: marked.error });
+      }
+
+      res.json({ ok: true });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  }
+);
+
+/**
+ * DELETE /document-inbox/:id
+ * Document Box から inbox 行を物理削除（R2 オブジェクトも削除）
+ */
+router.delete(
+  "/:id",
+  unifiedAuthorizationMiddleware(
+    UnifiedCompanyAction.manage_tenant_team,
+    getUnifiedTenantResource
+  ),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const selectedTenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+      if (!selectedTenantId) {
+        return res.status(400).json({ error: "No tenant associated" });
+      }
+
+      const { data: inbox, error: inboxErr } = await supabase
+        .from("document_inbox")
+        .select("id, value")
+        .eq("id", id)
+        .eq("tenant_id", selectedTenantId)
+        .maybeSingle();
+
+      if (inboxErr) {
+        return res.status(500).json({ error: inboxErr.message });
+      }
+      if (!inbox) {
+        return res.status(404).json({ error: "Inbox row not found" });
+      }
+
+      const { error: deleteErr } = await supabase
+        .from("document_inbox")
+        .delete()
+        .eq("id", id)
+        .eq("tenant_id", selectedTenantId);
+
+      if (deleteErr) {
+        return res.status(500).json({ error: deleteErr.message });
+      }
+
+      try {
+        await deleteObjectFromR2(inbox.value);
+      } catch (r2Err) {
+        console.warn("Failed to delete R2 object for document_inbox", {
+          inbox_id: id,
+          key: inbox.value,
+          error: r2Err instanceof Error ? r2Err.message : String(r2Err),
+        });
       }
 
       res.json({ ok: true });

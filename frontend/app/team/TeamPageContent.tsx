@@ -45,6 +45,7 @@ interface Invitation {
   email_status?: "delivered" | "failed" | null;
   created_at: string;
   expires_at: string;
+  accepted_at?: string | null;
 }
 
 interface CompanyMemberRow {
@@ -62,9 +63,18 @@ interface CompanyInvitationRow {
   email_status?: "delivered" | "failed" | null;
   created_at: string;
   expires_at: string;
+  accepted_at?: string | null;
 }
 
-export default function TeamPage() {
+type TeamSection = "all" | "company" | "tenant";
+
+interface TeamPageContentProps {
+  section?: TeamSection;
+}
+
+export default function TeamPageContent({
+  section = "all",
+}: TeamPageContentProps) {
   const { theme } = useTheme();
   const {
     companies,
@@ -128,6 +138,8 @@ export default function TeamPage() {
   const [sendingInviteDirector, setSendingInviteDirector] = useState(false);
 
   const isDark = theme === "dark";
+  const showCompanySection = section === "all" || section === "company";
+  const showTenantSection = section === "all" || section === "tenant";
 
   const selectedCompanyLabel = useMemo(() => {
     if (!selectedCompanyId) return null;
@@ -404,7 +416,6 @@ export default function TeamPage() {
   // 会社招待をキャンセル
   const handleCancelCompanyInvitation = async (invitationId: string) => {
     if (!selectedCompanyId) return;
-    if (!confirm("Cancel this invitation?")) return;
     try {
       await apiRequest(
         `/companies/${selectedCompanyId}/invitations/${invitationId}`,
@@ -422,6 +433,25 @@ export default function TeamPage() {
     }
   };
 
+  const handleDeleteCompanyInvitation = async (invitationId: string) => {
+    if (!selectedCompanyId) return;
+    try {
+      await apiRequest(
+        `/companies/${selectedCompanyId}/invitations/${invitationId}`,
+        { method: "DELETE" },
+      );
+      const data = await apiRequest<{
+        invitations: CompanyInvitationRow[];
+      }>(`/companies/${selectedCompanyId}/invitations`);
+      setCompanyInvitations(data.invitations ?? []);
+    } catch (error: unknown) {
+      const apiError = error as { details?: string; error?: string };
+      alert(
+        apiError.details || apiError.error || "Failed to delete invitation",
+      );
+    }
+  };
+
   // 統合ステータスを取得する関数
   const getDisplayStatus = (invitation: Invitation): string => {
     // 最終状態を優先
@@ -432,7 +462,7 @@ export default function TeamPage() {
     // pendingの場合、メール配信状態を表示
     if (invitation.status === "pending") {
       if (invitation.email_status === "failed") return "failed";
-      return "delivered"; // delivered または null
+      return "pending"; // delivered または null は pending 表示に統一
     }
 
     return "delivered"; // フォールバック
@@ -446,45 +476,14 @@ export default function TeamPage() {
     if (invitation.status === "canceled") return "canceled";
     if (invitation.status === "pending") {
       if (invitation.email_status === "failed") return "failed";
-      return "delivered";
+      return "pending";
     }
     return "delivered";
   };
 
-  // メンバーの役割を変更（成功時 true）
-  const handleChangeMemberRole = async (
-    tenantId: string,
-    userId: string,
-    newRole: "admin" | "director" | "manager" | "staff",
-  ): Promise<boolean> => {
-    try {
-      await apiRequest(
-        `/tenants/${tenantId}/members/${userId}/role`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ role: newRole }),
-        },
-        tenantId,
-      );
-
-      setTenantsWithMembers((prev) =>
-        prev.map((tenant) =>
-          tenant.id === tenantId
-            ? {
-                ...tenant,
-                members: tenant.members.map((m) =>
-                  m.user_id === userId ? { ...m, role: newRole } : m,
-                ),
-              }
-            : tenant,
-        ),
-      );
-      return true;
-    } catch (error) {
-      console.error("Failed to change member role:", error);
-      alert("Failed to change member role");
-      return false;
-    }
+  const formatAcceptedDate = (acceptedAt?: string | null) => {
+    if (!acceptedAt) return "--/--/--";
+    return new Date(acceptedAt).toLocaleDateString();
   };
 
   const cancelEditingTenantMembers = (tenantId: string) => {
@@ -582,16 +581,45 @@ export default function TeamPage() {
       cancelEditingTenantMembers(tenantId);
       return;
     }
+    const adminCount = [...draft.values()].filter((r) => r === "admin").length;
+    if (adminCount !== 1) return;
+    if (draft.size !== tenant.members.length) {
+      alert("Member list is out of sync; please refresh and try again.");
+      return;
+    }
+
     setSavingMemberEdits((prev) => new Set(prev).add(tenantId));
     try {
-      for (const m of tenant.members) {
-        const desired = draft.get(m.user_id);
-        if (desired != null && desired !== m.role) {
-          const ok = await handleChangeMemberRole(tenantId, m.user_id, desired);
-          if (!ok) return;
-        }
-      }
+      await apiRequest(
+        `/tenants/${tenantId}/members/roles`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ roles: Object.fromEntries(draft) }),
+        },
+        tenantId,
+      );
+
+      setTenantsWithMembers((prev) =>
+        prev.map((t) =>
+          t.id === tenantId
+            ? {
+                ...t,
+                members: t.members.map((m) => ({
+                  ...m,
+                  role: draft.get(m.user_id) ?? m.role,
+                })),
+              }
+            : t,
+        ),
+      );
       cancelEditingTenantMembers(tenantId);
+    } catch (error: unknown) {
+      console.error("Failed to save member roles:", error);
+      const msg =
+        error instanceof Error
+          ? error.message
+          : String(error);
+      alert(msg || "Failed to save member roles");
     } finally {
       setSavingMemberEdits((prev) => {
         const next = new Set(prev);
@@ -656,6 +684,40 @@ export default function TeamPage() {
     }
   };
 
+  const handleDeleteTenantInvitation = async (invitationId: string) => {
+    if (!teamSelectedTenantId) return;
+    try {
+      await apiRequest(
+        `/invite/${invitationId}`,
+        { method: "DELETE" },
+        teamSelectedTenantId,
+      );
+      await fetchInvitations();
+    } catch (error: unknown) {
+      const apiError = error as { details?: string; error?: string };
+      alert(
+        apiError.details || apiError.error || "Failed to delete invitation",
+      );
+    }
+  };
+
+  const handleCancelTenantInvitation = async (invitationId: string) => {
+    if (!teamSelectedTenantId) return;
+    try {
+      await apiRequest(
+        `/invite/${invitationId}`,
+        { method: "DELETE" },
+        teamSelectedTenantId,
+      );
+      await fetchInvitations();
+    } catch (error: unknown) {
+      const apiError = error as { details?: string; error?: string };
+      alert(
+        apiError.details || apiError.error || "Failed to cancel invitation",
+      );
+    }
+  };
+
   if (companyLoading) {
     return (
       <div className="p-8">
@@ -670,7 +732,7 @@ export default function TeamPage() {
     <div className="p-8">
       <div className="max-w-4xl mx-auto space-y-8">
         {/* Company カードの外: 追加用アクション */}
-        <div className="space-y-3">
+        {showCompanySection ? <div className="space-y-3">
           {companies.length > 0 ? (
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button
@@ -785,9 +847,11 @@ export default function TeamPage() {
                             {companyMembers.map((m) => {
                               const roleText =
                                 m.role === "company_admin"
-                                  ? "Admin"
-                                  : m.role === "director"
-                                    ? "Director"
+                                  ? "Company admin"
+                                  : m.role === "company_director"
+                                    ? "Company director"
+                                    : m.role === "director"
+                                      ? "Director"
                                     : m.role;
                               return (
                                 <div
@@ -830,9 +894,12 @@ export default function TeamPage() {
                                   <div className="flex items-center gap-4 shrink-0">
                                     <span
                                       className={`px-3 py-1 rounded text-sm font-medium capitalize ${
-                                        m.role === "company_admin" ||
-                                        m.role === "director"
+                                        m.role === "company_admin"
                                           ? "bg-red-100 text-red-800"
+                                          : m.role === "company_director"
+                                            ? "bg-sky-100 text-sky-800"
+                                            : m.role === "director"
+                                              ? "bg-red-100 text-red-800"
                                           : "bg-gray-100 text-gray-800"
                                       }`}
                                     >
@@ -997,6 +1064,18 @@ export default function TeamPage() {
                                         ).toLocaleDateString()}
                                       </div>
                                       <div
+                                        className={`text-sm mt-1 ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-500"
+                                        }`}
+                                      >
+                                        Accepted:{" "}
+                                        {formatAcceptedDate(
+                                          invitation.accepted_at,
+                                        )}
+                                      </div>
+                                      <div
                                         className={`text-xs mt-1 ${
                                           isDark
                                             ? "text-slate-400"
@@ -1055,7 +1134,19 @@ export default function TeamPage() {
                                         Failed
                                       </span>
                                     )}
-                                    {invitation.status === "pending" ? (
+                                    {displayStatus === "pending" && (
+                                      <span
+                                        className={`px-3 py-1 rounded text-sm font-medium ${
+                                          isDark
+                                            ? "bg-blue-900 text-blue-200"
+                                            : "bg-blue-100 text-blue-800"
+                                        }`}
+                                      >
+                                        Pending
+                                      </span>
+                                    )}
+                                    {invitation.status === "pending" &&
+                                    displayStatus !== "failed" ? (
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -1063,12 +1154,29 @@ export default function TeamPage() {
                                             invitation.id,
                                           )
                                         }
-                                        className="p-2 text-red-600 hover:text-red-700"
+                                        className={`px-1 py-1 text-sm font-medium ${
+                                          isDark
+                                            ? "text-red-300 hover:text-red-200"
+                                            : "text-red-600 hover:text-red-700"
+                                        }`}
                                         title="Cancel invitation"
                                       >
-                                        <X className="h-5 w-5" />
+                                        Cancel
                                       </button>
-                                    ) : null}
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleDeleteCompanyInvitation(
+                                            invitation.id,
+                                          )
+                                        }
+                                        className="p-2 text-red-600 hover:text-red-700"
+                                        title="Delete invitation"
+                                      >
+                                        <Trash2 className="h-5 w-5" />
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               );
@@ -1156,10 +1264,10 @@ export default function TeamPage() {
               )}
             </div>
           </div>
-        </div>
+        </div> : null}
 
         {/* Tenant（店舗／ロケーションのメンバー・招待） */}
-        <div className={teamSectionShell}>
+        {showTenantSection ? <div className={teamSectionShell}>
           <div className={`h-1 w-full ${tenantAccentBar}`} aria-hidden />
           <div className="p-6 space-y-6">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 min-w-0">
@@ -1261,6 +1369,14 @@ export default function TeamPage() {
                 const isAdmin =
                   tenant.role === "admin" || tenant.role === "director";
 
+                const roleDraft = memberRoleDrafts.get(tenant.id);
+                const adminCountInDraft =
+                  editingTenantMembers.has(tenant.id) && roleDraft
+                    ? [...roleDraft.values()].filter((r) => r === "admin")
+                        .length
+                    : 1;
+                const tenantRolesSaveValid = adminCountInDraft === 1;
+
                 return (
                   <div key={tenant.id} className="space-y-6">
                     {/* チームメンバーセクション */}
@@ -1278,52 +1394,73 @@ export default function TeamPage() {
                           Team Members ({tenant.members.length})
                         </h2>
                         {isAdmin && tenant.members.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-2">
-                            {editingTenantMembers.has(tenant.id) ? (
-                              <>
+                          <div className="flex flex-col items-end gap-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {editingTenantMembers.has(tenant.id) ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void saveTenantMemberEdits(tenant.id)
+                                    }
+                                    disabled={
+                                      savingMemberEdits.has(tenant.id) ||
+                                      !tenantRolesSaveValid
+                                    }
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                                      isDark
+                                        ? "bg-green-600 hover:bg-green-700 text-white disabled:bg-slate-600"
+                                        : "bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-400"
+                                    }`}
+                                  >
+                                    <Save className="h-4 w-4" />
+                                    {savingMemberEdits.has(tenant.id)
+                                      ? "Saving…"
+                                      : "Save"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      cancelEditingTenantMembers(tenant.id)
+                                    }
+                                    disabled={savingMemberEdits.has(
+                                      tenant.id,
+                                    )}
+                                    className={teamOutlineActionButtonClass}
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    void saveTenantMemberEdits(tenant.id)
+                                    beginEditingTenantMembers(
+                                      tenant.id,
+                                      tenant.members,
+                                    )
                                   }
-                                  disabled={savingMemberEdits.has(tenant.id)}
-                                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+                                  className={`flex items-center gap-2 px-4 py-2 text-white rounded-lg transition-colors ${
                                     isDark
-                                      ? "bg-green-600 hover:bg-green-700 text-white disabled:bg-slate-600"
-                                      : "bg-green-600 hover:bg-green-700 text-white disabled:bg-gray-400"
+                                      ? "bg-slate-600 hover:bg-slate-500"
+                                      : "bg-gray-600 hover:bg-gray-700"
                                   }`}
                                 >
-                                  <Save className="h-4 w-4" />
-                                  {savingMemberEdits.has(tenant.id)
-                                    ? "Saving…"
-                                    : "Save"}
+                                  <Edit className="w-5 h-5" />
+                                  Edit
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    cancelEditingTenantMembers(tenant.id)
-                                  }
-                                  disabled={savingMemberEdits.has(tenant.id)}
-                                  className={teamOutlineActionButtonClass}
+                              )}
+                            </div>
+                            {editingTenantMembers.has(tenant.id) &&
+                              !tenantRolesSaveValid && (
+                                <p
+                                  className={`text-sm max-w-xs text-right ${
+                                    isDark ? "text-red-300" : "text-red-600"
+                                  }`}
                                 >
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  beginEditingTenantMembers(
-                                    tenant.id,
-                                    tenant.members,
-                                  )
-                                }
-                                className={teamOutlineActionButtonClass}
-                              >
-                                <Edit className="h-4 w-4" />
-                                Edit
-                              </button>
-                            )}
+                                  Tenant must have exactly one admin.
+                                </p>
+                              )}
                           </div>
                         )}
                       </div>
@@ -1444,9 +1581,9 @@ export default function TeamPage() {
                                     className={`px-3 py-1 rounded text-sm font-medium capitalize ${
                                       member.role === "admin" ||
                                       member.role === "director"
-                                        ? "bg-red-100 text-red-800"
+                                        ? "bg-sky-100 text-sky-800"
                                         : member.role === "manager"
-                                          ? "bg-blue-100 text-blue-800"
+                                          ? "bg-violet-100 text-violet-800"
                                           : "bg-gray-100 text-gray-800"
                                     }`}
                                   >
@@ -1694,6 +1831,18 @@ export default function TeamPage() {
                                           invitation.created_at,
                                         ).toLocaleDateString()}
                                       </div>
+                                      <div
+                                        className={`text-xs mt-1 ${
+                                          isDark
+                                            ? "text-slate-400"
+                                            : "text-gray-500"
+                                        }`}
+                                      >
+                                        Accepted:{" "}
+                                        {formatAcceptedDate(
+                                          invitation.accepted_at,
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-4">
@@ -1742,6 +1891,51 @@ export default function TeamPage() {
                                         Failed
                                       </span>
                                     )}
+                                    {displayStatus === "pending" && (
+                                      <span
+                                        className={`px-3 py-1 rounded text-sm font-medium ${
+                                          isDark
+                                            ? "bg-blue-900 text-blue-200"
+                                            : "bg-blue-100 text-blue-800"
+                                        }`}
+                                      >
+                                        Pending
+                                      </span>
+                                    )}
+                                    {invitation.status === "pending" &&
+                                      displayStatus !== "failed" && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleCancelTenantInvitation(
+                                              invitation.id,
+                                            )
+                                          }
+                                          className={`px-1 py-1 text-sm font-medium ${
+                                            isDark
+                                              ? "text-red-300 hover:text-red-200"
+                                              : "text-red-600 hover:text-red-700"
+                                          }`}
+                                          title="Cancel invitation"
+                                        >
+                                          Cancel
+                                        </button>
+                                      )}
+                                    {(invitation.status !== "pending" ||
+                                      displayStatus === "failed") && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleDeleteTenantInvitation(
+                                            invitation.id,
+                                          )
+                                        }
+                                        className="p-2 text-red-600 hover:text-red-700"
+                                        title="Delete invitation"
+                                      >
+                                        <Trash2 className="h-5 w-5" />
+                                      </button>
+                                    )}
                                     {/* deliveredは表示しない（正常な状態） */}
                                   </div>
                                 </div>
@@ -1755,7 +1949,7 @@ export default function TeamPage() {
                 );
               })}
           </div>
-        </div>
+        </div> : null}
 
         {/* Create Company Modal */}
         {showCreateCompanyModal && (

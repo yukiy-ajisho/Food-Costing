@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { UploadCloud } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { SearchableSelect } from "@/components/SearchableSelect";
@@ -33,8 +33,6 @@ import {
 import { mergePdfFiles } from "@/lib/merge-pdfs";
 
 const STEPS = ["Upload", "Review lines", "Match", "Confirm"] as const;
-
-const MAX_STALE_POPUP_STACK = 10;
 
 type MatchMode = "new" | "existing";
 
@@ -177,7 +175,7 @@ function suggestBaseItemIdFromProductName(
     purchaseUnit,
   );
   if (isNonMassUnit(purchaseUnit)) {
-    const ok = opts.find((o) => o.matchCandidate && !o.warningDot);
+    const ok = opts.find((o) => o.matchCandidate && !o.disabled);
     return ok?.id ?? "";
   }
   const matched = opts.find((o) => o.matchCandidate);
@@ -193,7 +191,7 @@ function buildBaseItemSelectOptions(
   name: string;
   searchText: string;
   matchCandidate: boolean;
-  warningDot?: boolean;
+  disabled?: boolean;
 }[] {
   const p = normText(productName);
   const warnRows = isNonMassUnit(invoicePurchaseUnit);
@@ -219,7 +217,7 @@ function buildBaseItemSelectOptions(
       name: b.name,
       searchText: b.name,
       matchCandidate: bn.length > 0 && p.includes(bn),
-      warningDot: warningDot ? true : undefined,
+      disabled: warningDot ? true : undefined,
     };
   });
 }
@@ -311,7 +309,8 @@ function buildLinkExistingOptions(
       name: `${baseName} — ${pn}`,
       subLabel: `${vp.purchase_quantity} ${vp.purchase_unit}${vp.case_unit != null ? ` · ${vp.case_unit}/cs` : ""} · $${Number(vp.current_price).toFixed(2)}`,
       searchText: searchText || pn,
-      matchCandidate: score > 0,
+      // Keep ranking/auto-selection logic, but do not highlight rows in yellow.
+      matchCandidate: false,
     };
   });
 }
@@ -489,8 +488,7 @@ function parseGeminiItem(item: unknown): InvoiceDraftRow {
 /** Same line key for duplicate detection (purchase_unit distinguishes e.g. L vs g). */
 function fingerprintInvoiceLineRaw(item: unknown): string {
   const row = parseGeminiItem(item);
-  const price =
-    Math.round(Number(row.current_price) * 10000) / 10000;
+  const price = Math.round(Number(row.current_price) * 10000) / 10000;
   return JSON.stringify({
     p: normText(row.product_name),
     b: normText(row.brand_name),
@@ -511,7 +509,9 @@ function parseYyyyMmDd(raw: unknown): string {
 }
 
 /** Local calendar YYYY-MM-DD from an ISO timestamp (browser timezone). */
-function calendarYmdFromIsoLocal(iso: string | null | undefined): string | null {
+function calendarYmdFromIsoLocal(
+  iso: string | null | undefined,
+): string | null {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
@@ -532,17 +532,6 @@ function rowIsStaleInvoiceWarning(
   const vYmd = calendarYmdFromIsoLocal(vvp?.updated_at);
   if (!vYmd) return false;
   return group.invoiceDate < vYmd;
-}
-
-function findRowInGroups(
-  groups: InvoiceVendorGroup[],
-  localId: string,
-): { group: InvoiceVendorGroup; row: InvoiceDraftRow } | null {
-  for (const g of groups) {
-    const r = g.rows.find((x) => x.localId === localId);
-    if (r) return { group: g, row: r };
-  }
-  return null;
 }
 
 /** Confirm step: Existing rows show master VVP identity; New rows use invoice draft. */
@@ -673,12 +662,11 @@ export function InvoiceImportModal({
     null,
   );
   const [newBaseItemModalOpen, setNewBaseItemModalOpen] = useState(false);
+  const [step3ValidationAttempted, setStep3ValidationAttempted] =
+    useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragDepthRef = useRef(0);
-  const [acknowledgedStaleRows, setAcknowledgedStaleRows] = useState<
-    string[]
-  >([]);
   const prevStepRef = useRef(step);
 
   const bumpGroupVendorLoading = useCallback((groupLocalId: string) => {
@@ -709,7 +697,6 @@ export function InvoiceImportModal({
     dragDepthRef.current = 0;
     setIsDragging(false);
     setGroupVendorSyncLoading({});
-    setAcknowledgedStaleRows([]);
     prevStepRef.current = 1;
   }, [open]);
 
@@ -729,7 +716,7 @@ export function InvoiceImportModal({
         const { url } = fromInbox
           ? await documentInboxAPI.getDocumentUrl(initialDocumentValue)
           : await documentMetadataInvoicesAPI.getDocumentUrl(
-              initialDocumentValue
+              initialDocumentValue,
             );
         const res = await fetch(url);
         if (!res.ok) throw new Error("Failed to fetch document from storage");
@@ -737,7 +724,7 @@ export function InvoiceImportModal({
         const fetchedFile = new File(
           [blob],
           initialDocumentValue.split("/").pop() ?? "invoice",
-          { type: blob.type || "application/pdf" }
+          { type: blob.type || "application/pdf" },
         );
         if (cancelled) return;
         setSourcePdfFiles([fetchedFile]);
@@ -755,7 +742,7 @@ export function InvoiceImportModal({
       } catch (e: unknown) {
         if (!cancelled) {
           setExtractError(
-            e instanceof Error ? e.message : "Failed to load document"
+            e instanceof Error ? e.message : "Failed to load document",
           );
         }
       } finally {
@@ -766,12 +753,11 @@ export function InvoiceImportModal({
     return () => {
       cancelled = true;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialDocumentId, initialInboxId, initialDocumentValue]);
 
   useEffect(() => {
     if (step === 4 && prevStepRef.current !== 4) {
-      setAcknowledgedStaleRows([]);
     }
     prevStepRef.current = step;
   }, [step]);
@@ -819,8 +805,7 @@ export function InvoiceImportModal({
   const addPdfFiles = useCallback((incoming: File[]) => {
     const pdfs = incoming.filter(
       (f) =>
-        f.type === "application/pdf" ||
-        f.name.toLowerCase().endsWith(".pdf"),
+        f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf"),
     );
     if (pdfs.length === 0) {
       setExtractError("Please choose PDF file(s).");
@@ -858,21 +843,6 @@ export function InvoiceImportModal({
   const newCount = allRows.filter((r) => r.matchMode === "new").length;
   const updateCount = allRows.filter((r) => r.matchMode === "existing").length;
 
-  const staleWarningRowIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const g of groups) {
-      for (const r of g.rows) {
-        if (rowIsStaleInvoiceWarning(r, g, vendorProducts)) ids.push(r.localId);
-      }
-    }
-    return ids;
-  }, [groups, vendorProducts]);
-
-  const staleRowsNeedingAck = staleWarningRowIds.filter(
-    (id) => !acknowledgedStaleRows.includes(id),
-  );
-  const visibleStalePopups = staleRowsNeedingAck.slice(0, MAX_STALE_POPUP_STACK);
-
   const step1CanClickNext = sourcePdfFiles.length > 0 && !extractLoading;
 
   const canGoStep3 =
@@ -904,6 +874,7 @@ export function InvoiceImportModal({
         r.matchMode === "new" ? r.base_item_id !== "" : r.linked_vvp_id !== "",
       ),
     );
+  const showStep3RequiredErrors = step === 3 && step3ValidationAttempted;
 
   const hasInvalidNonMassNewBaseItems = groups.some((g) =>
     g.rows.some((r) => isNewRowBaseItemInvalidForInvoice(r, baseItems)),
@@ -913,6 +884,12 @@ export function InvoiceImportModal({
     (step === 1 && !step1CanClickNext) ||
     (step === 2 && !canGoStep3) ||
     (step === 3 && !allGroupsHaveVendor);
+
+  useEffect(() => {
+    if (step !== 3 && step3ValidationAttempted) {
+      setStep3ValidationAttempted(false);
+    }
+  }, [step, step3ValidationAttempted]);
 
   const setGroupInvoiceDate = useCallback(
     (groupLocalId: string, invoiceDate: string) => {
@@ -1549,7 +1526,10 @@ export function InvoiceImportModal({
                               Unit
                             </th>
                             <th className={`px-2 py-2 text-left ${thCls}`}>
-                              Price <span className="text-xs font-normal opacity-50">/ piece</span>
+                              Price{" "}
+                              <span className="text-xs font-normal opacity-50">
+                                / piece
+                              </span>
                             </th>
                             <th className={`px-2 py-2 text-left ${thCls}`}>
                               Purchase
@@ -1557,174 +1537,184 @@ export function InvoiceImportModal({
                             <th className={`px-2 py-2 ${thCls}`} />
                           </tr>
                         </thead>
-                      <tbody>
-                        {g.rows.map((r, idx) => (
-                          <tr key={r.localId} className={`border-t ${border}`}>
-                            <td className="px-2 py-1.5">{idx + 1}</td>
-                            <td className="px-2 py-1.5">
-                              <input
-                                className={`w-full rounded border px-2 py-1 text-sm ${inputCls}`}
-                                value={r.product_name}
-                                onChange={(e) =>
-                                  updateRow(r.localId, {
-                                    product_name: e.target.value,
-                                  })
-                                }
-                              />
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <input
-                                className={`w-full rounded border px-2 py-1 text-sm ${inputCls}`}
-                                value={r.brand_name}
-                                onChange={(e) =>
-                                  updateRow(r.localId, {
-                                    brand_name: e.target.value,
-                                  })
-                                }
-                              />
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <input
-                                type="number"
-                                min={0.0001}
-                                step="any"
-                                className={`w-20 rounded border px-2 py-1 text-sm ${inputCls}`}
-                                value={r.purchase_quantity}
-                                onChange={(e) =>
-                                  updateRow(r.localId, {
-                                    purchase_quantity: Number(e.target.value),
-                                  })
-                                }
-                              />
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <select
-                                className={`rounded border px-2 py-1 text-sm ${inputCls}`}
-                                value={r.purchase_unit}
-                                onChange={(e) =>
-                                  updateRow(r.localId, {
-                                    purchase_unit: e.target.value,
-                                  })
-                                }
-                              >
-                                {unitOptions.map((u) => (
-                                  <option key={u} value={u}>
-                                    {u}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <input
-                                type="number"
-                                min={0.01}
-                                step="any"
-                                className={`w-24 rounded border px-2 py-1 text-sm ${inputCls}`}
-                                value={r.current_price || ""}
-                                onChange={(e) =>
-                                  updateRow(r.localId, {
-                                    current_price: Number(e.target.value),
-                                  })
-                                }
-                              />
-                            </td>
-                            <td className="px-2 py-1.5">
-                              <div className="flex flex-col gap-1">
-                                <select
-                                  className={`rounded border px-1 py-0.5 text-xs ${inputCls}`}
-                                  value={r.purchaseMode}
-                                  onChange={(e) => {
-                                    const mode = e.target.value as PurchaseMode;
+                        <tbody>
+                          {g.rows.map((r, idx) => (
+                            <tr
+                              key={r.localId}
+                              className={`border-t ${border}`}
+                            >
+                              <td className="px-2 py-1.5">{idx + 1}</td>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  className={`w-full rounded border px-2 py-1 text-sm ${inputCls}`}
+                                  value={r.product_name}
+                                  onChange={(e) =>
                                     updateRow(r.localId, {
-                                      purchaseMode: mode,
-                                      case_unit: mode === "loose" ? null : r.case_unit,
-                                      case_purchased: mode === "loose" ? null : r.case_purchased,
-                                      unit_purchased:
-                                        mode === "case"
-                                          ? null
-                                          : (r.unit_purchased ?? 1),
-                                    });
-                                  }}
+                                      product_name: e.target.value,
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  className={`w-full rounded border px-2 py-1 text-sm ${inputCls}`}
+                                  value={r.brand_name}
+                                  onChange={(e) =>
+                                    updateRow(r.localId, {
+                                      brand_name: e.target.value,
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  type="number"
+                                  min={0.0001}
+                                  step="any"
+                                  className={`w-20 rounded border px-2 py-1 text-sm ${inputCls}`}
+                                  value={r.purchase_quantity}
+                                  onChange={(e) =>
+                                    updateRow(r.localId, {
+                                      purchase_quantity: Number(e.target.value),
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <select
+                                  className={`rounded border px-2 py-1 text-sm ${inputCls}`}
+                                  value={r.purchase_unit}
+                                  onChange={(e) =>
+                                    updateRow(r.localId, {
+                                      purchase_unit: e.target.value,
+                                    })
+                                  }
                                 >
-                                  <option value="loose">Loose</option>
-                                  <option value="case">Case</option>
-                                  <option value="mixed">Mixed</option>
+                                  {unitOptions.map((u) => (
+                                    <option key={u} value={u}>
+                                      {u}
+                                    </option>
+                                  ))}
                                 </select>
-                                {(r.purchaseMode === "case" ||
-                                  r.purchaseMode === "mixed") && (
-                                  <div className="flex items-center gap-1">
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      step={1}
-                                      placeholder="unit/cs"
-                                      title="Units per case"
-                                      className={`w-16 rounded border px-1 py-0.5 text-xs ${inputCls}`}
-                                      value={r.case_unit ?? ""}
-                                      onChange={(e) =>
-                                        updateRow(r.localId, {
-                                          case_unit:
-                                            e.target.value === ""
-                                              ? null
-                                              : parseInt(e.target.value, 10),
-                                        })
-                                      }
-                                    />
-                                    <span className="text-xs text-gray-400">×</span>
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      step={1}
-                                      placeholder="cs"
-                                      title="Cases purchased"
-                                      className={`w-12 rounded border px-1 py-0.5 text-xs ${inputCls}`}
-                                      value={r.case_purchased ?? ""}
-                                      onChange={(e) =>
-                                        updateRow(r.localId, {
-                                          case_purchased:
-                                            e.target.value === ""
-                                              ? null
-                                              : parseInt(e.target.value, 10),
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                )}
-                                {(r.purchaseMode === "loose" ||
-                                  r.purchaseMode === "mixed") && (
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    step={1}
-                                    placeholder="qty"
-                                    title="Units purchased"
-                                    className={`w-16 rounded border px-1 py-0.5 text-xs ${inputCls}`}
-                                    value={r.unit_purchased ?? ""}
-                                    onChange={(e) =>
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input
+                                  type="number"
+                                  min={0.01}
+                                  step="any"
+                                  className={`w-24 rounded border px-2 py-1 text-sm ${inputCls}`}
+                                  value={r.current_price || ""}
+                                  onChange={(e) =>
+                                    updateRow(r.localId, {
+                                      current_price: Number(e.target.value),
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <div className="flex flex-col gap-1">
+                                  <select
+                                    className={`rounded border px-1 py-0.5 text-xs ${inputCls}`}
+                                    value={r.purchaseMode}
+                                    onChange={(e) => {
+                                      const mode = e.target
+                                        .value as PurchaseMode;
                                       updateRow(r.localId, {
-                                        unit_purchased:
-                                          e.target.value === ""
+                                        purchaseMode: mode,
+                                        case_unit:
+                                          mode === "loose" ? null : r.case_unit,
+                                        case_purchased:
+                                          mode === "loose"
                                             ? null
-                                            : parseInt(e.target.value, 10),
-                                      })
-                                    }
-                                  />
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-2 py-1.5 text-right">
-                              <button
-                                type="button"
-                                onClick={() => removeRow(r.localId)}
-                                className="text-red-500 hover:underline"
-                              >
-                                Remove
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                            : r.case_purchased,
+                                        unit_purchased:
+                                          mode === "case"
+                                            ? null
+                                            : (r.unit_purchased ?? 1),
+                                      });
+                                    }}
+                                  >
+                                    <option value="loose">Loose</option>
+                                    <option value="case">Case</option>
+                                    <option value="mixed">Mixed</option>
+                                  </select>
+                                  {(r.purchaseMode === "case" ||
+                                    r.purchaseMode === "mixed") && (
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        step={1}
+                                        placeholder="unit/cs"
+                                        title="Units per case"
+                                        className={`w-16 rounded border px-1 py-0.5 text-xs ${inputCls}`}
+                                        value={r.case_unit ?? ""}
+                                        onChange={(e) =>
+                                          updateRow(r.localId, {
+                                            case_unit:
+                                              e.target.value === ""
+                                                ? null
+                                                : parseInt(e.target.value, 10),
+                                          })
+                                        }
+                                      />
+                                      <span className="text-xs text-gray-400">
+                                        ×
+                                      </span>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        step={1}
+                                        placeholder="cs"
+                                        title="Cases purchased"
+                                        className={`w-12 rounded border px-1 py-0.5 text-xs ${inputCls}`}
+                                        value={r.case_purchased ?? ""}
+                                        onChange={(e) =>
+                                          updateRow(r.localId, {
+                                            case_purchased:
+                                              e.target.value === ""
+                                                ? null
+                                                : parseInt(e.target.value, 10),
+                                          })
+                                        }
+                                      />
+                                    </div>
+                                  )}
+                                  {(r.purchaseMode === "loose" ||
+                                    r.purchaseMode === "mixed") && (
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      step={1}
+                                      placeholder="qty"
+                                      title="Units purchased"
+                                      className={`w-16 rounded border px-1 py-0.5 text-xs ${inputCls}`}
+                                      value={r.unit_purchased ?? ""}
+                                      onChange={(e) =>
+                                        updateRow(r.localId, {
+                                          unit_purchased:
+                                            e.target.value === ""
+                                              ? null
+                                              : parseInt(e.target.value, 10),
+                                        })
+                                      }
+                                    />
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-2 py-1.5 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => removeRow(r.localId)}
+                                  className="text-red-500 hover:underline"
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>
@@ -1747,15 +1737,23 @@ export function InvoiceImportModal({
                     </p>
                     <div className="flex flex-wrap items-end gap-2">
                       <div className="min-w-[200px] flex-1">
-                        <SearchableSelect
-                          options={buildVendorSelectOptions(
-                            g.vendorNameHint,
-                            vendors,
-                          )}
-                          value={g.vendorId}
-                          onChange={(id) => setGroupVendorId(g.localId, id)}
-                          placeholder="Select vendor"
-                        />
+                        <div
+                          className={
+                            showStep3RequiredErrors && !g.vendorId
+                              ? "rounded-md ring-1 ring-red-500"
+                              : ""
+                          }
+                        >
+                          <SearchableSelect
+                            options={buildVendorSelectOptions(
+                              g.vendorNameHint,
+                              vendors,
+                            )}
+                            value={g.vendorId}
+                            onChange={(id) => setGroupVendorId(g.localId, id)}
+                            placeholder="Select vendor"
+                          />
+                        </div>
                       </div>
                       <button
                         type="button"
@@ -1787,13 +1785,13 @@ export function InvoiceImportModal({
                           <th
                             className={`min-w-[140px] px-2 py-2 text-left ${thCls}`}
                           >
-                            Match
+                            Vendor item
                           </th>
                           <th
                             className={`min-w-[260px] px-2 py-2 text-left ${thCls}`}
                           >
                             <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-                              Base item
+                              Link base item
                               <button
                                 type="button"
                                 onClick={() => setNewBaseItemModalOpen(true)}
@@ -1808,7 +1806,7 @@ export function InvoiceImportModal({
                           <th
                             className={`min-w-[280px] px-2 py-2 text-left ${thCls}`}
                           >
-                            Link existing
+                            Link existing vendor item
                           </th>
                         </tr>
                       </thead>
@@ -1905,20 +1903,30 @@ export function InvoiceImportModal({
                                   ) : (
                                     <div className="flex items-start gap-2">
                                       <div className="min-w-0 flex-1 space-y-1">
-                                        <SearchableSelect
-                                          options={buildBaseItemSelectOptions(
-                                            r.product_name,
-                                            activeBaseItems,
-                                            r.purchase_unit,
-                                          )}
-                                          value={r.base_item_id}
-                                          onChange={(id) =>
-                                            updateRow(r.localId, {
-                                              base_item_id: id,
-                                            })
+                                        <div
+                                          className={
+                                            showStep3RequiredErrors &&
+                                            r.matchMode === "new" &&
+                                            !r.base_item_id
+                                              ? "rounded-md ring-1 ring-red-500"
+                                              : ""
                                           }
-                                          placeholder="Select base item"
-                                        />
+                                        >
+                                          <SearchableSelect
+                                            options={buildBaseItemSelectOptions(
+                                              r.product_name,
+                                              activeBaseItems,
+                                              r.purchase_unit,
+                                            )}
+                                            value={r.base_item_id}
+                                            onChange={(id) =>
+                                              updateRow(r.localId, {
+                                                base_item_id: id,
+                                              })
+                                            }
+                                            placeholder="Select base item"
+                                          />
+                                        </div>
                                       </div>
                                       {isNonMassUnit(r.purchase_unit) &&
                                         Boolean(r.base_item_id) &&
@@ -1959,16 +1967,26 @@ export function InvoiceImportModal({
                                       No vendor items for this supplier
                                     </span>
                                   ) : (
-                                    <SearchableSelect
-                                      options={linkOpts}
-                                      value={r.linked_vvp_id}
-                                      onChange={(id) =>
-                                        updateRow(r.localId, {
-                                          linked_vvp_id: id,
-                                        })
+                                    <div
+                                      className={
+                                        showStep3RequiredErrors &&
+                                        r.matchMode === "existing" &&
+                                        !r.linked_vvp_id
+                                          ? "rounded-md ring-1 ring-red-500"
+                                          : ""
                                       }
-                                      placeholder="Select vendor item"
-                                    />
+                                    >
+                                      <SearchableSelect
+                                        options={linkOpts}
+                                        value={r.linked_vvp_id}
+                                        onChange={(id) =>
+                                          updateRow(r.localId, {
+                                            linked_vvp_id: id,
+                                          })
+                                        }
+                                        placeholder="Select vendor item"
+                                      />
+                                    </div>
                                   )
                                 ) : null}
                               </td>
@@ -1985,7 +2003,6 @@ export function InvoiceImportModal({
 
           {step === 4 && (
             <div className="space-y-6">
-              <p className="text-base font-medium">Confirm import</p>
               {groups.map((g) => (
                 <div
                   key={g.localId}
@@ -2021,13 +2038,9 @@ export function InvoiceImportModal({
                     <table className="w-full min-w-[640px] text-sm">
                       <thead>
                         <tr
-                          className={
-                            isDark ? "bg-slate-700/80" : "bg-gray-50"
-                          }
+                          className={isDark ? "bg-slate-700/80" : "bg-gray-50"}
                         >
-                          <th className={`px-2 py-2 text-left ${thCls}`}>
-                            #
-                          </th>
+                          <th className={`px-2 py-2 text-left ${thCls}`}>#</th>
                           <th className={`px-2 py-2 text-left ${thCls}`}>
                             Mode
                           </th>
@@ -2052,99 +2065,111 @@ export function InvoiceImportModal({
                             g,
                             vendorProducts,
                           );
-                          const rowBg = stale
-                            ? isDark
-                              ? "bg-amber-950/35"
-                              : "bg-amber-50"
-                            : "";
                           const confirmVvp = linkedVvpForConfirmRow(
                             r,
                             vendorProducts,
                           );
                           return (
-                            <tr
-                              key={r.localId}
-                              className={`border-t ${border} ${rowBg}`}
-                            >
-                              <td className="px-2 py-2 align-top">
-                                {idx + 1}
-                              </td>
-                              <td className="px-2 py-2 align-top">
-                                {r.matchMode === "new" ? "New" : "Existing"}
-                              </td>
-                              <td className="px-2 py-2 align-top">
-                                {confirmVvp ? (
-                                  <>
-                                    <div>
-                                      {confirmVvp.product_name?.trim() || "—"}
+                            <Fragment key={r.localId}>
+                              <tr className={`border-t ${border}`}>
+                                <td className="px-2 py-2 align-top">{idx + 1}</td>
+                                <td className="px-2 py-2 align-top">
+                                  {r.matchMode === "new" ? "New" : "Existing"}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  {confirmVvp ? (
+                                    <>
+                                      <div>
+                                        {confirmVvp.product_name?.trim() || "—"}
+                                      </div>
+                                      {confirmVvp.brand_name?.trim() ? (
+                                        <div className={`text-xs ${muted}`}>
+                                          {confirmVvp.brand_name}
+                                        </div>
+                                      ) : null}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div>{r.product_name || "—"}</div>
+                                      {r.brand_name ? (
+                                        <div className={`text-xs ${muted}`}>
+                                          {r.brand_name}
+                                        </div>
+                                      ) : null}
+                                    </>
+                                  )}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  {confirmVvp
+                                    ? `${confirmVvp.purchase_quantity} ${confirmVvp.purchase_unit}`
+                                    : `${r.purchase_quantity} ${r.purchase_unit}`}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  ${Number(r.current_price).toFixed(2)}
+                                </td>
+                                <td className="px-2 py-2 align-top">
+                                  {r.matchMode === "existing" ? (
+                                    <div className="flex flex-col gap-1">
+                                      <label className="inline-flex items-center gap-1.5">
+                                        <input
+                                          type="radio"
+                                          name={`price-act-${r.localId}`}
+                                          checked={
+                                            r.existingPriceAction ===
+                                            "use_invoice"
+                                          }
+                                          onChange={() =>
+                                            updateRow(r.localId, {
+                                              existingPriceAction:
+                                                "use_invoice",
+                                            })
+                                          }
+                                        />
+                                        <span>Use invoice price</span>
+                                      </label>
+                                      <label className="inline-flex items-center gap-1.5">
+                                        <input
+                                          type="radio"
+                                          name={`price-act-${r.localId}`}
+                                          checked={
+                                            r.existingPriceAction ===
+                                            "keep_current"
+                                          }
+                                          onChange={() =>
+                                            updateRow(r.localId, {
+                                              existingPriceAction:
+                                                "keep_current",
+                                            })
+                                          }
+                                        />
+                                        <span>
+                                          Keep current price in database
+                                        </span>
+                                      </label>
                                     </div>
-                                    {confirmVvp.brand_name?.trim() ? (
-                                      <div className={`text-xs ${muted}`}>
-                                        {confirmVvp.brand_name}
-                                      </div>
-                                    ) : null}
-                                  </>
-                                ) : (
-                                  <>
-                                    <div>{r.product_name || "—"}</div>
-                                    {r.brand_name ? (
-                                      <div className={`text-xs ${muted}`}>
-                                        {r.brand_name}
-                                      </div>
-                                    ) : null}
-                                  </>
-                                )}
-                              </td>
-                              <td className="px-2 py-2 align-top">
-                                {confirmVvp
-                                  ? `${confirmVvp.purchase_quantity} ${confirmVvp.purchase_unit}`
-                                  : `${r.purchase_quantity} ${r.purchase_unit}`}
-                              </td>
-                              <td className="px-2 py-2 align-top">
-                                ${Number(r.current_price).toFixed(2)}
-                              </td>
-                              <td className="px-2 py-2 align-top">
-                                {r.matchMode === "existing" ? (
-                                  <div className="flex flex-col gap-1">
-                                    <label className="inline-flex items-center gap-1.5">
-                                      <input
-                                        type="radio"
-                                        name={`price-act-${r.localId}`}
-                                        checked={
-                                          r.existingPriceAction ===
-                                          "use_invoice"
-                                        }
-                                        onChange={() =>
-                                          updateRow(r.localId, {
-                                            existingPriceAction: "use_invoice",
-                                          })
-                                        }
-                                      />
-                                      <span>Use invoice price</span>
-                                    </label>
-                                    <label className="inline-flex items-center gap-1.5">
-                                      <input
-                                        type="radio"
-                                        name={`price-act-${r.localId}`}
-                                        checked={
-                                          r.existingPriceAction ===
-                                          "keep_current"
-                                        }
-                                        onChange={() =>
-                                          updateRow(r.localId, {
-                                            existingPriceAction:
-                                              "keep_current",
-                                          })
-                                        }
-                                      />
-                                      <span>Keep current price</span>
-                                    </label>
-                                  </div>
-                                ) : (
-                                  <span className={muted}>—</span>
-                                )}
-                              </td>
-                            </tr>
+                                  ) : (
+                                    <span className={muted}>—</span>
+                                  )}
+                                </td>
+                              </tr>
+                              {stale ? (
+                                <tr className={isDark ? "bg-slate-900/10" : ""}>
+                                  <td className="px-2 py-1" />
+                                  <td
+                                    colSpan={2}
+                                    className={`px-2 py-1 text-xs ${
+                                      isDark ? "text-amber-300" : "text-amber-700"
+                                    }`}
+                                  >
+                                    Warning: Invoice date is before the last
+                                    displayed-price update on this vendor item.
+                                  </td>
+                                  <td className="px-2 py-1" />
+                                  <td className="px-2 py-1" />
+                                  <td className="px-2 py-1" />
+                                </tr>
+                              ) : null}
+                            </Fragment>
                           );
                         })}
                       </tbody>
@@ -2174,18 +2199,6 @@ export function InvoiceImportModal({
                   </>
                 ) : null}
               </p>
-              {staleRowsNeedingAck.length > 0 ? (
-                <p
-                  className={`rounded-lg border px-3 py-2 text-sm ${
-                    isDark
-                      ? "border-amber-800 bg-amber-950/40 text-amber-100"
-                      : "border-amber-200 bg-amber-50 text-amber-950"
-                  }`}
-                >
-                  Acknowledge all stale-invoice notices ({staleRowsNeedingAck.length}{" "}
-                  remaining) to enable Import.
-                </p>
-              ) : null}
             </div>
           )}
         </div>
@@ -2240,6 +2253,7 @@ export function InvoiceImportModal({
                     return;
                   }
                   if (step === 3) {
+                    setStep3ValidationAttempted(true);
                     if (!allGroupsHaveVendor) return;
                     if (!matchStep3StructuralComplete) {
                       alert(
@@ -2274,7 +2288,6 @@ export function InvoiceImportModal({
                 disabled={
                   importLoading ||
                   allRows.length === 0 ||
-                  staleRowsNeedingAck.length > 0 ||
                   allRows.some(
                     (r) =>
                       r.matchMode === "existing" &&
@@ -2289,55 +2302,6 @@ export function InvoiceImportModal({
           </div>
         </div>
       </div>
-
-      {step === 4 && visibleStalePopups.length > 0 ? (
-        <div
-          className="pointer-events-none fixed z-70 flex max-h-[min(70vh,520px)] w-[min(calc(100vw-2rem),22rem)] flex-col-reverse gap-2 overflow-y-auto"
-          style={{ bottom: "5.5rem", right: "1rem" }}
-        >
-          {visibleStalePopups.map((localId) => {
-            const found = findRowInGroups(groups, localId);
-            if (!found) return null;
-            const { row } = found;
-            const popupVvp = linkedVvpForConfirmRow(row, vendorProducts);
-            const popupItemLabel =
-              popupVvp?.product_name?.trim() ||
-              row.product_name?.trim() ||
-              "Line";
-            return (
-              <div
-                key={localId}
-                className={`pointer-events-auto rounded-lg border px-3 py-3 shadow-lg ${
-                  isDark
-                    ? "border-amber-700/80 bg-slate-800 text-slate-100"
-                    : "border-amber-200 bg-amber-50 text-gray-900"
-                }`}
-              >
-                <p className={`text-sm leading-relaxed ${muted}`}>
-                  Invoice:{" "}
-                  <strong>{popupItemLabel}</strong>. Invoice date is before the
-                  last displayed-price update on this vendor item.
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setAcknowledgedStaleRows((prev) =>
-                      prev.includes(localId) ? prev : [...prev, localId],
-                    )
-                  }
-                  className={`mt-3 w-full rounded-lg px-3 py-2 text-sm font-medium ${
-                    isDark
-                      ? "bg-amber-700 text-white hover:bg-amber-600"
-                      : "bg-amber-600 text-white hover:bg-amber-700"
-                  }`}
-                >
-                  OK
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
 
       <InvoiceBaseItemQuickEditModal
         open={quickEditBaseItemId != null}

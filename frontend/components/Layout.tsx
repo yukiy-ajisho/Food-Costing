@@ -33,10 +33,13 @@ const SIDEBAR_NAV_ROW_ALIGN = `${SIDEBAR_NAV_ROW_MIN} flex items-center gap-2`;
 /** Food costing / License 直下のサブリンク用（親より詰めて同じ密度に揃える） */
 const SIDEBAR_SUB_NAV_ROW_MIN = "min-h-11";
 const SIDEBAR_SUB_NAV_ROW_ALIGN = `${SIDEBAR_SUB_NAV_ROW_MIN} flex items-center gap-2`;
+const FOOD_COSTING_SUB_NAV_ROW_ALIGN = "min-h-8 flex items-center gap-2";
 
 /** 外側クリップ用の幅（内側レイアウト幅と一致） */
 const SIDEBAR_COLLAPSED_PX = 64;
 const SIDEBAR_EXPANDED_PX = 178;
+
+const SIDEBAR_MODE_STORAGE_KEY = "food_costing_sidebar_mode";
 
 /** Recipes / Items / History / Settings / Vendors いずれかのパスか */
 function isFoodCostingPath(pathname: string): boolean {
@@ -44,6 +47,7 @@ function isFoodCostingPath(pathname: string): boolean {
     pathname.startsWith("/cost") ||
     pathname.startsWith("/items") ||
     pathname.startsWith("/history") ||
+    pathname.startsWith("/labor") ||
     pathname.startsWith("/settings") ||
     pathname.startsWith("/vendors")
   );
@@ -55,15 +59,29 @@ const foodCostingSubItems = [
   { id: "items", label: "Items", href: "/items" },
   { id: "history", label: "History", href: "/history" },
   { id: "vendors", label: "Vendors", href: "/vendors" },
+  { id: "labor", label: "Labor", href: "/labor" },
   { id: "settings", label: "Settings", href: "/settings" },
 ];
 
-// Team（単体リンク）
+function isTeamPath(pathname: string): boolean {
+  return (
+    pathname === "/team" ||
+    pathname.startsWith("/team/company") ||
+    pathname.startsWith("/team/tenant")
+  );
+}
+
+// Team サブメニュー
+const teamSubItems = [
+  { id: "team-company", label: "Company", href: "/team/company" },
+  { id: "team-tenant", label: "Tenant", href: "/team/tenant" },
+] as const;
+
+// Team（親メニュー）
 const teamNavItem = {
   id: "team",
   label: "Team",
   icon: Users,
-  href: "/team",
 } as const;
 
 // License & certification のサブメニュー
@@ -100,6 +118,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
   const [licenseExpanded, setLicenseExpanded] = useState(false);
   const [foodCostingExpanded, setFoodCostingExpanded] = useState(false);
+  const [teamExpanded, setTeamExpanded] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
 
   const isFoodCostingSectionActive = isFoodCostingPath(pathname);
@@ -108,6 +127,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     pathname.startsWith("/employee-requirements") ||
     pathname.startsWith("/tenant-requirements") ||
     pathname.startsWith("/company-requirements");
+  const isTeamSectionActive = isTeamPath(pathname);
 
   // License 配下にいるときは開く／それ以外では閉じる（他ページ選択時はサブも畳む）
   useEffect(() => {
@@ -122,6 +142,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setFoodCostingExpanded(isFoodCostingPath(pathname));
   }, [pathname]);
+
+  // Team 配下にいるときは開く／それ以外では閉じる
+  useEffect(() => {
+    setTeamExpanded(isTeamPath(pathname));
+  }, [pathname]);
+
+  // サイドバー表示モード（ハンバーガー）をブラウザに永続化
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SIDEBAR_MODE_STORAGE_KEY);
+      if (raw === "compact" || raw === "full") {
+        setSidebarMode(raw);
+      }
+    } catch {
+      /* ignore quota / private mode */
+    }
+  }, []);
 
   // Document Box: 未承認件数（会社オフィサーのみ）
   useEffect(() => {
@@ -164,22 +201,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
       return "Tenant Requirements";
     if (pathname.startsWith("/company-requirements"))
       return "Company Requirements";
-    if (pathname.startsWith("/document-box")) return "Document Box";
+    if (pathname.startsWith("/document-box")) return "Uploaded Document Box";
     const foodItem = foodCostingSubItems.find(
       (item) => pathname === item.href || pathname.startsWith(item.href + "/"),
     );
     if (foodItem) return foodItem.label;
-    if (
-      pathname === teamNavItem.href ||
-      pathname.startsWith(teamNavItem.href + "/")
-    )
-      return teamNavItem.label;
+    const teamItem = teamSubItems.find(
+      (item) => pathname === item.href || pathname.startsWith(item.href + "/"),
+    );
+    if (teamItem) return teamItem.label;
+    if (pathname === "/team") return teamNavItem.label;
     return "Food Costing";
   };
 
   // サイドバーの表示モードを切り替え
   const toggleSidebarMode = () => {
-    setSidebarMode((prev) => (prev === "compact" ? "full" : "compact"));
+    setSidebarMode((prev) => {
+      const next = prev === "compact" ? "full" : "compact";
+      try {
+        localStorage.setItem(SIDEBAR_MODE_STORAGE_KEY, next);
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
   };
 
   // サイドバーの実際の表示状態を決定
@@ -307,431 +352,484 @@ export function Layout({ children }: { children: React.ReactNode }) {
               maxWidth: SIDEBAR_EXPANDED_PX,
             }}
           >
-          {/* ナビゲーション項目 */}
-          <nav className="flex-1 min-h-0 min-w-0 px-3 pb-3 overflow-hidden pt-6">
-            <div className="flex min-h-0 min-w-0 flex-col h-full gap-2">
-              {/* Food costing（クリックで開閉、サブで Recipes / Items / History / Settings） */}
-              <div className="flex flex-col gap-0">
-                <button
-                  type="button"
-                  onClick={() => setFoodCostingExpanded((e) => !e)}
-                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
-                    isFoodCostingSectionActive
-                      ? isDark
-                        ? "text-blue-400 font-semibold"
-                        : "text-blue-700 font-semibold"
-                      : isDark
-                        ? "text-slate-300 hover:text-blue-400"
-                        : "text-gray-600 hover:text-blue-700"
-                  }`}
-                  style={{
-                    backgroundColor: isDark ? "#1e293b" : "white",
-                    color: isFoodCostingSectionActive
-                      ? isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8"
-                      : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#334155"
-                      : "#dbeafe";
-                    e.currentTarget.style.color = isDark
-                      ? "#60a5fa"
-                      : "#1d4ed8";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#1e293b"
-                      : "white";
-                    e.currentTarget.style.color = isFoodCostingSectionActive
-                      ? isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8"
-                      : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280";
-                  }}
-                >
-                  <Utensils className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <>
-                      <span className="text-sm leading-tight text-left flex-1 min-w-0">
-                        Food
-                        <br />
-                        Costing
-                      </span>
-                      {foodCostingExpanded ? (
-                        <ChevronDown className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 shrink-0" />
-                      )}
-                    </>
-                  )}
-                </button>
-                {isSidebarExpanded &&
-                  foodCostingExpanded &&
-                  foodCostingSubItems.map((sub) => {
-                    const isActive =
-                      pathname === sub.href ||
-                      pathname.startsWith(sub.href + "/");
-                    return (
-                      <Link
-                        key={sub.id}
-                        href={sub.href}
-                        className={`w-full ${SIDEBAR_SUB_NAV_ROW_ALIGN} pl-9 pr-3 py-1.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
-                          isActive ? "font-semibold" : ""
-                        }`}
-                        style={{
-                          backgroundColor: isDark ? "#1e293b" : "white",
-                          color: isActive
-                            ? isDark
-                              ? "#60a5fa"
-                              : "#1d4ed8"
-                            : isDark
-                              ? "#94a3b8"
-                              : "#6b7280",
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = isDark
-                            ? "#334155"
-                            : "#dbeafe";
-                          e.currentTarget.style.color = isDark
-                            ? "#60a5fa"
-                            : "#1d4ed8";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = isDark
-                            ? "#1e293b"
-                            : "white";
-                          e.currentTarget.style.color = isActive
-                            ? isDark
-                              ? "#60a5fa"
-                              : "#1d4ed8"
-                            : isDark
-                              ? "#94a3b8"
-                              : "#6b7280";
-                        }}
-                      >
-                        {sub.label}
-                      </Link>
-                    );
-                  })}
-              </div>
-
-              {/* Team */}
-              <Link
-                key={teamNavItem.id}
-                href={teamNavItem.href}
-                className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
-                  pathname === teamNavItem.href ||
-                  pathname.startsWith(teamNavItem.href + "/")
-                    ? isDark
-                      ? "text-blue-400 font-semibold"
-                      : "text-blue-700 font-semibold"
-                    : isDark
-                      ? "text-slate-300 hover:text-blue-400"
-                      : "text-gray-600 hover:text-blue-700"
-                }`}
-                style={{
-                  backgroundColor: isDark ? "#1e293b" : "white",
-                  transition:
-                    "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
-                  color:
-                    pathname === teamNavItem.href ||
-                    pathname.startsWith(teamNavItem.href + "/")
-                      ? isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8"
-                      : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = isDark
-                    ? "#334155"
-                    : "#dbeafe";
-                  e.currentTarget.style.color = isDark ? "#60a5fa" : "#1d4ed8";
-                }}
-                onMouseLeave={(e) => {
-                  const teamActive =
-                    pathname === teamNavItem.href ||
-                    pathname.startsWith(teamNavItem.href + "/");
-                  e.currentTarget.style.backgroundColor = isDark
-                    ? "#1e293b"
-                    : "white";
-                  e.currentTarget.style.color = teamActive
-                    ? isDark
-                      ? "#60a5fa"
-                      : "#1d4ed8"
-                    : isDark
-                      ? "#cbd5e1"
-                      : "#6b7280";
-                }}
-              >
-                <TeamNavIcon className="h-5 w-5 shrink-0" />
-                {isSidebarExpanded && (
-                  <span className="text-sm whitespace-nowrap">
-                    {teamNavItem.label}
-                  </span>
-                )}
-              </Link>
-
-              {canAccessDocumentBox ? (
-                <Link
-                  href="/document-box"
-                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md`}
-                  style={{
-                    backgroundColor: isDark ? "#1e293b" : "white",
-                    transition:
-                      "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
-                    color: pathname.startsWith("/document-box")
-                      ? isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8"
-                      : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#334155"
-                      : "#dbeafe";
-                    e.currentTarget.style.color = isDark
-                      ? "#60a5fa"
-                      : "#1d4ed8";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#1e293b"
-                      : "white";
-                    e.currentTarget.style.color = pathname.startsWith(
-                      "/document-box"
-                    )
-                      ? isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8"
-                      : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280";
-                  }}
-                >
-                  <div className="relative shrink-0">
-                    <Inbox className="h-5 w-5" />
-                    {pendingCount > 0 && (
-                      <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white leading-none">
-                        {pendingCount > 9 ? "9+" : pendingCount}
-                      </span>
-                    )}
-                  </div>
-                  {isSidebarExpanded && (
-                    <span className="text-sm whitespace-nowrap">
-                      Document Box
-                    </span>
-                  )}
-                </Link>
-              ) : null}
-
-              {/* License & certification（クリックで開閉、サブの Requirements で遷移） */}
-              <div className="flex flex-col gap-0">
-                <button
-                  type="button"
-                  onClick={() => setLicenseExpanded((e) => !e)}
-                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
-                    isLicenseSectionActive
-                      ? isDark
-                        ? "text-blue-400 font-semibold"
-                        : "text-blue-700 font-semibold"
-                      : isDark
-                        ? "text-slate-300 hover:text-blue-400"
-                        : "text-gray-600 hover:text-blue-700"
-                  }`}
-                  style={{
-                    backgroundColor: isDark ? "#1e293b" : "white",
-                    color: isLicenseSectionActive
-                      ? isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8"
-                      : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#334155"
-                      : "#dbeafe";
-                    e.currentTarget.style.color = isDark
-                      ? "#60a5fa"
-                      : "#1d4ed8";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#1e293b"
-                      : "white";
-                    e.currentTarget.style.color = isLicenseSectionActive
-                      ? isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8"
-                      : isDark
-                        ? "#cbd5e1"
-                        : "#6b7280";
-                  }}
-                >
-                  <Award className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <>
-                      <span className="text-sm leading-tight text-left flex-1 min-w-0">
-                        <span className="whitespace-nowrap">License &</span>
-                        <br />
-                        certification
-                      </span>
-                      {licenseExpanded ? (
-                        <ChevronDown className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 shrink-0" />
-                      )}
-                    </>
-                  )}
-                </button>
-                {isSidebarExpanded &&
-                  licenseExpanded &&
-                  licenseSubItems.map((sub) => {
-                    const isActive =
-                      pathname === sub.href ||
-                      pathname.startsWith(sub.href + "/");
-                    return (
-                      <Link
-                        key={sub.id}
-                        href={sub.href}
-                        className={`w-full ${SIDEBAR_SUB_NAV_ROW_ALIGN} pl-9 pr-3 py-1.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
-                          isActive ? "font-semibold" : ""
-                        }`}
-                        style={{
-                          backgroundColor: isDark ? "#1e293b" : "white",
-                          color: isActive
-                            ? isDark
-                              ? "#60a5fa"
-                              : "#1d4ed8"
-                            : isDark
-                              ? "#94a3b8"
-                              : "#6b7280",
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = isDark
-                            ? "#334155"
-                            : "#dbeafe";
-                          e.currentTarget.style.color = isDark
-                            ? "#60a5fa"
-                            : "#1d4ed8";
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = isDark
-                            ? "#1e293b"
-                            : "white";
-                          e.currentTarget.style.color = isActive
-                            ? isDark
-                              ? "#60a5fa"
-                              : "#1d4ed8"
-                            : isDark
-                              ? "#94a3b8"
-                              : "#6b7280";
-                        }}
-                      >
-                        {sub.label}
-                      </Link>
-                    );
-                  })}
-              </div>
-
-              {/* System Admin Panel Link */}
-              {isSystemAdmin && (
-                <Link
-                  href="/admin"
-                  className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
-                    pathname === "/admin"
-                      ? isDark
-                        ? "text-blue-400 font-semibold"
-                        : "text-blue-700 font-semibold"
-                      : isDark
-                        ? "text-slate-300 hover:text-blue-400"
-                        : "text-gray-600 hover:text-blue-700"
-                  }`}
-                  style={{
-                    backgroundColor: isDark ? "#1e293b" : "white",
-                    transition:
-                      "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
-                    color:
-                      pathname === "/admin"
+            {/* ナビゲーション項目 */}
+            <nav className="flex-1 min-h-0 min-w-0 px-3 pb-3 overflow-hidden pt-6">
+              <div className="flex min-h-0 min-w-0 flex-col h-full gap-2">
+                {/* Food costing（クリックで開閉、サブで Recipes / Items / History / Settings） */}
+                <div className="flex flex-col gap-0">
+                  <button
+                    type="button"
+                    onClick={() => setFoodCostingExpanded((e) => !e)}
+                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                      isFoodCostingSectionActive
+                        ? isDark
+                          ? "text-blue-400 font-semibold"
+                          : "text-blue-700 font-semibold"
+                        : isDark
+                          ? "text-slate-300 hover:text-blue-400"
+                          : "text-gray-600 hover:text-blue-700"
+                    }`}
+                    style={{
+                      backgroundColor: isDark ? "#1e293b" : "white",
+                      color: isFoodCostingSectionActive
                         ? isDark
                           ? "#60a5fa"
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
                           : "#6b7280",
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#334155"
-                      : "#dbeafe";
-                    e.currentTarget.style.color = isDark
-                      ? "#60a5fa"
-                      : "#1d4ed8";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = isDark
-                      ? "#1e293b"
-                      : "white";
-                    e.currentTarget.style.color =
-                      pathname === "/admin"
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#334155"
+                        : "#dbeafe";
+                      e.currentTarget.style.color = isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#1e293b"
+                        : "white";
+                      e.currentTarget.style.color = isFoodCostingSectionActive
                         ? isDark
                           ? "#60a5fa"
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
                           : "#6b7280";
-                  }}
-                >
-                  <Shield className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <span className="text-sm whitespace-nowrap">
-                      Admin Panel
-                    </span>
-                  )}
-                </Link>
-              )}
-            </div>
-          </nav>
+                    }}
+                  >
+                    <Utensils className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && (
+                      <>
+                        <span className="text-sm leading-tight text-left flex-1 min-w-0">
+                          Food
+                          <br />
+                          Costing
+                        </span>
+                        {foodCostingExpanded ? (
+                          <ChevronDown className="h-4 w-4 shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 shrink-0" />
+                        )}
+                      </>
+                    )}
+                  </button>
+                  {isSidebarExpanded &&
+                    foodCostingExpanded &&
+                    foodCostingSubItems.map((sub) => {
+                      const isActive =
+                        pathname === sub.href ||
+                        pathname.startsWith(sub.href + "/");
+                      return (
+                        <Link
+                          key={sub.id}
+                          href={sub.href}
+                          className={`w-[calc(100%-2.5rem)] ml-10 ${FOOD_COSTING_SUB_NAV_ROW_ALIGN} pl-2 pr-3 py-0.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                            isActive ? "font-semibold" : ""
+                          }`}
+                          style={{
+                            backgroundColor: isDark ? "#1e293b" : "white",
+                            color: isActive
+                              ? isDark
+                                ? "#60a5fa"
+                                : "#1d4ed8"
+                              : isDark
+                                ? "#94a3b8"
+                                : "#6b7280",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = isDark
+                              ? "#334155"
+                              : "#dbeafe";
+                            e.currentTarget.style.color = isDark
+                              ? "#60a5fa"
+                              : "#1d4ed8";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = isDark
+                              ? "#1e293b"
+                              : "white";
+                            e.currentTarget.style.color = isActive
+                              ? isDark
+                                ? "#60a5fa"
+                                : "#1d4ed8"
+                              : isDark
+                                ? "#94a3b8"
+                                : "#6b7280";
+                          }}
+                        >
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                </div>
 
-          {/* テーマ切り替えスイッチ（サイドバーの下の方） */}
-          <div className="px-3 pb-3">
-            <button
-              onClick={toggleTheme}
-              className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} justify-start px-3 py-2 rounded-md transition-colors ${
-                isDark
-                  ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
-                  : "bg-gray-100 hover:bg-gray-200 text-gray-700"
-              }`}
-              aria-label="Toggle theme"
-            >
-              {isDark ? (
-                <>
-                  <Sun className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <span className="text-sm font-medium">Light Mode</span>
-                  )}
-                </>
-              ) : (
-                <>
-                  <Moon className="h-5 w-5 shrink-0" />
-                  {isSidebarExpanded && (
-                    <span className="text-sm font-medium">Dark Mode</span>
-                  )}
-                </>
-              )}
-            </button>
-          </div>
+                {/* Team（クリックで開閉、サブの Company / Tenant で遷移） */}
+                <div className="flex flex-col gap-0">
+                  <button
+                    type="button"
+                    onClick={() => setTeamExpanded((e) => !e)}
+                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                      isTeamSectionActive
+                        ? isDark
+                          ? "text-blue-400 font-semibold"
+                          : "text-blue-700 font-semibold"
+                        : isDark
+                          ? "text-slate-300 hover:text-blue-400"
+                          : "text-gray-600 hover:text-blue-700"
+                    }`}
+                    style={{
+                      backgroundColor: isDark ? "#1e293b" : "white",
+                      color: isTeamSectionActive
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#6b7280",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#334155"
+                        : "#dbeafe";
+                      e.currentTarget.style.color = isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#1e293b"
+                        : "white";
+                      e.currentTarget.style.color = isTeamSectionActive
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#6b7280";
+                    }}
+                  >
+                    <TeamNavIcon className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && (
+                      <>
+                        <span className="text-sm whitespace-nowrap flex-1 min-w-0">
+                          {teamNavItem.label}
+                        </span>
+                        {teamExpanded ? (
+                          <ChevronDown className="h-4 w-4 shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 shrink-0" />
+                        )}
+                      </>
+                    )}
+                  </button>
+                  {isSidebarExpanded &&
+                    teamExpanded &&
+                    teamSubItems.map((sub) => {
+                      const isActive =
+                        pathname === sub.href ||
+                        pathname.startsWith(sub.href + "/");
+                      return (
+                        <Link
+                          key={sub.id}
+                          href={sub.href}
+                          className={`w-[calc(100%-2.5rem)] ml-10 ${SIDEBAR_SUB_NAV_ROW_ALIGN} pl-2 pr-3 py-1.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                            isActive ? "font-semibold" : ""
+                          }`}
+                          style={{
+                            backgroundColor: isDark ? "#1e293b" : "white",
+                            color: isActive
+                              ? isDark
+                                ? "#60a5fa"
+                                : "#1d4ed8"
+                              : isDark
+                                ? "#94a3b8"
+                                : "#6b7280",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = isDark
+                              ? "#334155"
+                              : "#dbeafe";
+                            e.currentTarget.style.color = isDark
+                              ? "#60a5fa"
+                              : "#1d4ed8";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = isDark
+                              ? "#1e293b"
+                              : "white";
+                            e.currentTarget.style.color = isActive
+                              ? isDark
+                                ? "#60a5fa"
+                                : "#1d4ed8"
+                              : isDark
+                                ? "#94a3b8"
+                                : "#6b7280";
+                          }}
+                        >
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                </div>
+
+                {canAccessDocumentBox ? (
+                  <Link
+                    href="/document-box"
+                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md`}
+                    style={{
+                      backgroundColor: isDark ? "#1e293b" : "white",
+                      transition:
+                        "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
+                      color: pathname.startsWith("/document-box")
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#6b7280",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#334155"
+                        : "#dbeafe";
+                      e.currentTarget.style.color = isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#1e293b"
+                        : "white";
+                      e.currentTarget.style.color = pathname.startsWith(
+                        "/document-box",
+                      )
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#6b7280";
+                    }}
+                  >
+                    <div className="relative shrink-0">
+                      <Inbox className="h-5 w-5" />
+                      {pendingCount > 0 && (
+                        <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white leading-none">
+                          {pendingCount > 9 ? "9+" : pendingCount}
+                        </span>
+                      )}
+                    </div>
+                    {isSidebarExpanded && (
+                      <span className="text-sm leading-tight text-left">
+                        Uploaded
+                        <br />
+                        Document Box
+                      </span>
+                    )}
+                  </Link>
+                ) : null}
+
+                {/* License & certification（クリックで開閉、サブの Requirements で遷移） */}
+                <div className="flex flex-col gap-0">
+                  <button
+                    type="button"
+                    onClick={() => setLicenseExpanded((e) => !e)}
+                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                      isLicenseSectionActive
+                        ? isDark
+                          ? "text-blue-400 font-semibold"
+                          : "text-blue-700 font-semibold"
+                        : isDark
+                          ? "text-slate-300 hover:text-blue-400"
+                          : "text-gray-600 hover:text-blue-700"
+                    }`}
+                    style={{
+                      backgroundColor: isDark ? "#1e293b" : "white",
+                      color: isLicenseSectionActive
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#6b7280",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#334155"
+                        : "#dbeafe";
+                      e.currentTarget.style.color = isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#1e293b"
+                        : "white";
+                      e.currentTarget.style.color = isLicenseSectionActive
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#6b7280";
+                    }}
+                  >
+                    <Award className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && (
+                      <>
+                        <span className="text-sm leading-tight text-left flex-1 min-w-0">
+                          <span className="whitespace-nowrap">License &</span>
+                          <br />
+                          certification
+                        </span>
+                        {licenseExpanded ? (
+                          <ChevronDown className="h-4 w-4 shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 shrink-0" />
+                        )}
+                      </>
+                    )}
+                  </button>
+                  {isSidebarExpanded &&
+                    licenseExpanded &&
+                    licenseSubItems.map((sub) => {
+                      const isActive =
+                        pathname === sub.href ||
+                        pathname.startsWith(sub.href + "/");
+                      return (
+                        <Link
+                          key={sub.id}
+                          href={sub.href}
+                          className={`w-[calc(100%-2.5rem)] ml-10 ${SIDEBAR_SUB_NAV_ROW_ALIGN} pl-2 pr-3 py-1.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                            isActive ? "font-semibold" : ""
+                          }`}
+                          style={{
+                            backgroundColor: isDark ? "#1e293b" : "white",
+                            color: isActive
+                              ? isDark
+                                ? "#60a5fa"
+                                : "#1d4ed8"
+                              : isDark
+                                ? "#94a3b8"
+                                : "#6b7280",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = isDark
+                              ? "#334155"
+                              : "#dbeafe";
+                            e.currentTarget.style.color = isDark
+                              ? "#60a5fa"
+                              : "#1d4ed8";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = isDark
+                              ? "#1e293b"
+                              : "white";
+                            e.currentTarget.style.color = isActive
+                              ? isDark
+                                ? "#60a5fa"
+                                : "#1d4ed8"
+                              : isDark
+                                ? "#94a3b8"
+                                : "#6b7280";
+                          }}
+                        >
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                </div>
+
+                {/* System Admin Panel Link */}
+                {isSystemAdmin && (
+                  <Link
+                    href="/admin"
+                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
+                      pathname === "/admin"
+                        ? isDark
+                          ? "text-blue-400 font-semibold"
+                          : "text-blue-700 font-semibold"
+                        : isDark
+                          ? "text-slate-300 hover:text-blue-400"
+                          : "text-gray-600 hover:text-blue-700"
+                    }`}
+                    style={{
+                      backgroundColor: isDark ? "#1e293b" : "white",
+                      transition:
+                        "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
+                      color:
+                        pathname === "/admin"
+                          ? isDark
+                            ? "#60a5fa"
+                            : "#1d4ed8"
+                          : isDark
+                            ? "#cbd5e1"
+                            : "#6b7280",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#334155"
+                        : "#dbeafe";
+                      e.currentTarget.style.color = isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#1e293b"
+                        : "white";
+                      e.currentTarget.style.color =
+                        pathname === "/admin"
+                          ? isDark
+                            ? "#60a5fa"
+                            : "#1d4ed8"
+                          : isDark
+                            ? "#cbd5e1"
+                            : "#6b7280";
+                    }}
+                  >
+                    <Shield className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && (
+                      <span className="text-sm whitespace-nowrap">
+                        Admin Panel
+                      </span>
+                    )}
+                  </Link>
+                )}
+              </div>
+            </nav>
+
+            {/* テーマ切り替えスイッチ（サイドバーの下の方） */}
+            <div className="px-3 pb-3">
+              <button
+                onClick={toggleTheme}
+                className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} justify-start px-3 py-2 rounded-md transition-colors ${
+                  isDark
+                    ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                    : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                }`}
+                aria-label="Toggle theme"
+              >
+                {isDark ? (
+                  <>
+                    <Sun className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && (
+                      <span className="text-sm font-medium">Light Mode</span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <Moon className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && (
+                      <span className="text-sm font-medium">Dark Mode</span>
+                    )}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 

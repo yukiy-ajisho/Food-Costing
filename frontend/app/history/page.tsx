@@ -23,22 +23,6 @@ function parseEventTime(iso: string): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
-type VvpHistoryGroup = {
-  virtual_vendor_product_id: string;
-  base_item_names: string;
-  product_name: string | null;
-  brand_name: string | null;
-  purchase_quantity: number | null;
-  purchase_unit: string | null;
-  events: Array<{
-    price_event_id: string;
-    price: number;
-    source_type: string;
-    invoice_id: string | null;
-    created_at: string;
-  }>;
-};
-
 /** API は base item 名を ", " 区切りで返す。 */
 function splitBaseItemNames(aggregated: string): string[] {
   if (!aggregated.trim()) return [];
@@ -51,48 +35,6 @@ function splitBaseItemNames(aggregated: string): string[] {
 /** select の value: base item 名が無いグループのみ表示 */
 const FILTER_UNMAPPED = "__unmapped__";
 
-/** virtual_vendor_product_id 単位でまとめ、各グループ内は created_at 昇順。グループ間は直近イベントが新しい順。 */
-function buildVvpGroups(rows: PriceHistoryRow[]): VvpHistoryGroup[] {
-  const byVvp = new Map<string, PriceHistoryRow[]>();
-  for (const r of rows) {
-    const id = r.virtual_vendor_product_id;
-    if (!byVvp.has(id)) byVvp.set(id, []);
-    byVvp.get(id)!.push(r);
-  }
-
-  const groups: VvpHistoryGroup[] = [];
-
-  for (const [virtual_vendor_product_id, list] of byVvp) {
-    const sortedEvents = [...list].sort(
-      (a, b) => parseEventTime(a.created_at) - parseEventTime(b.created_at),
-    );
-    const meta = sortedEvents[0];
-    groups.push({
-      virtual_vendor_product_id,
-      base_item_names: meta.base_item_names,
-      product_name: meta.product_name,
-      brand_name: meta.brand_name,
-      purchase_quantity: meta.purchase_quantity,
-      purchase_unit: meta.purchase_unit,
-      events: sortedEvents.map((r) => ({
-        price_event_id: r.price_event_id,
-        price: r.price,
-        source_type: r.source_type,
-        invoice_id: r.invoice_id,
-        created_at: r.created_at,
-      })),
-    });
-  }
-
-  groups.sort((a, b) => {
-    const aMax = Math.max(...a.events.map((e) => parseEventTime(e.created_at)));
-    const bMax = Math.max(...b.events.map((e) => parseEventTime(e.created_at)));
-    return bMax - aMax;
-  });
-
-  return groups;
-}
-
 export default function HistoryPage() {
   const { theme } = useTheme();
   const { selectedTenantId } = useTenant();
@@ -103,43 +45,42 @@ export default function HistoryPage() {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const groups = useMemo(() => buildVvpGroups(rows), [rows]);
-
   const baseItemNameOptions = useMemo(() => {
     const names = new Set<string>();
-    for (const g of groups) {
-      for (const n of splitBaseItemNames(g.base_item_names || "")) {
+    for (const r of rows) {
+      for (const n of splitBaseItemNames(r.base_item_names || "")) {
         names.add(n);
       }
     }
     return [...names].sort((a, b) =>
       a.localeCompare(b, "en", { sensitivity: "base" }),
     );
-  }, [groups]);
+  }, [rows]);
 
   const hasUnmappedGroups = useMemo(
-    () =>
-      groups.some(
-        (g) => splitBaseItemNames(g.base_item_names || "").length === 0,
-      ),
-    [groups],
+    () => rows.some((r) => splitBaseItemNames(r.base_item_names || "").length === 0),
+    [rows],
   );
 
   const [selectedBaseItemName, setSelectedBaseItemName] = useState("");
 
-  const filteredGroups = useMemo(() => {
-    if (selectedBaseItemName === "") return groups;
+  const filteredRows = useMemo(() => {
+    let result = rows;
+
     if (selectedBaseItemName === FILTER_UNMAPPED) {
-      return groups.filter(
-        (g) => splitBaseItemNames(g.base_item_names || "").length === 0,
+      result = result.filter(
+        (r) => splitBaseItemNames(r.base_item_names || "").length === 0,
+      );
+    } else if (selectedBaseItemName !== "") {
+      result = result.filter((r) =>
+        splitBaseItemNames(r.base_item_names || "").includes(selectedBaseItemName),
       );
     }
-    return groups.filter((g) =>
-      splitBaseItemNames(g.base_item_names || "").includes(
-        selectedBaseItemName,
-      ),
+
+    return [...result].sort(
+      (a, b) => parseEventTime(b.created_at) - parseEventTime(a.created_at),
     );
-  }, [groups, selectedBaseItemName]);
+  }, [rows, selectedBaseItemName]);
 
   useEffect(() => {
     if (!selectedTenantId) {
@@ -190,22 +131,14 @@ export default function HistoryPage() {
     }
   }, [baseItemNameOptions, selectedBaseItemName]);
 
-  const groupShell = `rounded-lg border overflow-hidden shadow-sm mb-6 last:mb-0 ${
+  const shell = `rounded-lg border overflow-hidden shadow-sm ${
     isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"
   }`;
-
-  const thCls = `w-1/4 text-left text-xs font-semibold uppercase tracking-wide px-3 py-2 ${
+  const thCls = `px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide ${
     isDark ? "text-slate-400 bg-slate-900/50" : "text-gray-600 bg-gray-50"
   }`;
-
-  const tdCls = `w-1/4 wrap-break-word px-3 py-2 text-sm align-top ${
+  const tdCls = `px-3 py-2 text-sm align-top ${
     isDark ? "text-slate-200 border-t border-slate-700" : "text-gray-800 border-t border-gray-100"
-  }`;
-
-  const headerBand = `px-4 py-3 border-b ${
-    isDark
-      ? "border-slate-600 bg-slate-900/40"
-      : "border-gray-200 bg-gray-50"
   }`;
 
   if (permissionDenied) {
@@ -228,7 +161,7 @@ export default function HistoryPage() {
         <p className={isDark ? "text-red-400" : "text-red-600"}>{errorMessage}</p>
       ) : loading ? (
         <p className={isDark ? "text-slate-400" : "text-gray-600"}>Loading…</p>
-      ) : groups.length === 0 ? (
+      ) : rows.length === 0 ? (
         <p className={isDark ? "text-slate-400" : "text-gray-600"}>
           No price events for this tenant yet.
         </p>
@@ -265,81 +198,23 @@ export default function HistoryPage() {
             </select>
           </div>
 
-          {filteredGroups.length === 0 ? (
+          {filteredRows.length === 0 ? (
             <p className={isDark ? "text-slate-400" : "text-gray-600"}>
-              No vendor items match this base item filter.
+              No price events match this base item filter.
             </p>
           ) : null}
 
-          {filteredGroups.map((g) => (
-            <div key={g.virtual_vendor_product_id} className={groupShell}>
-              <div className={headerBand}>
-                <div
-                  className={`flex w-full justify-start ${
-                    isDark ? "text-slate-200" : "text-gray-800"
-                  }`}
-                >
-                  <div className="grid w-[60%] min-w-0 grid-cols-[3fr_3fr_3fr_1fr] gap-x-4 text-sm">
-                    <div className="min-w-0 wrap-break-word">
-                      <span
-                        className={
-                          isDark ? "text-slate-500" : "text-gray-500"
-                        }
-                      >
-                        Base item:{" "}
-                      </span>
-                      {g.base_item_names || (
-                        <span
-                          className={
-                            isDark
-                              ? "text-slate-500 italic"
-                              : "text-gray-400 italic"
-                          }
-                        >
-                          —
-                        </span>
-                      )}
-                    </div>
-                    <div className="min-w-0 wrap-break-word">
-                      <span
-                        className={
-                          isDark ? "text-slate-500" : "text-gray-500"
-                        }
-                      >
-                        Product:{" "}
-                      </span>
-                      {g.product_name ?? "—"}
-                    </div>
-                    <div className="min-w-0 wrap-break-word">
-                      <span
-                        className={
-                          isDark ? "text-slate-500" : "text-gray-500"
-                        }
-                      >
-                        Brand:{" "}
-                      </span>
-                      {g.brand_name ?? "—"}
-                    </div>
-                    <div className="min-w-0 wrap-break-word">
-                      <span
-                        className={
-                          isDark ? "text-slate-500" : "text-gray-500"
-                        }
-                      >
-                        Size:{" "}
-                      </span>
-                      {g.purchase_quantity != null ? g.purchase_quantity : "—"}
-                      {g.purchase_unit
-                        ? `\u00A0${g.purchase_unit}`
-                        : ""}
-                    </div>
-                  </div>
-                </div>
-              </div>
+          {filteredRows.length > 0 ? (
+            <div className={shell}>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-full table-fixed border-collapse">
+                <table className="w-full min-w-[1200px] table-fixed border-collapse">
                   <thead>
                     <tr>
+                      <th className={thCls}>Base Item</th>
+                      <th className={thCls}>Product</th>
+                      <th className={thCls}>Brand</th>
+                      <th className={thCls}>Size</th>
+                      <th className={thCls}>Case</th>
                       <th className={thCls}>Price</th>
                       <th className={thCls}>Source</th>
                       <th className={thCls}>Invoice</th>
@@ -347,23 +222,40 @@ export default function HistoryPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {g.events.map((ev) => (
-                      <tr key={ev.price_event_id}>
-                        <td className={tdCls}>{`$${ev.price.toFixed(2)}`}</td>
-                        <td className={tdCls}>{ev.source_type}</td>
-                        <td className={`${tdCls} font-mono text-xs`}>
-                          {ev.invoice_id ?? "—"}
+                    {filteredRows.map((r) => (
+                      <tr key={r.price_event_id}>
+                        <td className={tdCls}>{r.base_item_names || "—"}</td>
+                        <td
+                          className={`${tdCls} truncate`}
+                          title={r.product_name ?? "—"}
+                        >
+                          {r.product_name ?? "—"}
+                        </td>
+                        <td className={tdCls}>{r.brand_name ?? "—"}</td>
+                        <td className={tdCls}>
+                          {r.purchase_quantity != null ? r.purchase_quantity : "—"}
+                          {r.purchase_unit ? `\u00A0${r.purchase_unit}` : ""}
                         </td>
                         <td className={tdCls}>
-                          {formatEventDate(ev.created_at)}
+                          {r.purchase_unit === "case"
+                            ? r.case_unit != null
+                              ? r.case_unit
+                              : "-"
+                            : "-"}
                         </td>
+                        <td className={tdCls}>{`$${r.price.toFixed(2)}`}</td>
+                        <td className={tdCls}>{r.source_type}</td>
+                        <td className={`${tdCls} font-mono text-xs`}>
+                          {r.invoice_id ?? "—"}
+                        </td>
+                        <td className={tdCls}>{formatEventDate(r.created_at)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </div>
-          ))}
+          ) : null}
         </div>
       )}
     </div>

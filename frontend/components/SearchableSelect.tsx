@@ -107,8 +107,8 @@ export function SearchableSelect({
                 ? "bg-slate-800 cursor-not-allowed border-slate-600"
                 : "bg-gray-100 cursor-not-allowed border-gray-300"
               : isDark
-              ? "bg-slate-700 border-slate-600"
-              : "bg-white border-gray-300"
+                ? "bg-slate-700 border-slate-600"
+                : "bg-white border-gray-300"
           }`}
           style={{
             height: "20px",
@@ -136,7 +136,10 @@ export function SearchableSelect({
                   {selectedItem.name}
                 </span>
                 {selectedItem.subLabel && (
-                    <span className={`text-xs ${isDark ? "text-slate-400" : "text-gray-400"}`} style={{ flexShrink: 0 }}>
+                  <span
+                    className={`text-xs ${isDark ? "text-slate-400" : "text-gray-400"}`}
+                    style={{ flexShrink: 0 }}
+                  >
                     {selectedItem.subLabel}
                   </span>
                 )}
@@ -209,12 +212,10 @@ export function SearchableSelect({
                         ? "opacity-50 cursor-not-allowed text-slate-500"
                         : "opacity-50 cursor-not-allowed text-gray-400"
                       : isDark
-                      ? "hover:bg-slate-700 text-slate-100"
-                      : "hover:bg-blue-50"
+                        ? "hover:bg-slate-700 text-slate-100"
+                        : "hover:bg-blue-50"
                   } ${
-                    option.matchCandidate
-                      ? "border-l-2 border-amber-500"
-                      : ""
+                    option.matchCandidate ? "border-l-2 border-amber-500" : ""
                   } ${
                     option.matchCandidate && value !== option.id
                       ? isDark
@@ -224,8 +225,8 @@ export function SearchableSelect({
                   } ${
                     value === option.id
                       ? isDark
-                        ? "bg-slate-700 font-semibold"
-                        : "bg-blue-100 font-semibold"
+                        ? "bg-slate-700"
+                        : "bg-blue-100"
                       : ""
                   }`}
                 >
@@ -244,7 +245,9 @@ export function SearchableSelect({
                       {option.name}
                     </span>
                     {option.subLabel && (
-                      <span className={`text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}>
+                      <span
+                        className={`text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}
+                      >
                         {option.subLabel}
                       </span>
                     )}

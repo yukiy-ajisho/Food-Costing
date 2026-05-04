@@ -45,7 +45,7 @@ router.post(
         userId,
         tenant_id,
         "manage_members",
-        req.user!.roles
+        req.user!.roles,
       );
       if (!authz.allowed) {
         return res.status(403).json({
@@ -99,7 +99,7 @@ router.post(
       // トークンを生成
       const token = randomUUID();
       const expiresAt = new Date(
-        Date.now() + 7 * 24 * 60 * 60 * 1000
+        Date.now() + 7 * 24 * 60 * 60 * 1000,
       ).toISOString(); // 7日後
 
       // 招待を作成
@@ -141,7 +141,7 @@ router.post(
       if (allowlistError && allowlistError.code !== "23505") {
         console.error(
           "[POST /invite] Warning: Failed to add to allowlist:",
-          allowlistError
+          allowlistError,
         );
         // エラーを返さない（招待は作成済み）
       } else if (!allowlistError) {
@@ -171,7 +171,7 @@ router.post(
         if (updateError) {
           console.error(
             "[POST /invite] Error updating invitation with email_id:",
-            updateError
+            updateError,
           );
           // email_idの保存失敗は警告のみ（メール送信は成功している）
         }
@@ -180,7 +180,7 @@ router.post(
           "[POST /invite] Invitation created and email sent successfully:",
           invitation.id,
           "email_id:",
-          emailId
+          emailId,
         );
       } catch (emailError) {
         console.error("[POST /invite] Error sending email:", emailError);
@@ -208,7 +208,7 @@ router.post(
         .status(500)
         .json({ error: "Internal server error", details: message });
     }
-  }
+  },
 );
 
 /**
@@ -228,7 +228,7 @@ router.get("/verify/:token", async (req, res) => {
     const { data: invitation, error: inviteError } = await supabase
       .from("invitations")
       .select(
-        "id, email, role, tenant_id, status, expires_at, tenants:tenant_id(name)"
+        "id, email, role, tenant_id, status, expires_at, tenants:tenant_id(name)",
       )
       .eq("token", token)
       .single();
@@ -294,8 +294,7 @@ router.get(
   }),
   async (req, res) => {
     try {
-      const tenantId =
-        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+      const tenantId = req.user!.selected_tenant_id || req.user!.tenant_ids[0];
       if (!tenantId) {
         return res.status(400).json({
           error: "Tenant context required",
@@ -325,7 +324,115 @@ router.get(
         .status(500)
         .json({ error: "Internal server error", details: message });
     }
-  }
+  },
+);
+
+/**
+ * DELETE /invite/:invitationId
+ * pending（メール失敗以外）: 招待を物理削除し allowlist からも削除（キャンセル相当）
+ * それ以外: 物理削除（accepted 以外なら allowlist からも削除）
+ * 認可: manage_members 相当（X-Tenant-ID によるテナント文脈）
+ */
+router.delete(
+  "/:invitationId",
+  authMiddleware({
+    allowNoProfiles: true,
+    allowCompanyLinkedTenantHeader: true,
+  }),
+  teamTenantAuthorizationMiddleware("manage_members", {
+    tenantIdSource: "body_first",
+  }),
+  async (req, res) => {
+    try {
+      const { invitationId } = req.params;
+      const tenantId = req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+      if (!tenantId) {
+        return res.status(400).json({
+          error: "Tenant context required",
+          details: "Send X-Tenant-ID header for the tenant invitation delete",
+        });
+      }
+      if (!invitationId) {
+        return res.status(400).json({ error: "invitation id is required" });
+      }
+
+      const { data: invitation, error: fetchError } = await supabase
+        .from("invitations")
+        .select("id, status, email_status, email")
+        .eq("id", invitationId)
+        .eq("tenant_id", tenantId)
+        .single();
+      if (fetchError || !invitation) {
+        return res.status(404).json({ error: "Invitation not found" });
+      }
+
+      if (
+        invitation.status === "pending" &&
+        invitation.email_status !== "failed"
+      ) {
+        const { error: deletePendingError } = await supabase
+          .from("invitations")
+          .delete()
+          .eq("id", invitationId)
+          .eq("tenant_id", tenantId);
+        if (deletePendingError) {
+          return res.status(500).json({
+            error: "Failed to cancel invitation",
+            details: deletePendingError.message,
+          });
+        }
+
+        // Rule: accepted 以外（pending cancel）では allowlist も削除
+        const { error: allowlistDeleteError } = await supabase
+          .from("allowlist")
+          .delete()
+          .eq("email", invitation.email);
+        if (allowlistDeleteError) {
+          console.warn(
+            "[DELETE /invite/:invitationId] Failed to delete allowlist entry:",
+            allowlistDeleteError,
+          );
+        }
+
+        return res.status(200).json({ message: "Invitation canceled" });
+      }
+
+      const { error: deleteError } = await supabase
+        .from("invitations")
+        .delete()
+        .eq("id", invitationId)
+        .eq("tenant_id", tenantId);
+
+      if (deleteError) {
+        return res.status(500).json({
+          error: "Failed to delete invitation",
+          details: deleteError.message,
+        });
+      }
+
+      // Rule: accepted 以外を削除した場合は allowlist からも削除
+      if (invitation.status !== "accepted") {
+        const { error: allowlistDeleteError } = await supabase
+          .from("allowlist")
+          .delete()
+          .eq("email", invitation.email);
+        if (allowlistDeleteError) {
+          console.warn(
+            "[DELETE /invite/:invitationId] Failed to delete allowlist entry:",
+            allowlistDeleteError,
+          );
+        }
+      }
+
+      return res.status(200).json({ message: "Invitation deleted" });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("[DELETE /invite/:invitationId] Unexpected error:", error);
+      return res
+        .status(500)
+        .json({ error: "Internal server error", details: message });
+    }
+  },
 );
 
 /**
@@ -412,7 +519,7 @@ router.post(
         // 既にメンバーの場合、invitationのstatusを更新して終了
         await supabase
           .from("invitations")
-          .update({ status: "accepted" })
+          .update({ status: "accepted", accepted_at: new Date().toISOString() })
           .eq("id", invitation.id);
 
         return res.status(200).json({
@@ -432,7 +539,7 @@ router.post(
       if (profileError) {
         console.error(
           "[POST /invite/accept] Error creating profile:",
-          profileError
+          profileError,
         );
         return res.status(500).json({
           error: "Failed to add member to tenant",
@@ -443,13 +550,13 @@ router.post(
       // invitationのstatusを更新
       const { error: updateError } = await supabase
         .from("invitations")
-        .update({ status: "accepted" })
+        .update({ status: "accepted", accepted_at: new Date().toISOString() })
         .eq("id", invitation.id);
 
       if (updateError) {
         console.error(
           "[POST /invite/accept] Error updating invitation status:",
-          updateError
+          updateError,
         );
         // エラーを返さない（プロフィールは作成済み）
       }
@@ -469,13 +576,13 @@ router.post(
       if (allowlistError && allowlistError.code !== "23505") {
         console.error(
           "[POST /invite/accept] Warning: Failed to add to allowlist:",
-          allowlistError
+          allowlistError,
         );
         // エラーを返さない（プロフィールは作成済み）
       } else if (!allowlistError) {
         console.log(
           "[POST /invite/accept] Added to allowlist:",
-          invitation.email
+          invitation.email,
         );
       }
 
@@ -492,7 +599,7 @@ router.post(
         .status(500)
         .json({ error: "Internal server error", details: message });
     }
-  }
+  },
 );
 
 /**
@@ -546,7 +653,8 @@ router.get("/verify-company/:token", async (req, res) => {
       id: invitation.id,
       email: invitation.email,
       company_id: invitation.company_id,
-      company_name: (company as { company_name?: string } | null)?.company_name ?? null,
+      company_name:
+        (company as { company_name?: string } | null)?.company_name ?? null,
       status: invitation.status,
       expires_at: invitation.expires_at,
     });
@@ -615,7 +723,10 @@ router.post(
       }
 
       const userEmail = authUser.user.email;
-      if (!userEmail || userEmail.toLowerCase() !== invitation.email.toLowerCase()) {
+      if (
+        !userEmail ||
+        userEmail.toLowerCase() !== invitation.email.toLowerCase()
+      ) {
         return res.status(403).json({
           error: "Forbidden",
           details:
@@ -633,7 +744,7 @@ router.post(
       if (existingMember) {
         await supabase
           .from("company_invitations")
-          .update({ status: "accepted" })
+          .update({ status: "accepted", accepted_at: new Date().toISOString() })
           .eq("id", invitation.id);
         return res.status(200).json({
           message: "You are already a member of this company",
@@ -642,11 +753,13 @@ router.post(
         });
       }
 
-      const { error: memberError } = await supabase.from("company_members").insert({
-        company_id: invitation.company_id,
-        user_id: userId,
-        role: "company_director",
-      });
+      const { error: memberError } = await supabase
+        .from("company_members")
+        .insert({
+          company_id: invitation.company_id,
+          user_id: userId,
+          role: "company_director",
+        });
 
       if (memberError) {
         return res.status(500).json({
@@ -657,7 +770,7 @@ router.post(
 
       await supabase
         .from("company_invitations")
-        .update({ status: "accepted" })
+        .update({ status: "accepted", accepted_at: new Date().toISOString() })
         .eq("id", invitation.id);
 
       const { error: allowlistErr } = await supabase.from("allowlist").insert({
@@ -668,7 +781,10 @@ router.post(
         source: "invitation",
         note: `Accepted company director invitation for company ${invitation.company_id}`,
       });
-      if (allowlistErr && (allowlistErr as { code?: string }).code !== "23505") {
+      if (
+        allowlistErr &&
+        (allowlistErr as { code?: string }).code !== "23505"
+      ) {
         console.warn(
           "[POST /invite/accept-company] Allowlist insert:",
           allowlistErr,
@@ -687,7 +803,7 @@ router.post(
         .status(500)
         .json({ error: "Internal server error", details: message });
     }
-  }
+  },
 );
 
 export default router;
