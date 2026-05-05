@@ -209,7 +209,7 @@ export default function LaborPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer">
       <div className="max-w-7xl mx-auto">
         {/* タブ（現状 Labor のみ。追加時は TabType とボタンを拡張） */}
         <div

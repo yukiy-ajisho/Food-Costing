@@ -6,6 +6,7 @@ import {
   UnifiedCompanyAction,
 } from "../../authz/unified/authorize";
 import {
+  deleteObjectFromR2,
   getDocumentPresignedUrl,
   uploadCompanyDocumentToR2,
 } from "../../lib/r2-upload";
@@ -679,6 +680,72 @@ router.post("/", async (req, res) => {
     }
 
     await upsertRealDataRows(body.rows);
+    res.status(200).json({ ok: true });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /company-requirement-real-data/group
+ * Query: company_requirement_id, group_key
+ * Deletes all real_data rows in the selected group and associated R2 documents.
+ */
+router.delete("/group", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const requirementId = req.query.company_requirement_id as string | undefined;
+    const groupKeyRaw = req.query.group_key as string | undefined;
+    const groupKey = groupKeyRaw ? Number.parseInt(groupKeyRaw, 10) : NaN;
+
+    if (!requirementId?.trim() || Number.isNaN(groupKey) || groupKey < 1) {
+      return res.status(400).json({
+        error: "company_requirement_id and valid group_key are required",
+      });
+    }
+
+    const allowed = await ensureCompanyRequirementAccess(userId, [requirementId]);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const { data: docType } = await supabase
+      .from("company_requirement_value_types")
+      .select("id")
+      .eq("name", "Document")
+      .maybeSingle();
+    if (!docType) {
+      return res.status(500).json({ error: "Document value type not found" });
+    }
+
+    const { data: documentRows, error: documentRowsError } = await supabase
+      .from("company_requirement_real_data")
+      .select("value")
+      .eq("company_requirement_id", requirementId)
+      .eq("group_key", groupKey)
+      .eq("type_id", docType.id);
+    if (documentRowsError) {
+      return res.status(500).json({ error: documentRowsError.message });
+    }
+
+    const r2Keys = (documentRows ?? [])
+      .map((row) => (row.value ?? "").trim())
+      .filter((value) => value.length > 0);
+
+    for (const key of r2Keys) {
+      await deleteObjectFromR2(key);
+    }
+
+    const { error: deleteError } = await supabase
+      .from("company_requirement_real_data")
+      .delete()
+      .eq("company_requirement_id", requirementId)
+      .eq("group_key", groupKey);
+    if (deleteError) {
+      return res.status(500).json({ error: deleteError.message });
+    }
+
     res.status(200).json({ ok: true });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

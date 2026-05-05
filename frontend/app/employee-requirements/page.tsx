@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Plus, Edit, Trash2, X, HelpCircle } from "lucide-react";
+import { Plus, Edit, Trash2, X, HelpCircle, Save } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useCompany } from "@/contexts/CompanyContext";
 import { apiRequest } from "@/lib/api";
@@ -27,6 +27,7 @@ import {
   type UserJurisdictionRow,
 } from "@/lib/api/reminder/user-jurisdictions";
 import { openPresignedDocumentInNewTab } from "@/lib/open-presigned-document";
+import { SearchableSelect } from "@/components/SearchableSelect";
 
 type TabType = "list" | "jurisdiction" | "status" | "documents";
 
@@ -240,8 +241,27 @@ export default function RequirementsPage() {
   const [formJurisdictionMenuOpen, setFormJurisdictionMenuOpen] = useState(false);
   const [newJurisdictionName, setNewJurisdictionName] = useState("");
   const [jurisdictionSaving, setJurisdictionSaving] = useState(false);
-  const [jurisdictionAssignSelections, setJurisdictionAssignSelections] =
-    useState<Record<string, string>>({});
+  const [createJurisdictionModalOpen, setCreateJurisdictionModalOpen] =
+    useState(false);
+  const [jurisdictionAssignModalPerson, setJurisdictionAssignModalPerson] =
+    useState<Pick<StatusPerson, "id" | "name"> | null>(null);
+  const [jurisdictionAssignModalValue, setJurisdictionAssignModalValue] =
+    useState("");
+  const [jurisdictionEditMode, setJurisdictionEditMode] = useState(false);
+  const [jurisdictionNameDrafts, setJurisdictionNameDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [jurisdictionSaveBusy, setJurisdictionSaveBusy] = useState(false);
+  const [jurisdictionPendingDeleteIds, setJurisdictionPendingDeleteIds] =
+    useState<Set<string>>(new Set());
+  const [employeeJurisdictionEditMode, setEmployeeJurisdictionEditMode] =
+    useState(false);
+  const [employeeJurisdictionSaveBusy, setEmployeeJurisdictionSaveBusy] =
+    useState(false);
+  const [
+    employeeJurisdictionPendingUnlinkKeys,
+    setEmployeeJurisdictionPendingUnlinkKeys,
+  ] = useState<Set<string>>(new Set());
   const [statusMapping, setStatusMapping] = useState<
     Record<string, Record<string, MappingEntry>>
   >({});
@@ -965,7 +985,9 @@ export default function RequirementsPage() {
   }
 
   return (
-    <div className="px-8 pb-8">
+    <div
+      className="px-8 pb-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer"
+    >
       <div className="max-w-7xl mx-auto">
         {/* タブ（Items ページと同じ位置・見た目） */}
         <div
@@ -1016,8 +1038,8 @@ export default function RequirementsPage() {
               Documents
             </button>
             <span
-              className={`w-px h-6 shrink-0 self-center ${
-                isDark ? "bg-slate-600" : "bg-gray-300"
+              className={`w-0.5 h-6 shrink-0 self-center ${
+                isDark ? "bg-slate-500" : "bg-gray-400"
               }`}
               aria-hidden
               title="Employee-requirements only: jurisdiction is not used on Tenant or Company screens"
@@ -1142,111 +1164,247 @@ export default function RequirementsPage() {
 
         {activeTab === "jurisdiction" && selectedCompanyId && (
           <div className="space-y-6">
-            <div
-              className={`rounded-lg border p-4 ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}
-            >
-              <h3
-                className={`text-sm font-semibold mb-3 ${isDark ? "text-slate-200" : "text-gray-800"}`}
+            <div className="flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setCreateJurisdictionModalOpen(true)}
+                className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700"
               >
-                New jurisdiction
-              </h3>
-              <div className="flex flex-wrap gap-2 items-end">
-                <input
-                  type="text"
-                  value={newJurisdictionName}
-                  onChange={(e) => setNewJurisdictionName(e.target.value)}
-                  placeholder="e.g. California"
-                  className={`flex-1 min-w-[12rem] px-3 py-2 rounded-lg border text-sm ${
-                    isDark
-                      ? "bg-slate-700 border-slate-600 text-slate-200"
-                      : "bg-white border-gray-300 text-gray-800"
-                  }`}
-                />
+                + Create jurisdiction
+              </button>
+              {jurisdictionEditMode ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={jurisdictionSaveBusy}
+                    onClick={async () => {
+                      if (jurisdictionSaveBusy) return;
+                      setJurisdictionSaveBusy(true);
+                      try {
+                        const updates = jurisdictionRecords
+                          .map((j) => ({
+                            id: j.id,
+                            next: (jurisdictionNameDrafts[j.id] ?? j.name).trim(),
+                            prev: j.name,
+                          }))
+                          .filter(
+                            (u) =>
+                              u.next.length > 0 &&
+                              u.next !== u.prev &&
+                              !jurisdictionPendingDeleteIds.has(u.id),
+                          );
+                        const deleteIds = jurisdictionRecords
+                          .map((j) => j.id)
+                          .filter((id) => jurisdictionPendingDeleteIds.has(id));
+                        for (const u of updates) {
+                          await jurisdictionsAPI.update(u.id, {
+                            name: u.next,
+                          });
+                        }
+                        for (const id of deleteIds) {
+                          await jurisdictionsAPI.delete(id);
+                        }
+                        setJurisdictionEditMode(false);
+                        setJurisdictionNameDrafts({});
+                        setJurisdictionPendingDeleteIds(new Set());
+                        await loadJurisdictions();
+                        await fetchRequirements();
+                      } catch (e) {
+                        alert(
+                          e instanceof Error ? e.message : "Failed to save",
+                        );
+                      } finally {
+                        setJurisdictionSaveBusy(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    disabled={jurisdictionSaveBusy}
+                    onClick={() => {
+                      setJurisdictionEditMode(false);
+                      setJurisdictionNameDrafts({});
+                      setJurisdictionPendingDeleteIds(new Set());
+                    }}
+                    className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isDark
+                        ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    }`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  disabled={jurisdictionSaving || !newJurisdictionName.trim()}
-                  onClick={async () => {
-                    if (!selectedCompanyId || !newJurisdictionName.trim())
-                      return;
-                    setJurisdictionSaving(true);
-                    try {
-                      await jurisdictionsAPI.create({
-                        company_id: selectedCompanyId,
-                        name: newJurisdictionName.trim(),
-                      });
-                      setNewJurisdictionName("");
-                      await loadJurisdictions();
-                    } catch (e) {
-                      alert(
-                        e instanceof Error ? e.message : "Failed to create",
-                      );
-                    } finally {
-                      setJurisdictionSaving(false);
-                    }
+                  onClick={() => {
+                    const nextDrafts: Record<string, string> = {};
+                    jurisdictionRecords.forEach((j) => {
+                      nextDrafts[j.id] = j.name;
+                    });
+                    setJurisdictionNameDrafts(nextDrafts);
+                    setJurisdictionPendingDeleteIds(new Set());
+                    setJurisdictionEditMode(true);
                   }}
-                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
+                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white transition-colors ${
+                    isDark
+                      ? "bg-slate-600 hover:bg-slate-500"
+                      : "bg-gray-600 hover:bg-gray-700"
+                  }`}
                 >
-                  {jurisdictionSaving ? "Saving…" : "Create"}
+                  <Edit className="w-4 h-4" />
+                  Edit
                 </button>
-              </div>
+              )}
             </div>
             <div
               className={`rounded-lg border ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}
             >
               <div
-                className={`px-4 py-3 border-b text-sm font-medium ${isDark ? "border-slate-700 text-slate-200" : "border-gray-200 text-gray-800"}`}
+                className={`px-4 py-3 border-b text-sm font-medium ${isDark ? "bg-slate-700 border-slate-700 text-slate-200" : "bg-gray-100 border-gray-200 text-gray-800"}`}
               >
                 Existing jurisdictions
               </div>
               <ul className="divide-y divide-gray-200 dark:divide-slate-700">
-                {jurisdictionRecords.length === 0 ? (
+                {jurisdictionRecords.filter(
+                  (j) => !jurisdictionPendingDeleteIds.has(j.id),
+                ).length === 0 ? (
                   <li
                     className={`px-4 py-6 text-sm ${isDark ? "text-slate-400" : "text-gray-500"}`}
                   >
                     None yet. Add one above.
                   </li>
                 ) : (
-                  jurisdictionRecords.map((j) => (
+                  jurisdictionRecords
+                    .filter((j) => !jurisdictionPendingDeleteIds.has(j.id))
+                    .map((j) => (
                     <li
                       key={j.id}
                       className={`px-4 py-3 flex items-center justify-between gap-2 ${isDark ? "text-slate-200" : "text-gray-900"}`}
                     >
-                      <span>{j.name}</span>
-                      <button
-                        type="button"
-                        className={`text-xs px-2 py-1 rounded ${isDark ? "bg-slate-700 hover:bg-slate-600" : "bg-gray-200 hover:bg-gray-300"}`}
-                        onClick={async () => {
-                          if (
-                            typeof window !== "undefined" &&
-                            !window.confirm(`Delete jurisdiction “${j.name}”?`)
-                          )
-                            return;
-                          try {
-                            await jurisdictionsAPI.delete(j.id);
-                            await loadJurisdictions();
-                            await fetchRequirements();
-                          } catch (e) {
-                            alert(
-                              e instanceof Error
-                                ? e.message
-                                : "Delete failed",
-                            );
-                          }
-                        }}
-                      >
-                        Delete
-                      </button>
+                      {jurisdictionEditMode ? (
+                        <>
+                          <input
+                            type="text"
+                            value={jurisdictionNameDrafts[j.id] ?? j.name}
+                            onChange={(e) =>
+                              setJurisdictionNameDrafts((prev) => ({
+                                ...prev,
+                                [j.id]: e.target.value,
+                              }))
+                            }
+                            className={`w-full max-w-xs px-2 py-1 rounded border text-sm ${
+                              isDark
+                                ? "bg-slate-700 border-slate-600 text-slate-100"
+                                : "bg-white border-gray-300 text-gray-900"
+                            }`}
+                          />
+                          <button
+                            type="button"
+                            className="p-1.5 rounded text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={async () => {
+                              setJurisdictionPendingDeleteIds((prev) => {
+                                const next = new Set(prev);
+                                next.add(j.id);
+                                return next;
+                              });
+                            }}
+                            title="Delete jurisdiction"
+                            aria-label="Delete jurisdiction"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </>
+                      ) : (
+                        <span>{j.name}</span>
+                      )}
                     </li>
                   ))
                 )}
               </ul>
+            </div>
+            <div className="flex justify-end">
+              {employeeJurisdictionEditMode ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={employeeJurisdictionSaveBusy}
+                    onClick={async () => {
+                      if (!selectedCompanyId || employeeJurisdictionSaveBusy)
+                        return;
+                      setEmployeeJurisdictionSaveBusy(true);
+                      try {
+                        const pending = Array.from(
+                          employeeJurisdictionPendingUnlinkKeys,
+                        );
+                        for (const key of pending) {
+                          const [userId, jurisdictionId] = key.split("|");
+                          if (!userId || !jurisdictionId) continue;
+                          await userJurisdictionsAPI.unlink({
+                            company_id: selectedCompanyId,
+                            user_id: userId,
+                            jurisdiction_id: jurisdictionId,
+                          });
+                        }
+                        setEmployeeJurisdictionEditMode(false);
+                        setEmployeeJurisdictionPendingUnlinkKeys(new Set());
+                        await fetchStatusData();
+                      } catch (e) {
+                        alert(e instanceof Error ? e.message : "Failed");
+                      } finally {
+                        setEmployeeJurisdictionSaveBusy(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    <Save className="w-4 h-4" />
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    disabled={employeeJurisdictionSaveBusy}
+                    onClick={() => {
+                      setEmployeeJurisdictionEditMode(false);
+                      setEmployeeJurisdictionPendingUnlinkKeys(new Set());
+                    }}
+                    className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      isDark
+                        ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    }`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmployeeJurisdictionPendingUnlinkKeys(new Set());
+                    setEmployeeJurisdictionEditMode(true);
+                  }}
+                  className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white transition-colors ${
+                    isDark
+                      ? "bg-slate-600 hover:bg-slate-500"
+                      : "bg-gray-600 hover:bg-gray-700"
+                  }`}
+                >
+                  <Edit className="w-4 h-4" />
+                  Edit
+                </button>
+              )}
             </div>
             <div
               className={`rounded-lg border overflow-x-auto ${isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"}`}
             >
               <table className="w-full text-sm">
                 <thead
-                  className={isDark ? "bg-slate-700 text-slate-200" : "bg-gray-50 text-gray-700"}
+                  className={isDark ? "bg-slate-700 text-slate-200" : "bg-gray-100 text-gray-700"}
                 >
                   <tr>
                     <th className="text-left px-4 py-3 font-medium">Employee</th>
@@ -1275,21 +1433,18 @@ export default function RequirementsPage() {
                       const links = userJurisdictionRows.filter(
                         (r) => r.user_id === person.id,
                       );
-                      const assignedJurIds = new Set(
-                        links.map((l) => l.jurisdiction_id),
+                      const visibleLinks = links.filter(
+                        (l) =>
+                          !employeeJurisdictionPendingUnlinkKeys.has(
+                            `${l.user_id}|${l.jurisdiction_id}`,
+                          ),
                       );
-                      const rawSel = jurisdictionAssignSelections[person.id];
-                      const effectiveSel =
-                        rawSel && !assignedJurIds.has(rawSel)
-                          ? rawSel
-                          : "";
-                      const canAddJurisdiction =
-                        effectiveSel !== "" &&
-                        jurisdictionRecords.some(
-                          (j) =>
-                            j.id === effectiveSel &&
-                            !assignedJurIds.has(j.id),
-                        );
+                      const assignedJurIds = new Set(
+                        visibleLinks.map((l) => l.jurisdiction_id),
+                      );
+                      const hasAvailableJurisdiction = jurisdictionRecords.some(
+                        (j) => !assignedJurIds.has(j.id),
+                      );
                       return (
                         <tr
                           key={person.id}
@@ -1300,41 +1455,41 @@ export default function RequirementsPage() {
                           <td className="px-4 py-3 font-medium">{person.name}</td>
                           <td className="px-4 py-3">
                             <div className="flex flex-wrap gap-1">
-                              {links.length === 0 ? (
+                              {visibleLinks.length === 0 ? (
                                 <span className="opacity-60">—</span>
                               ) : (
-                                links.map((l) => (
-                                  <button
+                                visibleLinks.map((l) => (
+                                  <span
                                     key={`${l.user_id}-${l.jurisdiction_id}`}
-                                    type="button"
                                     className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
                                       isDark
                                         ? "bg-slate-600 text-slate-100"
                                         : "bg-gray-200 text-gray-800"
                                     }`}
-                                    title=" remove "
-                                    onClick={async () => {
-                                      if (!selectedCompanyId) return;
-                                      try {
-                                        await userJurisdictionsAPI.unlink({
-                                          company_id: selectedCompanyId,
-                                          user_id: person.id,
-                                          jurisdiction_id: l.jurisdiction_id,
-                                        });
-                                        await fetchStatusData();
-                                      } catch (e) {
-                                        alert(
-                                          e instanceof Error
-                                            ? e.message
-                                            : "Failed",
-                                        );
-                                      }
-                                    }}
                                   >
                                     {jurisdictionNameById.get(l.jurisdiction_id) ??
                                       l.jurisdiction_id.slice(0, 6)}
-                                    <X className="w-3 h-3" />
-                                  </button>
+                                    {employeeJurisdictionEditMode && (
+                                      <button
+                                        type="button"
+                                        className={`ml-1 rounded-sm ${isDark ? "hover:bg-slate-500" : "hover:bg-gray-300"}`}
+                                        onClick={() => {
+                                          setEmployeeJurisdictionPendingUnlinkKeys(
+                                            (prev) => {
+                                              const next = new Set(prev);
+                                              next.add(
+                                                `${l.user_id}|${l.jurisdiction_id}`,
+                                              );
+                                              return next;
+                                            },
+                                          );
+                                        }}
+                                        aria-label="Unassign jurisdiction"
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    )}
+                                  </span>
                                 ))
                               )}
                             </div>
@@ -1344,81 +1499,31 @@ export default function RequirementsPage() {
                               <span className="opacity-60 text-xs">—</span>
                             ) : (
                               <div className="flex flex-wrap gap-1 items-center">
-                                <select
-                                  value={effectiveSel}
-                                  onChange={(e) =>
-                                    setJurisdictionAssignSelections((prev) => ({
-                                      ...prev,
-                                      [person.id]: e.target.value,
-                                    }))
-                                  }
-                                  className={`rounded border px-2 py-1 text-xs max-w-[10rem] ${
-                                    isDark
-                                      ? "bg-slate-700 border-slate-600 text-slate-100"
-                                      : "bg-white border-gray-300"
-                                  }`}
-                                >
-                                  <option value="">
-                                    Choose…
-                                  </option>
-                                  {jurisdictionRecords.map((j) => (
-                                    <option
-                                      key={j.id}
-                                      value={j.id}
-                                      disabled={assignedJurIds.has(j.id)}
-                                    >
-                                      {j.name}
-                                    </option>
-                                  ))}
-                                </select>
                                 <button
                                   type="button"
                                   className={`text-xs px-2 py-1 rounded text-white ${
-                                    canAddJurisdiction
+                                    hasAvailableJurisdiction &&
+                                    !employeeJurisdictionEditMode
                                       ? "bg-blue-600 hover:bg-blue-500"
                                       : isDark
                                         ? "bg-slate-600 cursor-not-allowed"
                                         : "bg-gray-400 cursor-not-allowed"
                                   }`}
-                                  disabled={!canAddJurisdiction}
-                                  onClick={async () => {
+                                  disabled={
+                                    !hasAvailableJurisdiction ||
+                                    employeeJurisdictionEditMode
+                                  }
+                                  onClick={() => {
                                     if (
-                                      !selectedCompanyId ||
-                                      !canAddJurisdiction
+                                      !hasAvailableJurisdiction ||
+                                      employeeJurisdictionEditMode
                                     )
                                       return;
-                                    try {
-                                      const row =
-                                        await userJurisdictionsAPI.link({
-                                          company_id: selectedCompanyId,
-                                          user_id: person.id,
-                                          jurisdiction_id: effectiveSel,
-                                        });
-                                      setUserJurisdictionRows((prev) => {
-                                        if (
-                                          prev.some(
-                                            (r) =>
-                                              r.user_id === row.user_id &&
-                                              r.jurisdiction_id ===
-                                                row.jurisdiction_id,
-                                          )
-                                        )
-                                          return prev;
-                                        return [...prev, row];
-                                      });
-                                      setJurisdictionAssignSelections((p) => {
-                                        const n = { ...p };
-                                        delete n[person.id];
-                                        return n;
-                                      });
-                                      await fetchStatusData();
-                                    } catch (e) {
-                                      alert(
-                                        e instanceof Error
-                                          ? e.message
-                                          : "Failed",
-                                      );
-                                    }
+                                    setJurisdictionAssignModalPerson({
+                                      id: person.id,
+                                      name: person.name,
+                                    });
+                                    setJurisdictionAssignModalValue("");
                                   }}
                                 >
                                   Add
@@ -1436,11 +1541,184 @@ export default function RequirementsPage() {
           </div>
         )}
 
+        {jurisdictionAssignModalPerson && (
+          <div
+            className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center bg-black/50 p-4"
+            onClick={() => setJurisdictionAssignModalPerson(null)}
+          >
+            <div
+              className={`w-full max-w-md cursor-default rounded-xl border p-6 shadow-xl ${
+                isDark
+                  ? "bg-slate-800 border-slate-700"
+                  : "bg-white border-gray-200"
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3
+                className={`text-lg font-semibold mb-4 ${
+                  isDark ? "text-slate-100" : "text-gray-900"
+                }`}
+              >
+                Assign jurisdiction
+              </h3>
+              <p
+                className={`text-sm mb-3 ${isDark ? "text-slate-300" : "text-gray-700"}`}
+              >
+                {jurisdictionAssignModalPerson.name}
+              </p>
+              <SearchableSelect
+                options={jurisdictionRecords
+                  .filter(
+                    (j) =>
+                      !userJurisdictionRows.some(
+                        (r) =>
+                          r.user_id === jurisdictionAssignModalPerson.id &&
+                          r.jurisdiction_id === j.id,
+                      ),
+                  )
+                  .map((j) => ({ id: j.id, name: j.name }))}
+                value={jurisdictionAssignModalValue}
+                onChange={setJurisdictionAssignModalValue}
+                placeholder="Select..."
+                showSubLabel={false}
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setJurisdictionAssignModalPerson(null)}
+                  className={`px-4 py-2 rounded-lg text-sm ${
+                    isDark
+                      ? "bg-slate-600 hover:bg-slate-500 text-slate-100"
+                      : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                  }`}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!jurisdictionAssignModalValue || !selectedCompanyId}
+                  onClick={async () => {
+                    if (!selectedCompanyId || !jurisdictionAssignModalValue) {
+                      return;
+                    }
+                    try {
+                      const row = await userJurisdictionsAPI.link({
+                        company_id: selectedCompanyId,
+                        user_id: jurisdictionAssignModalPerson.id,
+                        jurisdiction_id: jurisdictionAssignModalValue,
+                      });
+                      setUserJurisdictionRows((prev) => {
+                        if (
+                          prev.some(
+                            (r) =>
+                              r.user_id === row.user_id &&
+                              r.jurisdiction_id === row.jurisdiction_id,
+                          )
+                        ) {
+                          return prev;
+                        }
+                        return [...prev, row];
+                      });
+                      setJurisdictionAssignModalPerson(null);
+                      setJurisdictionAssignModalValue("");
+                      await fetchStatusData();
+                    } catch (e) {
+                      alert(e instanceof Error ? e.message : "Failed");
+                    }
+                  }}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === "jurisdiction" && !selectedCompanyId && (
           <div
             className={`rounded-lg border p-6 text-sm ${isDark ? "bg-slate-800 border-slate-700 text-slate-300" : "bg-white border-gray-200 text-gray-600"}`}
           >
             Select a company in the header to manage jurisdictions.
+          </div>
+        )}
+
+        {createJurisdictionModalOpen && selectedCompanyId && (
+          <div
+            className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center bg-black/50 p-4"
+            onClick={() => {
+              if (!jurisdictionSaving) setCreateJurisdictionModalOpen(false);
+            }}
+          >
+            <div
+              className={`w-full max-w-md cursor-default rounded-xl border p-6 shadow-xl ${
+                isDark
+                  ? "bg-slate-800 border-slate-700"
+                  : "bg-white border-gray-200"
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3
+                className={`text-lg font-semibold mb-4 ${isDark ? "text-slate-100" : "text-gray-900"}`}
+              >
+                Create jurisdiction
+              </h3>
+              <input
+                type="text"
+                value={newJurisdictionName}
+                onChange={(e) => setNewJurisdictionName(e.target.value)}
+                placeholder="e.g. California"
+                className={`w-full px-3 py-2 rounded-lg border text-sm ${
+                  isDark
+                    ? "bg-slate-700 border-slate-600 text-slate-200"
+                    : "bg-white border-gray-300 text-gray-800"
+                }`}
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={jurisdictionSaving}
+                  onClick={() => {
+                    setCreateJurisdictionModalOpen(false);
+                    setNewJurisdictionName("");
+                  }}
+                  className={`px-4 py-2 rounded-lg text-sm ${
+                    isDark
+                      ? "bg-slate-600 hover:bg-slate-500 text-slate-100"
+                      : "bg-gray-200 hover:bg-gray-300 text-gray-700"
+                  }`}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={jurisdictionSaving || !newJurisdictionName.trim()}
+                  onClick={async () => {
+                    if (!selectedCompanyId || !newJurisdictionName.trim())
+                      return;
+                    setJurisdictionSaving(true);
+                    try {
+                      await jurisdictionsAPI.create({
+                        company_id: selectedCompanyId,
+                        name: newJurisdictionName.trim(),
+                      });
+                      setNewJurisdictionName("");
+                      setCreateJurisdictionModalOpen(false);
+                      await loadJurisdictions();
+                    } catch (e) {
+                      alert(
+                        e instanceof Error ? e.message : "Failed to create",
+                      );
+                    } finally {
+                      setJurisdictionSaving(false);
+                    }
+                  }}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {jurisdictionSaving ? "Saving..." : "Create"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1754,9 +2032,7 @@ export default function RequirementsPage() {
                                             ? isDark
                                               ? "bg-red-400"
                                               : "bg-red-500"
-                                            : isDark
-                                              ? "bg-slate-500"
-                                              : "bg-gray-400";
+                                            : "";
                                         return (
                                           <span
                                             key={req.id}
@@ -1768,10 +2044,12 @@ export default function RequirementsPage() {
                                                   "No expiration date"
                                             }
                                           >
-                                            <span
-                                              className={`shrink-0 size-2 rounded-full ${dotClass}`}
-                                              aria-hidden
-                                            />
+                                            {st === "overdue" && (
+                                              <span
+                                                className={`shrink-0 size-2 rounded-full ${dotClass}`}
+                                                aria-hidden
+                                              />
+                                            )}
                                             <span className="break-words">
                                               {req.title}
                                             </span>
@@ -2152,11 +2430,11 @@ export default function RequirementsPage() {
 
       {employeeDetailPerson && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+          className="fixed inset-0 z-[60] flex cursor-pointer items-center justify-center bg-black/50 p-4"
           onClick={() => !recordNewSaving && closeEmployeeDetailModal()}
         >
           <div
-            className={`rounded-xl shadow-xl w-full flex flex-col max-h-[min(90vh,40rem)] ${
+            className={`cursor-default rounded-xl shadow-xl w-full flex flex-col max-h-[min(90vh,40rem)] ${
               isDark
                 ? "bg-slate-800 border border-slate-700"
                 : "bg-white border border-gray-200"
@@ -2178,26 +2456,15 @@ export default function RequirementsPage() {
                 {employeeDetailJurisdictions.length > 0 && (
                   <div className="mt-2">
                     <p
-                      className={`text-xs font-medium uppercase tracking-wide mb-1.5 ${
-                        isDark ? "text-slate-500" : "text-gray-500"
-                      }`}
+                      className={`text-sm ${isDark ? "text-slate-200" : "text-gray-800"}`}
                     >
-                      Jurisdiction
+                      <span
+                        className={`font-medium ${isDark ? "text-slate-400" : "text-gray-600"}`}
+                      >
+                        Assigned jurisdiction:
+                      </span>{" "}
+                      {employeeDetailJurisdictions.map((j) => j.name).join(", ")}
                     </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {employeeDetailJurisdictions.map((j) => (
-                        <span
-                          key={j.id}
-                          className={`inline-flex items-center max-w-full truncate rounded-full border px-2.5 py-0.5 text-xs font-medium ${
-                            isDark
-                              ? "border-slate-600 bg-slate-700/80 text-slate-200"
-                              : "border-gray-200 bg-gray-100 text-gray-800"
-                          }`}
-                        >
-                          {j.name}
-                        </span>
-                      ))}
-                    </div>
                   </div>
                 )}
               </div>
@@ -2410,11 +2677,11 @@ export default function RequirementsPage() {
       {/* モーダル */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          className="fixed inset-0 z-50 flex cursor-pointer items-center justify-center bg-black/50"
           onClick={() => !requirementSaving && closeModal()}
         >
           <div
-            className={`rounded-xl shadow-xl w-full mx-4 overflow-visible ${
+            className={`cursor-default rounded-xl shadow-xl w-full mx-4 overflow-visible ${
               isDark
                 ? "bg-slate-800 border border-slate-700"
                 : "bg-white border border-gray-200"

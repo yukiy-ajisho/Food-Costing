@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import {
+  useState,
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+} from "react";
 import { Search, ChevronDown } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 
@@ -9,6 +15,7 @@ interface SearchableSelectProps {
     id: string;
     name: string;
     subLabel?: string;
+    hoverLabel?: string;
     /** If set, the search box matches against this text instead of `name` (e.g. product_name only). */
     searchText?: string;
     /** Highlight row as a ranked match (e.g. invoice link candidate). */
@@ -23,6 +30,7 @@ interface SearchableSelectProps {
   onChange: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  showSubLabel?: boolean;
 }
 
 export function SearchableSelect({
@@ -31,6 +39,7 @@ export function SearchableSelect({
   onChange,
   placeholder = "Search and select...",
   disabled = false,
+  showSubLabel = true,
 }: SearchableSelectProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -45,6 +54,24 @@ export function SearchableSelect({
     width: 0,
   });
 
+  const updateMenuPosition = useCallback(() => {
+    if (!buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const bodyZoomRaw =
+      typeof window !== "undefined"
+        ? Number(window.getComputedStyle(document.body).zoom)
+        : 1;
+    const bodyZoom =
+      Number.isFinite(bodyZoomRaw) && bodyZoomRaw > 0 ? bodyZoomRaw : 1;
+
+    // body zoom 使用時でも fixed 座標とボタン位置を一致させる
+    setMenuPosition({
+      top: rect.bottom / bodyZoom + 4,
+      left: rect.left / bodyZoom,
+      width: rect.width / bodyZoom,
+    });
+  }, []);
+
   // 選択されたアイテムの名前を取得
   const selectedItem = options.find((opt) => opt.id === value);
 
@@ -55,17 +82,24 @@ export function SearchableSelect({
     return hay.includes(q);
   });
 
-  // メニューの位置を計算
-  useEffect(() => {
-    if (isOpen && buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setMenuPosition({
-        top: rect.bottom + window.scrollY + 4,
-        left: rect.left + window.scrollX,
-        width: rect.width,
-      });
-    }
-  }, [isOpen]);
+  // メニューの位置を計算（描画前に同期）
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    updateMenuPosition();
+
+    const onViewportChange = () => updateMenuPosition();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    window.visualViewport?.addEventListener("resize", onViewportChange);
+    window.visualViewport?.addEventListener("scroll", onViewportChange);
+
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+      window.visualViewport?.removeEventListener("resize", onViewportChange);
+      window.visualViewport?.removeEventListener("scroll", onViewportChange);
+    };
+  }, [isOpen, updateMenuPosition]);
 
   // 外側クリックで閉じる
   useEffect(() => {
@@ -95,12 +129,13 @@ export function SearchableSelect({
 
   return (
     <>
-      <div className="relative w-full" ref={dropdownRef}>
+      <div className="group relative w-full" ref={dropdownRef}>
         <button
           ref={buttonRef}
           type="button"
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
+          title={selectedItem?.hoverLabel}
           className={`w-full text-left border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between transition-colors ${
             disabled
               ? isDark
@@ -121,7 +156,7 @@ export function SearchableSelect({
             margin: 0,
           }}
         >
-          <span className="flex items-center gap-1 overflow-hidden">
+          <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
             {selectedItem?.warningDot && (
               <span
                 className={`h-2 w-2 shrink-0 rounded-full ${
@@ -132,13 +167,18 @@ export function SearchableSelect({
             )}
             {selectedItem ? (
               <>
-                <span className={isDark ? "text-slate-100" : "text-gray-900"}>
+                <span
+                  className={`min-w-0 flex-1 truncate ${
+                    isDark ? "text-slate-100" : "text-gray-900"
+                  }`}
+                >
                   {selectedItem.name}
                 </span>
-                {selectedItem.subLabel && (
+                {showSubLabel && selectedItem.subLabel && (
                   <span
-                    className={`text-xs ${isDark ? "text-slate-400" : "text-gray-400"}`}
-                    style={{ flexShrink: 0 }}
+                    className={`shrink-0 whitespace-nowrap text-right text-xs ${
+                      isDark ? "text-slate-400" : "text-gray-400"
+                    }`}
                   >
                     {selectedItem.subLabel}
                   </span>
@@ -156,6 +196,17 @@ export function SearchableSelect({
             } ${isOpen ? "transform rotate-180" : ""}`}
           />
         </button>
+        {selectedItem?.hoverLabel ? (
+          <div
+            className={`pointer-events-none absolute left-0 top-full z-60 mt-1 hidden max-w-[320px] rounded px-2 py-1 text-xs shadow-lg group-hover:block ${
+              isDark
+                ? "bg-slate-900 text-slate-100 border border-slate-700"
+                : "bg-gray-900 text-white"
+            }`}
+          >
+            {selectedItem.hoverLabel}
+          </div>
+        ) : null}
       </div>
 
       {isOpen && (
@@ -206,7 +257,8 @@ export function SearchableSelect({
                   type="button"
                   onClick={() => !option.disabled && handleSelect(option.id)}
                   disabled={option.disabled}
-                  className={`w-full px-2 py-2 text-left transition-colors flex justify-between items-center ${
+                  title={option.hoverLabel}
+                  className={`group relative w-full px-2 py-2 text-left transition-colors flex justify-between items-center ${
                     option.disabled || option.deprecated
                       ? isDark
                         ? "opacity-50 cursor-not-allowed text-slate-500"
@@ -244,7 +296,7 @@ export function SearchableSelect({
                       {option.deprecated && "[Deprecated] "}
                       {option.name}
                     </span>
-                    {option.subLabel && (
+                    {showSubLabel && option.subLabel && (
                       <span
                         className={`text-xs ${isDark ? "text-slate-500" : "text-gray-400"}`}
                       >
@@ -259,6 +311,17 @@ export function SearchableSelect({
                       }`}
                     />
                   )}
+                  {option.hoverLabel ? (
+                    <span
+                      className={`pointer-events-none absolute left-2 top-full z-60 mt-1 hidden max-w-[320px] rounded px-2 py-1 text-xs shadow-lg group-hover:block ${
+                        isDark
+                          ? "bg-slate-900 text-slate-100 border border-slate-700"
+                          : "bg-gray-900 text-white"
+                      }`}
+                    >
+                      {option.hoverLabel}
+                    </span>
+                  ) : null}
                 </button>
               ))
             ) : (

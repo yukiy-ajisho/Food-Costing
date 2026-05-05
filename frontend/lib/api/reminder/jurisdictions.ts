@@ -25,6 +25,12 @@ export const jurisdictionsAPI = {
       body: JSON.stringify(body),
     }),
 
+  update: (id: string, body: { name: string }) =>
+    apiRequest<JurisdictionRow>(`/jurisdictions/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
   delete: (id: string) =>
     apiRequest<void>(`/jurisdictions/${encodeURIComponent(id)}`, {
       method: "DELETE",

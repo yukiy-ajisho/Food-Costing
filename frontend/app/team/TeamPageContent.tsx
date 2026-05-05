@@ -72,6 +72,14 @@ interface TeamPageContentProps {
   section?: TeamSection;
 }
 
+interface MemberProfileView {
+  name: string;
+  email?: string | null;
+  roleLabel: string;
+  memberSince?: string | null;
+  scopeLabel: "Company member" | "Tenant member";
+}
+
 export default function TeamPageContent({
   section = "all",
 }: TeamPageContentProps) {
@@ -136,6 +144,8 @@ export default function TeamPageContent({
   const [showInviteDirectorForm, setShowInviteDirectorForm] = useState(false);
   const [inviteDirectorEmail, setInviteDirectorEmail] = useState("");
   const [sendingInviteDirector, setSendingInviteDirector] = useState(false);
+  const [selectedMemberProfile, setSelectedMemberProfile] =
+    useState<MemberProfileView | null>(null);
 
   const isDark = theme === "dark";
   const showCompanySection = section === "all" || section === "company";
@@ -181,11 +191,19 @@ export default function TeamPageContent({
       ? "bg-slate-600 hover:bg-slate-500 text-slate-100 border border-slate-500"
       : "bg-gray-100 hover:bg-gray-200 text-gray-800 border border-gray-200"
   }`;
+  const teamProfileButtonClass = `flex items-center justify-center px-3 py-1.5 rounded-lg text-sm font-medium shrink-0 border ${
+    isDark
+      ? "bg-slate-700 hover:bg-slate-600 text-slate-100 border-slate-400"
+      : "bg-white hover:bg-gray-100 text-gray-800 border-gray-400"
+  }`;
   const dashedEmptyClass = `rounded-lg border-2 border-dashed p-8 text-center text-sm ${
     isDark
       ? "border-slate-600 text-slate-400 bg-slate-900/20"
       : "border-gray-300 text-gray-600 bg-gray-50/50"
   }`;
+
+  const formatTenantRoleLabel = (role: TenantMember["role"]) =>
+    role.charAt(0).toUpperCase() + role.slice(1);
 
   // 選択した会社のメンバー一覧を取得
   useEffect(() => {
@@ -729,7 +747,9 @@ export default function TeamPageContent({
   }
 
   return (
-    <div className="p-8">
+    <div
+      className="p-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer"
+    >
       <div className="max-w-4xl mx-auto space-y-8">
         {/* Company カードの外: 追加用アクション */}
         {showCompanySection ? <div className="space-y-3">
@@ -905,6 +925,21 @@ export default function TeamPageContent({
                                     >
                                       {roleText}
                                     </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setSelectedMemberProfile({
+                                          name:
+                                            m.display_name || m.email || "User",
+                                          email: m.email ?? null,
+                                          roleLabel: roleText,
+                                          scopeLabel: "Company member",
+                                        })
+                                      }
+                                      className={teamProfileButtonClass}
+                                    >
+                                      Profile
+                                    </button>
                                   </div>
                                 </div>
                               );
@@ -1590,6 +1625,21 @@ export default function TeamPageContent({
                                     {member.role}
                                   </span>
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedMemberProfile({
+                                      name: member.name || member.email || "User",
+                                      email: member.email ?? null,
+                                      roleLabel: formatTenantRoleLabel(member.role),
+                                      memberSince: member.member_since ?? null,
+                                      scopeLabel: "Tenant member",
+                                    })
+                                  }
+                                  className={teamProfileButtonClass}
+                                >
+                                  Profile
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1950,6 +2000,81 @@ export default function TeamPageContent({
               })}
           </div>
         </div> : null}
+
+        {/* Create Company Modal */}
+        {selectedMemberProfile && (
+          <div
+            className={`fixed inset-0 flex items-center justify-center z-50 ${
+              isDark ? "bg-black/70" : "bg-black/50"
+            }`}
+            onClick={() => setSelectedMemberProfile(null)}
+          >
+            <div
+              className={`p-6 rounded-lg max-w-md w-full mx-4 ${
+                isDark ? "bg-slate-800 border border-slate-700" : "bg-white border border-gray-200"
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3 mb-4">
+                <h2
+                  className={`text-xl font-semibold ${
+                    isDark ? "text-slate-100" : "text-gray-900"
+                  }`}
+                >
+                  Profile
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setSelectedMemberProfile(null)}
+                  className={`p-1 rounded ${
+                    isDark
+                      ? "text-slate-300 hover:bg-slate-700"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                  aria-label="Close profile modal"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <div className="space-y-3">
+                <p className={isDark ? "text-slate-200" : "text-gray-900"}>
+                  <span className={isDark ? "text-slate-400" : "text-gray-500"}>
+                    Name:
+                  </span>{" "}
+                  {selectedMemberProfile.name}
+                </p>
+                <p className={isDark ? "text-slate-200" : "text-gray-900"}>
+                  <span className={isDark ? "text-slate-400" : "text-gray-500"}>
+                    Email:
+                  </span>{" "}
+                  {selectedMemberProfile.email || "—"}
+                </p>
+                <p className={isDark ? "text-slate-200" : "text-gray-900"}>
+                  <span className={isDark ? "text-slate-400" : "text-gray-500"}>
+                    Role:
+                  </span>{" "}
+                  {selectedMemberProfile.roleLabel}
+                </p>
+                {selectedMemberProfile.memberSince ? (
+                  <p className={isDark ? "text-slate-200" : "text-gray-900"}>
+                    <span className={isDark ? "text-slate-400" : "text-gray-500"}>
+                      Member since:
+                    </span>{" "}
+                    {new Date(
+                      selectedMemberProfile.memberSince,
+                    ).toLocaleDateString()}
+                  </p>
+                ) : null}
+                <p className={isDark ? "text-slate-200" : "text-gray-900"}>
+                  <span className={isDark ? "text-slate-400" : "text-gray-500"}>
+                    Type:
+                  </span>{" "}
+                  {selectedMemberProfile.scopeLabel}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Create Company Modal */}
         {showCreateCompanyModal && (

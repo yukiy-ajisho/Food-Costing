@@ -85,6 +85,58 @@ router.post("/", async (req, res) => {
 });
 
 /**
+ * PUT /jurisdictions/:id
+ * Body: { name }
+ */
+router.put("/:id", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const id = req.params.id?.trim();
+    const name = (req.body?.name as string | undefined)?.trim();
+    if (!id) return res.status(400).json({ error: "id required" });
+    if (!name) return res.status(400).json({ error: "name is required" });
+
+    const { data: row, error: fe } = await supabase
+      .from("jurisdictions")
+      .select("id, company_id")
+      .eq("id", id)
+      .maybeSingle();
+    if (fe || !row) return res.status(404).json({ error: "Not found" });
+
+    try {
+      await assertCompanyOfficerManageMembers(userId, row.company_id);
+    } catch (e: unknown) {
+      if ((e as Error & { status?: number }).status === 403) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      throw e;
+    }
+
+    const { data, error } = await supabase
+      .from("jurisdictions")
+      .update({ name })
+      .eq("id", id)
+      .select("id, company_id, name, created_by, created_at, updated_at")
+      .single();
+    if (error) {
+      if (
+        error.message.includes("duplicate key") ||
+        error.code === "23505"
+      ) {
+        return res
+          .status(409)
+          .json({ error: "A jurisdiction with this name already exists" });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+    res.json(data);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
  * DELETE /jurisdictions/:id
  */
 router.delete("/:id", async (req, res) => {

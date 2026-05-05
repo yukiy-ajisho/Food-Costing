@@ -144,7 +144,9 @@ export default function DocumentBoxPage() {
   }
 
   return (
-    <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
+    <div
+      className={`min-h-full p-6 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer ${isDark ? "bg-slate-900" : "bg-gray-50"}`}
+    >
       <div className="max-w-5xl mx-auto">
         <h1 className={`text-xl font-semibold mb-6 ${textPrimary}`}>
           Uploaded Document Box
@@ -214,7 +216,11 @@ export default function DocumentBoxPage() {
                     className={`transition-colors ${rowHover}`}
                   >
                     <td className={`px-4 py-3 ${textMuted}`}>
-                      {new Date(doc.created_at).toLocaleDateString()}
+                      {new Date(doc.created_at).toLocaleDateString("en-US", {
+                        month: "2-digit",
+                        day: "2-digit",
+                        year: "numeric",
+                      })}
                     </td>
                     <td className={`px-4 py-3 ${textPrimary}`}>
                       {doc.sent_by_name ?? "—"}

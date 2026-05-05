@@ -59,6 +59,16 @@ export const companyRequirementRealDataAPI = {
       { method: "DELETE" }
     ),
 
+  deleteGroup: (companyRequirementId: string, groupKey: number) => {
+    const params = new URLSearchParams();
+    params.set("company_requirement_id", companyRequirementId);
+    params.set("group_key", String(groupKey));
+    return apiRequest<{ ok: boolean }>(
+      `/company-requirement-real-data/group?${params.toString()}`,
+      { method: "DELETE" }
+    );
+  },
+
   uploadDocument: (companyRequirementId: string, groupKey: number, file: File) => {
     const form = new FormData();
     form.append("company_requirement_id", companyRequirementId);

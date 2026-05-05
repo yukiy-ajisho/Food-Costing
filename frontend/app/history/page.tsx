@@ -152,7 +152,7 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="p-6 max-w-[1600px] mx-auto">
+    <div className="p-6 max-w-[1600px] mx-auto [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer">
       {!selectedTenantId ? (
         <p className={isDark ? "text-slate-400" : "text-gray-600"}>
           Select a tenant to load history.

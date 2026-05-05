@@ -4075,7 +4075,7 @@ export default function CostPage() {
   }
 
   return (
-    <div className="px-8 pb-8">
+    <div className="px-8 pb-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer">
       <div className="w-full">
         {/* 固定ヘッダーセクション（Add、Edit、Filter） */}
         <div

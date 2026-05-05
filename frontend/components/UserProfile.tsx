@@ -87,8 +87,9 @@ export function UserProfile() {
       {isDropdownOpen && (
         <>
           <div
-            className="fixed inset-0 z-40"
+            className="fixed inset-0 z-40 cursor-pointer"
             onClick={() => setIsDropdownOpen(false)}
+            aria-hidden
           ></div>
           <div
             className={`absolute top-full right-0 mt-2 w-56 rounded-lg shadow-lg border py-2 z-[60] ${

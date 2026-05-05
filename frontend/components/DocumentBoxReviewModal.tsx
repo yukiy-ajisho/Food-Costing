@@ -12,10 +12,10 @@ import {
 type InboxRow = Extract<DocumentBoxRow, { kind: "inbox" }>;
 
 const TYPE_LABELS: Record<DocumentInboxDocumentType, string> = {
-  invoice: "invoice",
-  company_requirement: "company_requirement",
-  tenant_requirement: "tenant_requirement",
-  employee_requirement: "employee_requirement",
+  invoice: "Invoice",
+  company_requirement: "Company requirement",
+  tenant_requirement: "Tenant requirement",
+  employee_requirement: "Employee requirement",
 };
 
 interface DocumentBoxReviewModalProps {
@@ -42,6 +42,7 @@ export function DocumentBoxReviewModal({
   const [classifyError, setClassifyError] = useState<string | null>(null);
   const [classifyBusy, setClassifyBusy] = useState(false);
   const [removeBusy, setRemoveBusy] = useState(false);
+  const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
 
   const border = isDark ? "border-slate-600" : "border-gray-200";
   const shell = isDark
@@ -54,6 +55,7 @@ export function DocumentBoxReviewModal({
       setPreviewUrl(null);
       setDocType("");
       setClassifyError(null);
+      setRemoveConfirmOpen(false);
       return;
     }
     setDocType((row.document_type as DocumentInboxDocumentType) ?? "");
@@ -99,16 +101,13 @@ export function DocumentBoxReviewModal({
 
   const onRemove = useCallback(async () => {
     if (!row || removeBusy) return;
-    const ok = window.confirm(
-      `Remove "${row.file_name}" permanently from Uploaded Document Box?`,
-    );
-    if (!ok) return;
 
     setClassifyError(null);
     setRemoveBusy(true);
     try {
       await documentInboxAPI.remove(row.id);
       onRemoved();
+      setRemoveConfirmOpen(false);
       onClose();
     } catch (e) {
       setClassifyError(e instanceof Error ? e.message : "Failed to remove file");
@@ -221,12 +220,10 @@ export function DocumentBoxReviewModal({
           </div>
         </div>
 
-        <div
-          className={`flex shrink-0 justify-end border-t px-5 py-3 ${border}`}
-        >
+        <div className="flex shrink-0 justify-end px-5 py-3">
           <button
             type="button"
-            onClick={() => void onRemove()}
+            onClick={() => setRemoveConfirmOpen(true)}
             disabled={classifyBusy || removeBusy}
             className={`rounded-md px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50 ${
               isDark ? "bg-red-700 hover:bg-red-600" : "bg-red-600 hover:bg-red-700"
@@ -235,6 +232,38 @@ export function DocumentBoxReviewModal({
             {removeBusy ? "Removing..." : "Remove"}
           </button>
         </div>
+        {removeConfirmOpen && (
+          <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/40">
+            <div
+              className={`w-full max-w-sm rounded-xl border p-5 shadow-xl ${isDark ? "bg-slate-800 border-slate-600" : "bg-white border-gray-200"}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p
+                className={`text-sm ${isDark ? "text-slate-200" : "text-gray-800"}`}
+              >
+                Remove "{row.file_name}" permanently from Uploaded Document Box?
+              </p>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRemoveConfirmOpen(false)}
+                  disabled={removeBusy}
+                  className={`px-3 py-2 rounded-lg text-sm transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onRemove()}
+                  disabled={removeBusy}
+                  className="px-3 py-2 rounded-lg text-sm bg-red-600 text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                >
+                  {removeBusy ? "Removing..." : "Remove"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
