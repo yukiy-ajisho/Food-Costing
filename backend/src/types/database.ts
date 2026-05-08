@@ -57,6 +57,8 @@ export interface Item {
   // Common fields
   each_grams?: number | null; // grams for 'each' unit (used for both raw and prepped items)
   notes?: string | null;
+  description?: string | null;
+  procedure?: string | null;
   deprecated?: string | null; // timestamp when deprecated
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   user_id: string; // FK to users (deprecated, use tenant_id)

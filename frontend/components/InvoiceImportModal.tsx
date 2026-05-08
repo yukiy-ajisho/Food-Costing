@@ -1,6 +1,13 @@
 "use client";
 
-import { Fragment, useState, useEffect, useMemo, useRef, useCallback } from "react";
+import {
+  Fragment,
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback,
+} from "react";
 import { UploadCloud } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { SearchableSelect } from "@/components/SearchableSelect";
@@ -293,6 +300,7 @@ function buildLinkExistingOptions(
   id: string;
   name: string;
   subLabel: string;
+  hoverLabel: string;
   searchText: string;
   matchCandidate: boolean;
 }[] {
@@ -304,10 +312,12 @@ function buildLinkExistingOptions(
     const brand = vp.brand_name?.trim() ?? "";
     const score = scoreVvpForInvoiceRow(row, vp);
     const searchText = [pn, brand].filter(Boolean).join(" ");
+    const detail = `${vp.purchase_quantity} ${vp.purchase_unit}${vp.case_unit != null ? ` · ${vp.case_unit}/cs` : ""} · $${Number(vp.current_price).toFixed(2)}`;
     return {
       id: vp.id,
-      name: `${baseName} — ${pn}`,
-      subLabel: `${vp.purchase_quantity} ${vp.purchase_unit}${vp.case_unit != null ? ` · ${vp.case_unit}/cs` : ""} · $${Number(vp.current_price).toFixed(2)}`,
+      name: pn,
+      subLabel: detail,
+      hoverLabel: baseName,
       searchText: searchText || pn,
       // Keep ranking/auto-selection logic, but do not highlight rows in yellow.
       matchCandidate: false,
@@ -664,6 +674,9 @@ export function InvoiceImportModal({
   const [newBaseItemModalOpen, setNewBaseItemModalOpen] = useState(false);
   const [step3ValidationAttempted, setStep3ValidationAttempted] =
     useState(false);
+  const [activeNumericEditKey, setActiveNumericEditKey] = useState<
+    string | null
+  >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const dragDepthRef = useRef(0);
@@ -1161,7 +1174,7 @@ export function InvoiceImportModal({
 
         <div
           className={`shrink-0 border-b px-5 py-4 ${border} ${
-            isDark ? "bg-slate-900/40" : "bg-gray-50"
+            isDark ? "bg-slate-900/40" : "bg-gray-100"
           }`}
         >
           <nav aria-label="Import progress">
@@ -1256,7 +1269,7 @@ export function InvoiceImportModal({
                 className={`rounded-xl border p-4 ${
                   isDark
                     ? "border-slate-600 bg-slate-900/40"
-                    : "border-gray-200 bg-gray-50/90"
+                    : "border-gray-200 bg-gray-100"
                 }`}
               >
                 <p className={`mb-3 text-sm font-medium ${thCls}`}>Upload</p>
@@ -1430,7 +1443,7 @@ export function InvoiceImportModal({
                   className={`rounded-xl border p-4 ${
                     isDark
                       ? "border-slate-600 bg-slate-900/40"
-                      : "border-gray-200 bg-gray-50/90"
+                      : "border-gray-200 bg-gray-100"
                   }`}
                 >
                   <div className={`mb-3 space-y-2 border-b pb-3 ${border}`}>
@@ -1487,7 +1500,7 @@ export function InvoiceImportModal({
                       className={`flex justify-end border-b px-2 py-2 ${
                         isDark
                           ? "border-slate-600 bg-slate-800/90"
-                          : "border-gray-200 bg-gray-50"
+                          : "border-gray-200 bg-gray-100"
                       }`}
                     >
                       <button
@@ -1507,7 +1520,7 @@ export function InvoiceImportModal({
                         <thead>
                           <tr
                             className={
-                              isDark ? "bg-slate-700/80" : "bg-gray-50"
+                              isDark ? "bg-slate-700/80" : "bg-gray-100"
                             }
                           >
                             <th className={`px-2 py-2 text-left ${thCls}`}>
@@ -1571,13 +1584,39 @@ export function InvoiceImportModal({
                                   type="number"
                                   min={0.0001}
                                   step="any"
-                                  className={`w-20 rounded border px-2 py-1 text-sm ${inputCls}`}
-                                  value={r.purchase_quantity}
+                                  className={`no-spinner w-20 rounded border px-2 py-1 text-right text-sm [font-variant-numeric:tabular-nums] ${inputCls}`}
+                                  value={
+                                    activeNumericEditKey ===
+                                    `${r.localId}:purchase_quantity`
+                                      ? r.purchase_quantity
+                                      : Number(
+                                          r.purchase_quantity || 0,
+                                        ).toFixed(2)
+                                  }
+                                  onFocus={() =>
+                                    setActiveNumericEditKey(
+                                      `${r.localId}:purchase_quantity`,
+                                    )
+                                  }
                                   onChange={(e) =>
                                     updateRow(r.localId, {
                                       purchase_quantity: Number(e.target.value),
                                     })
                                   }
+                                  onBlur={() => {
+                                    updateRow(r.localId, {
+                                      purchase_quantity: Number(
+                                        Number(
+                                          r.purchase_quantity || 0,
+                                        ).toFixed(2),
+                                      ),
+                                    });
+                                    setActiveNumericEditKey((prev) =>
+                                      prev === `${r.localId}:purchase_quantity`
+                                        ? null
+                                        : prev,
+                                    );
+                                  }}
                                 />
                               </td>
                               <td className="px-2 py-1.5">
@@ -1602,17 +1641,39 @@ export function InvoiceImportModal({
                                   type="number"
                                   min={0.01}
                                   step="any"
-                                  className={`w-24 rounded border px-2 py-1 text-sm ${inputCls}`}
-                                  value={r.current_price || ""}
+                                  className={`no-spinner w-24 rounded border px-2 py-1 text-right text-sm [font-variant-numeric:tabular-nums] ${inputCls}`}
+                                  value={
+                                    activeNumericEditKey ===
+                                    `${r.localId}:current_price`
+                                      ? r.current_price || ""
+                                      : Number(r.current_price || 0).toFixed(2)
+                                  }
+                                  onFocus={() =>
+                                    setActiveNumericEditKey(
+                                      `${r.localId}:current_price`,
+                                    )
+                                  }
                                   onChange={(e) =>
                                     updateRow(r.localId, {
                                       current_price: Number(e.target.value),
                                     })
                                   }
+                                  onBlur={() => {
+                                    updateRow(r.localId, {
+                                      current_price: Number(
+                                        Number(r.current_price || 0).toFixed(2),
+                                      ),
+                                    });
+                                    setActiveNumericEditKey((prev) =>
+                                      prev === `${r.localId}:current_price`
+                                        ? null
+                                        : prev,
+                                    );
+                                  }}
                                 />
                               </td>
                               <td className="px-2 py-1.5">
-                                <div className="flex flex-col gap-1">
+                                <div className="flex items-center gap-1 whitespace-nowrap">
                                   <select
                                     className={`rounded border px-1 py-0.5 text-xs ${inputCls}`}
                                     value={r.purchaseMode}
@@ -1640,14 +1701,14 @@ export function InvoiceImportModal({
                                   </select>
                                   {(r.purchaseMode === "case" ||
                                     r.purchaseMode === "mixed") && (
-                                    <div className="flex items-center gap-1">
+                                    <>
                                       <input
                                         type="number"
                                         min={1}
                                         step={1}
                                         placeholder="unit/cs"
                                         title="Units per case"
-                                        className={`w-16 rounded border px-1 py-0.5 text-xs ${inputCls}`}
+                                        className={`no-spinner w-16 rounded border px-1 py-0.5 text-right text-xs [font-variant-numeric:tabular-nums] ${inputCls}`}
                                         value={r.case_unit ?? ""}
                                         onChange={(e) =>
                                           updateRow(r.localId, {
@@ -1655,6 +1716,19 @@ export function InvoiceImportModal({
                                               e.target.value === ""
                                                 ? null
                                                 : parseInt(e.target.value, 10),
+                                          })
+                                        }
+                                        onBlur={() =>
+                                          updateRow(r.localId, {
+                                            case_unit:
+                                              r.case_unit == null
+                                                ? null
+                                                : Math.max(
+                                                    1,
+                                                    Math.round(
+                                                      Number(r.case_unit),
+                                                    ),
+                                                  ),
                                           })
                                         }
                                       />
@@ -1667,7 +1741,7 @@ export function InvoiceImportModal({
                                         step={1}
                                         placeholder="cs"
                                         title="Cases purchased"
-                                        className={`w-12 rounded border px-1 py-0.5 text-xs ${inputCls}`}
+                                        className={`no-spinner w-12 rounded border px-1 py-0.5 text-right text-xs [font-variant-numeric:tabular-nums] ${inputCls}`}
                                         value={r.case_purchased ?? ""}
                                         onChange={(e) =>
                                           updateRow(r.localId, {
@@ -1677,8 +1751,21 @@ export function InvoiceImportModal({
                                                 : parseInt(e.target.value, 10),
                                           })
                                         }
+                                        onBlur={() =>
+                                          updateRow(r.localId, {
+                                            case_purchased:
+                                              r.case_purchased == null
+                                                ? null
+                                                : Math.max(
+                                                    1,
+                                                    Math.round(
+                                                      Number(r.case_purchased),
+                                                    ),
+                                                  ),
+                                          })
+                                        }
                                       />
-                                    </div>
+                                    </>
                                   )}
                                   {(r.purchaseMode === "loose" ||
                                     r.purchaseMode === "mixed") && (
@@ -1688,7 +1775,7 @@ export function InvoiceImportModal({
                                       step={1}
                                       placeholder="qty"
                                       title="Units purchased"
-                                      className={`w-16 rounded border px-1 py-0.5 text-xs ${inputCls}`}
+                                      className={`no-spinner w-16 rounded border px-1 py-0.5 text-right text-xs [font-variant-numeric:tabular-nums] ${inputCls}`}
                                       value={r.unit_purchased ?? ""}
                                       onChange={(e) =>
                                         updateRow(r.localId, {
@@ -1696,6 +1783,19 @@ export function InvoiceImportModal({
                                             e.target.value === ""
                                               ? null
                                               : parseInt(e.target.value, 10),
+                                        })
+                                      }
+                                      onBlur={() =>
+                                        updateRow(r.localId, {
+                                          unit_purchased:
+                                            r.unit_purchased == null
+                                              ? null
+                                              : Math.max(
+                                                  1,
+                                                  Math.round(
+                                                    Number(r.unit_purchased),
+                                                  ),
+                                                ),
                                         })
                                       }
                                     />
@@ -1727,7 +1827,7 @@ export function InvoiceImportModal({
               {groups.map((g) => (
                 <div key={g.localId} className="space-y-3">
                   <div
-                    className={`rounded-lg border p-4 ${isDark ? "border-slate-600 bg-slate-900/30" : "border-gray-200 bg-gray-50/80"}`}
+                    className={`rounded-lg border p-4 ${isDark ? "border-slate-600 bg-slate-900/30" : "border-gray-200 bg-gray-100/90"}`}
                   >
                     <p className={`mb-2 text-sm font-medium ${thCls}`}>
                       Invoice
@@ -1774,7 +1874,7 @@ export function InvoiceImportModal({
                     <table className="w-full min-w-[1080px] text-sm">
                       <thead>
                         <tr
-                          className={isDark ? "bg-slate-700/80" : "bg-gray-50"}
+                          className={isDark ? "bg-slate-700/80" : "bg-gray-100"}
                         >
                           <th className={`px-2 py-2 text-left ${thCls}`}>#</th>
                           <th
@@ -1799,7 +1899,7 @@ export function InvoiceImportModal({
                                   isDark ? "text-blue-400" : "text-blue-600"
                                 }`}
                               >
-                                + new base item
+                                + add
                               </button>
                             </span>
                           </th>
@@ -2009,7 +2109,7 @@ export function InvoiceImportModal({
                   className={`rounded-xl border p-4 ${
                     isDark
                       ? "border-slate-600 bg-slate-900/40"
-                      : "border-gray-200 bg-gray-50/90"
+                      : "border-gray-200 bg-gray-100"
                   }`}
                 >
                   <div className={`mb-3 space-y-1.5 border-b pb-3 ${border}`}>
@@ -2038,7 +2138,7 @@ export function InvoiceImportModal({
                     <table className="w-full min-w-[640px] text-sm">
                       <thead>
                         <tr
-                          className={isDark ? "bg-slate-700/80" : "bg-gray-50"}
+                          className={isDark ? "bg-slate-700/80" : "bg-gray-100"}
                         >
                           <th className={`px-2 py-2 text-left ${thCls}`}>#</th>
                           <th className={`px-2 py-2 text-left ${thCls}`}>
@@ -2072,7 +2172,9 @@ export function InvoiceImportModal({
                           return (
                             <Fragment key={r.localId}>
                               <tr className={`border-t ${border}`}>
-                                <td className="px-2 py-2 align-top">{idx + 1}</td>
+                                <td className="px-2 py-2 align-top">
+                                  {idx + 1}
+                                </td>
                                 <td className="px-2 py-2 align-top">
                                   {r.matchMode === "new" ? "New" : "Existing"}
                                 </td>
@@ -2158,7 +2260,9 @@ export function InvoiceImportModal({
                                   <td
                                     colSpan={2}
                                     className={`px-2 py-1 text-xs ${
-                                      isDark ? "text-amber-300" : "text-amber-700"
+                                      isDark
+                                        ? "text-amber-300"
+                                        : "text-amber-700"
                                     }`}
                                   >
                                     Warning: Invoice date is before the last

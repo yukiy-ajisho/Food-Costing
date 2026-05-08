@@ -183,7 +183,7 @@ router.get("/available", async (req, res) => {
     const { data: shares, error } = await supabase
       .from("cross_tenant_item_shares")
       .select(
-        "*, items(id, name, tenant_id, proceed_yield_unit, each_grams, item_kind, deprecated)",
+        "*, items(id, name, tenant_id, proceed_yield_unit, each_grams, item_kind, is_menu_item, base_item_id, deprecated)",
       )
       .eq("company_id", companyId)
       .neq("owner_tenant_id", tenant_id) // 自分のテナントのアイテムは除外

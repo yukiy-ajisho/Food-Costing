@@ -1,12 +1,11 @@
 "use client";
 
 import { createClient } from "@/lib/supabase-client";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
 import Link from "next/link";
 
 function LoginPageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -24,7 +23,7 @@ function LoginPageContent() {
         // セッションがある場合は/costにリダイレクト
         // セッションの有効性はmiddlewareで検証されるため、ここでは検証しない
         if (session) {
-          router.replace("/cost");
+          window.location.replace("/cost");
           return; // リダイレクト中は何も表示しない
         }
       } catch {
@@ -54,7 +53,7 @@ function LoginPageContent() {
           setError("An error occurred. Please try again.");
       }
     }
-  }, [router, supabase, searchParams]);
+  }, [supabase, searchParams]);
 
   const handleGoogleLogin = async () => {
     setError(null);

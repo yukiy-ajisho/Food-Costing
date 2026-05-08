@@ -56,7 +56,6 @@ router.get(
         .select(
           "id, file_name, value, content_type, created_at, document_type, created_by"
         )
-        .is("document_type", null)
         .is("reviewed_at", null)
         .order("created_at", { ascending: false });
 

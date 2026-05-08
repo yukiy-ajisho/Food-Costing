@@ -172,7 +172,7 @@ export default function VendorsPage() {
   }
 
   return (
-    <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
+    <div className={`min-h-full p-6 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
       <div className="max-w-5xl mx-auto">
         {/* タブ */}
         <div className={`flex border-b mb-6 ${border}`}>

@@ -61,6 +61,16 @@ export const tenantRequirementRealDataAPI = {
       { method: "DELETE" }
     ),
 
+  deleteGroup: (tenantRequirementId: string, groupKey: number) => {
+    const params = new URLSearchParams();
+    params.set("tenant_requirement_id", tenantRequirementId);
+    params.set("group_key", String(groupKey));
+    return apiRequest<{ ok: boolean }>(
+      `/tenant-requirement-real-data/group?${params.toString()}`,
+      { method: "DELETE" }
+    );
+  },
+
   /** Upload a document for a requirement+group (detail modal). Replaces if one exists for that group. */
   uploadDocument: (tenantRequirementId: string, groupKey: number, file: File) => {
     const form = new FormData();

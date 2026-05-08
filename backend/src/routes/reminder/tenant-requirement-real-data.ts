@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { supabase } from "../../config/supabase";
 import {
+  deleteObjectFromR2,
   getDocumentPresignedUrl,
   uploadDocumentToR2,
 } from "../../lib/r2-upload";
@@ -620,6 +621,72 @@ router.post("/", async (req, res) => {
     }
 
     await upsertRealDataRows(body.rows);
+    res.status(200).json({ ok: true });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /tenant-requirement-real-data/group
+ * Query: tenant_requirement_id, group_key
+ * Deletes all real_data rows in the selected group and associated R2 documents.
+ */
+router.delete("/group", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const requirementId = req.query.tenant_requirement_id as string | undefined;
+    const groupKeyRaw = req.query.group_key as string | undefined;
+    const groupKey = groupKeyRaw ? Number.parseInt(groupKeyRaw, 10) : NaN;
+
+    if (!requirementId?.trim() || Number.isNaN(groupKey) || groupKey < 1) {
+      return res.status(400).json({
+        error: "tenant_requirement_id and valid group_key are required",
+      });
+    }
+
+    const allowed = await ensureRequirementAccess(userId, [requirementId]);
+    if (!allowed) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    const { data: docType } = await supabase
+      .from("tenant_requirement_value_types")
+      .select("id")
+      .eq("name", "Document")
+      .maybeSingle();
+    if (!docType) {
+      return res.status(500).json({ error: "Document value type not found" });
+    }
+
+    const { data: documentRows, error: documentRowsError } = await supabase
+      .from("tenant_requirement_real_data")
+      .select("value")
+      .eq("tenant_requirement_id", requirementId)
+      .eq("group_key", groupKey)
+      .eq("type_id", docType.id);
+    if (documentRowsError) {
+      return res.status(500).json({ error: documentRowsError.message });
+    }
+
+    const r2Keys = (documentRows ?? [])
+      .map((row) => (row.value ?? "").trim())
+      .filter((value) => value.length > 0);
+
+    for (const key of r2Keys) {
+      await deleteObjectFromR2(key);
+    }
+
+    const { error: deleteError } = await supabase
+      .from("tenant_requirement_real_data")
+      .delete()
+      .eq("tenant_requirement_id", requirementId)
+      .eq("group_key", groupKey);
+    if (deleteError) {
+      return res.status(500).json({ error: deleteError.message });
+    }
+
     res.status(200).json({ ok: true });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

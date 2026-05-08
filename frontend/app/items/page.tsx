@@ -1433,7 +1433,7 @@ export default function ItemsPage() {
   }
 
   return (
-    <div className="px-8 pb-8">
+    <div className="px-8 pb-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer">
       <div className="max-w-7xl mx-auto">
         {/* 固定ヘッダー（タブ＋ボタン） */}
         <div
@@ -1525,8 +1525,8 @@ export default function ItemsPage() {
                   {activeTab === "items" && (
                     <>
                       <div
-                        className={`mx-2 w-px h-8 shrink-0 self-center ${
-                          isDark ? "bg-slate-600" : "bg-gray-300"
+                        className={`mx-2 w-0.5 h-8 shrink-0 self-center ${
+                          isDark ? "bg-slate-500" : "bg-gray-400"
                         }`}
                         aria-hidden
                       />

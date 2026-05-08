@@ -21,6 +21,7 @@ import {
   Share2,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
+import { RecipeSummaryPanel } from "@/components/RecipeSummaryPanel";
 import {
   itemsAPI,
   recipeLinesAPI,
@@ -1299,6 +1300,9 @@ export default function CostPage() {
         tenant_id: string;
         proceed_yield_unit?: string | null;
         each_grams?: number | null;
+        item_kind?: string | null;
+        is_menu_item?: boolean | null;
+        base_item_id?: string | null;
         deprecated?: string | null;
       };
       owner_tenant_id: string;
@@ -1326,7 +1330,7 @@ export default function CostPage() {
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
   // モード管理
   const [activeMode, setActiveMode] = useState<
-    "costing" | "access-control" | "cross-tenant-access-control"
+    "costing" | "access-control" | "cross-tenant-access-control" | "recipe-summary"
   >("costing");
   // Costingモードの編集状態（既存のisEditModeをリネーム）
   const [isEditModeCosting, setIsEditModeCosting] = useState(false);
@@ -1714,11 +1718,14 @@ export default function CostPage() {
           .filter((s) => s.items && s.allowed_actions.includes("read"))
           .map((s) => ({
             item: {
-              id: s.item_id,
+              id: s.items!.id,
               name: s.items!.name,
               tenant_id: s.items!.tenant_id,
               proceed_yield_unit: s.items!.proceed_yield_unit ?? null,
               each_grams: s.items!.each_grams ?? null,
+              item_kind: s.items!.item_kind ?? null,
+              is_menu_item: s.items!.is_menu_item ?? null,
+              base_item_id: s.items!.base_item_id ?? null,
               deprecated: s.items!.deprecated ?? null,
             },
             owner_tenant_id: s.owner_tenant_id,
@@ -1799,7 +1806,11 @@ export default function CostPage() {
 
   // モード切り替えハンドラー
   const handleModeChange = async (
-    newMode: "costing" | "access-control" | "cross-tenant-access-control",
+    newMode:
+      | "costing"
+      | "access-control"
+      | "cross-tenant-access-control"
+      | "recipe-summary",
   ) => {
     if (activeMode !== newMode) {
       // 編集中の場合はリセット（警告なし、後で追加可能）
@@ -1822,6 +1833,11 @@ export default function CostPage() {
       // Cross-tenant Access Controlモードに切り替える場合
       if (newMode === "cross-tenant-access-control") {
         await refreshCrossTenantShares();
+      }
+
+      // Recipe Summaryモードでも権限制御判定に必要な share 情報をロード
+      if (newMode === "recipe-summary") {
+        await Promise.all([refreshItemShares(), refreshCrossTenantShares()]);
       }
     }
   };
@@ -4075,7 +4091,7 @@ export default function CostPage() {
   }
 
   return (
-    <div className="px-8 pb-8">
+    <div className="px-8 pb-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer">
       <div className="w-full">
         {/* 固定ヘッダーセクション（Add、Edit、Filter） */}
         <div
@@ -4090,7 +4106,7 @@ export default function CostPage() {
               isDark ? "border-slate-700" : "border-gray-200"
             }`}
           >
-            <nav className="flex space-x-8">
+            <nav className="flex items-center gap-8">
               <button
                 type="button"
                 onClick={() => handleModeChange("costing")}
@@ -4105,6 +4121,24 @@ export default function CostPage() {
               >
                 Costing
               </button>
+              <button
+                type="button"
+                onClick={() => handleModeChange("recipe-summary")}
+                disabled={savePending}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors disabled:pointer-events-none disabled:opacity-50 ${
+                  activeMode === "recipe-summary"
+                    ? "border-blue-500 text-blue-600"
+                    : isDark
+                      ? "border-transparent text-slate-400 hover:text-slate-300 hover:border-slate-600"
+                      : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+                }`}
+              >
+                Recipe Summary
+              </button>
+              <div
+                className={`-mx-4 h-6 w-0.5 shrink-0 ${isDark ? "bg-slate-500" : "bg-gray-400"}`}
+                aria-hidden
+              />
               <button
                 type="button"
                 onClick={() => handleModeChange("access-control")}
@@ -4199,6 +4233,8 @@ export default function CostPage() {
                     Edit
                   </button>
                 )
+              ) : activeMode === "recipe-summary" ? (
+                <div className="min-w-[100px]"></div>
               ) : // Access ControlモードのEdit/Save/Cancel
               isEditModeAccessControl ? (
                 <>
@@ -4391,8 +4427,21 @@ export default function CostPage() {
           />
         )}
 
-        {/* アイテムリスト（save 中は Vendor Items と同様の Loading） */}
-        {savePending ? (
+        {/* Recipe Summary */}
+        {activeMode === "recipe-summary" ? (
+          <RecipeSummaryPanel
+            isDark={isDark}
+            items={items}
+            availableItems={availableItems}
+            baseItems={baseItems}
+            selectedTenantId={selectedTenantId}
+            crossTenantAvailableItems={crossTenantAvailableItems}
+            userRole={userRole}
+            currentUserId={currentUserId}
+            itemShares={itemShares}
+            crossTenantShares={crossTenantShares}
+          />
+        ) : savePending ? (
           <div
             className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
               isDark

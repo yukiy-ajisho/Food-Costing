@@ -12,8 +12,7 @@ import {
   UploadCloud,
   FileText,
   Image as ImageIcon,
-  ArrowDown,
-  ArrowUp,
+  ArrowRight,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import {
@@ -239,6 +238,8 @@ export default function TenantRequirementsPage() {
   >([]);
   const [detailUploadMode, setDetailUploadMode] = useState(false);
   const [detailUploadSaving, setDetailUploadSaving] = useState(false);
+  const [detailGroupRemoving, setDetailGroupRemoving] = useState(false);
+  const [detailRemoveConfirmOpen, setDetailRemoveConfirmOpen] = useState(false);
   const [detailInboxPicks, setDetailInboxPicks] = useState<
     TenantRequirementInboxPick[]
   >([]);
@@ -564,6 +565,7 @@ export default function TenantRequirementsPage() {
       setDetailUploadFile(null);
       setDetailSelectedInboxId(null);
       setDetailPendingDeleteKeys([]);
+      setDetailRemoveConfirmOpen(false);
       return;
     }
     tenantRequirementRealDataAPI
@@ -851,6 +853,51 @@ export default function TenantRequirementsPage() {
       }
     } finally {
       setSavingDetail(false);
+    }
+  };
+
+  const handleRemoveDetailGroup = async () => {
+    if (!detailModalReqId || detailSelectedGroupKey == null) return;
+    setDetailGroupRemoving(true);
+    try {
+      await tenantRequirementRealDataAPI.deleteGroup(
+        detailModalReqId,
+        detailSelectedGroupKey,
+      );
+      await fetchStatusData({ background: true });
+      const fresh = await tenantRequirementRealDataAPI.getByRequirementIds([
+        detailModalReqId,
+      ]);
+      const freshRows = fresh as TenantRequirementRealDataRow[];
+      setDetailRealDataRows(freshRows);
+      const remainingKeys = [...new Set(freshRows.map((r) => r.group_key))].sort(
+        (a, b) => b - a,
+      );
+      const nextGroup = remainingKeys[0] ?? null;
+      setDetailSelectedGroupKey(nextGroup);
+      if (nextGroup == null) {
+        setDetailDocuments([]);
+      } else {
+        const docs = await tenantRequirementRealDataAPI.getDocuments(
+          detailModalReqId,
+          nextGroup,
+        );
+        setDetailDocuments(docs);
+      }
+      setDetailPendingDeleteKeys([]);
+      setDetailModalEditMode(false);
+      setDetailUploadMode(false);
+      setDetailUploadFile(null);
+      setDetailSelectedInboxId(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to remove";
+      if (isPermissionErrorMessage(message)) {
+        setPermissionDenied(true);
+      } else {
+        alert(message);
+      }
+    } finally {
+      setDetailGroupRemoving(false);
     }
   };
 
@@ -1178,7 +1225,9 @@ export default function TenantRequirementsPage() {
   }
 
   return (
-    <div className="px-8 pb-8">
+    <div
+      className="px-8 pb-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer"
+    >
       <div className="max-w-7xl mx-auto">
         <div
           className={`pt-4 mb-4 border-b transition-colors ${
@@ -1286,7 +1335,7 @@ export default function TenantRequirementsPage() {
                             onClick={() => setRecordPaymentMode(true)}
                             className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-600 text-white hover:bg-gray-700"}`}
                           >
-                            Record Payment
+                            Record
                           </button>
                         ))}
                     </div>
@@ -1306,29 +1355,26 @@ export default function TenantRequirementsPage() {
                           : "bg-white border-gray-200"
                       }`}
                     >
-                      <table
-                        className="w-full"
-                        style={{ tableLayout: "auto", minWidth: "min-content" }}
-                      >
+                      <table className="w-full" style={{ tableLayout: "fixed" }}>
                         <thead
                           className={isDark ? "bg-slate-700" : "bg-gray-50"}
                         >
                           <tr>
                             <th
                               className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
-                              style={{ minWidth: 160 }}
+                              style={{ width: "40%" }}
                             >
                               Requirement name
                             </th>
                             <th
                               className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
-                              style={{ minWidth: 80 }}
+                              style={{ width: "30%" }}
                             >
                               Status
                             </th>
                             <th
                               className={`px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
-                              style={{ minWidth: 120 }}
+                              style={{ width: "30%" }}
                             >
                               Due date
                             </th>
@@ -1384,7 +1430,6 @@ export default function TenantRequirementsPage() {
                               >
                                 <td
                                   className={`px-4 py-3 ${isDark ? "text-slate-200" : "text-gray-900"}`}
-                                  style={{ minWidth: 200 }}
                                 >
                                   <div className="flex items-center gap-2 min-w-0">
                                     <span
@@ -1453,19 +1498,25 @@ export default function TenantRequirementsPage() {
                                   </div>
                                 </td>
                                 <td
-                                  className={`px-4 py-3 ${isDimmed ? "opacity-40" : ""}`}
+                                  className={`px-4 py-3 text-left ${isDimmed ? "opacity-40" : ""}`}
                                 >
                                   {statusRefreshing ? (
-                                    <Loader2 className="w-5 h-5 animate-spin inline-block" />
+                                    <span className="inline-flex w-12 justify-center">
+                                      <Loader2 className="w-5 h-5 animate-spin inline-block" />
+                                    </span>
                                   ) : (
                                     <span
-                                      className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${status === "ok" ? "bg-green-500" : status === "overdue" ? "bg-red-500" : "bg-gray-400"}`}
+                                      className={`inline-flex w-12 justify-center`}
                                       title={
                                         expiration
                                           ? `Expiration: ${formatExpirationDate(expiration)}`
                                           : "No expiration date"
                                       }
-                                    />
+                                    >
+                                      <span
+                                        className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${status === "ok" ? "bg-green-500" : status === "overdue" ? "bg-red-500" : "bg-gray-400"}`}
+                                      />
+                                    </span>
                                   )}
                                 </td>
                                 <td
@@ -1520,7 +1571,7 @@ export default function TenantRequirementsPage() {
                             : "text-gray-800 bg-gray-50"
                         }`}
                       >
-                        Other tenants
+                        Switch to tenant
                       </div>
                       <div
                         className={`border-t ${
@@ -1591,24 +1642,18 @@ export default function TenantRequirementsPage() {
                                       e.stopPropagation();
                                       setSelectedTenantId(tenant.id);
                                     }}
-                                    title="Switch tenant"
+                                    title="Go"
                                     className={`inline-flex items-center justify-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] leading-tight font-medium transition-colors border ${
                                       isDark
                                         ? "text-blue-200 bg-blue-950/45 border-blue-800/50 hover:bg-blue-900/55"
                                         : "text-blue-900 bg-blue-100 border-blue-200/80 hover:bg-blue-200/85"
                                     }`}
                                   >
-                                    <span className="inline-flex items-center gap-0">
-                                      <ArrowUp
-                                        className="w-2.5 h-2.5 shrink-0"
-                                        aria-hidden
-                                      />
-                                      <ArrowDown
-                                        className="w-2.5 h-2.5 shrink-0 -ml-0.5"
-                                        aria-hidden
-                                      />
-                                    </span>
-                                    <span>Switch tenant</span>
+                                    <ArrowRight
+                                      className="w-3 h-3 shrink-0"
+                                      aria-hidden
+                                    />
+                                    <span>Go</span>
                                   </button>
                                 </span>
                                 <span
@@ -1646,13 +1691,7 @@ export default function TenantRequirementsPage() {
                                           : "border-gray-400 bg-gray-50"
                                       }`}
                                     >
-                                      <table
-                                        className="w-full"
-                                        style={{
-                                          tableLayout: "auto",
-                                          minWidth: "min-content",
-                                        }}
-                                      >
+                                      <table className="w-full" style={{ tableLayout: "fixed" }}>
                                         <thead
                                           className={
                                             isDark ? "bg-slate-700" : "bg-white"
@@ -1661,16 +1700,19 @@ export default function TenantRequirementsPage() {
                                           <tr>
                                             <th
                                               className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                                              style={{ width: "40%" }}
                                             >
                                               Requirement name
                                             </th>
                                             <th
                                               className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                                              style={{ width: "30%" }}
                                             >
                                               Status
                                             </th>
                                             <th
                                               className={`px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider ${isDark ? "text-slate-300" : "text-gray-500"}`}
+                                              style={{ width: "30%" }}
                                             >
                                               Due date
                                             </th>
@@ -1711,16 +1753,18 @@ export default function TenantRequirementsPage() {
                                                 >
                                                   {req.title}
                                                 </td>
-                                                <td className="px-4 py-2.5">
-                                                  <span
-                                                    className={`inline-block w-2.5 h-2.5 rounded-full ${
-                                                      status === "ok"
-                                                        ? "bg-green-500"
-                                                        : status === "overdue"
-                                                          ? "bg-red-500"
-                                                          : "bg-gray-400"
-                                                    }`}
-                                                  />
+                                                <td className="px-4 py-2.5 text-left">
+                                                  <span className="inline-flex w-12 justify-center">
+                                                    <span
+                                                      className={`inline-block w-2.5 h-2.5 rounded-full ${
+                                                        status === "ok"
+                                                          ? "bg-green-500"
+                                                          : status === "overdue"
+                                                            ? "bg-red-500"
+                                                            : "bg-gray-400"
+                                                      }`}
+                                                    />
+                                                  </span>
                                                 </td>
                                                 <td
                                                   className={`px-4 py-2.5 text-sm ${isDark ? "text-slate-300" : "text-gray-700"}`}
@@ -2254,6 +2298,7 @@ export default function TenantRequirementsPage() {
                             setDetailUploadMode(false);
                             setDetailUploadFile(null);
                             setDetailSelectedInboxId(null);
+                            setDetailRemoveConfirmOpen(false);
                           }}
                           className={`p-2 rounded-lg transition-colors `}
                           title="Close"
@@ -2263,6 +2308,41 @@ export default function TenantRequirementsPage() {
                       )}
                     </div>
                   </div>
+                  {detailRemoveConfirmOpen && (
+                    <div className="absolute inset-0 z-[70] flex items-center justify-center bg-black/40">
+                      <div
+                        className={`w-full max-w-sm rounded-xl border p-5 shadow-xl ${isDark ? "bg-slate-800 border-slate-600" : "bg-white border-gray-200"}`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <p
+                          className={`text-sm ${isDark ? "text-slate-200" : "text-gray-800"}`}
+                        >
+                          Are you sure you want to remove this selected group?
+                        </p>
+                        <div className="mt-4 flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setDetailRemoveConfirmOpen(false)}
+                            disabled={detailGroupRemoving}
+                            className={`px-3 py-2 rounded-lg text-sm transition-colors ${isDark ? "bg-slate-600 text-slate-200 hover:bg-slate-500" : "bg-gray-200 text-gray-700 hover:bg-gray-300"}`}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await handleRemoveDetailGroup();
+                              setDetailRemoveConfirmOpen(false);
+                            }}
+                            disabled={detailGroupRemoving}
+                            className="px-3 py-2 rounded-lg text-sm bg-red-600 text-white transition-colors hover:bg-red-700 disabled:opacity-60"
+                          >
+                            {detailGroupRemoving ? "Removing..." : "Remove"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="flex flex-1 min-h-0">
                     {/* 左: 請求関連日付（新しい group 順） */}
                     {!detailUploadMode && (
@@ -2469,6 +2549,23 @@ export default function TenantRequirementsPage() {
                               </span>
                             )}
                           </p>
+                          <div className="pt-2 flex justify-center">
+                            <button
+                              type="button"
+                              onClick={() => setDetailRemoveConfirmOpen(true)}
+                              disabled={
+                                detailGroupRemoving ||
+                                detailSelectedGroupKey == null
+                              }
+                              className={`px-3 py-2 text-sm rounded-lg transition-colors ${
+                                isDark
+                                  ? "text-red-300 hover:bg-red-900/30"
+                                  : "text-red-600 hover:bg-red-50"
+                              } ${detailSelectedGroupKey == null ? "opacity-60 cursor-not-allowed" : ""}`}
+                            >
+                              {detailGroupRemoving ? "Removing..." : "Remove"}
+                            </button>
+                          </div>
                         </>
                       ) : !detailUploadMode && detailModalEditMode ? (
                         <div className="space-y-4">
