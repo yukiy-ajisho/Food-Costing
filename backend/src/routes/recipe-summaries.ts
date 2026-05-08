@@ -171,10 +171,16 @@ router.post("/", async (req, res) => {
   try {
     const summaryName = String(req.body?.summary_name ?? "").trim();
     const sourceItemId = String(req.body?.source_item_id ?? "").trim();
-    const expandTargetItemIdsRaw = Array.isArray(req.body?.expand_target_item_ids)
-      ? req.body.expand_target_item_ids
+    const expandTargetItemIdsRaw: unknown[] = Array.isArray(req.body?.expand_target_item_ids)
+      ? (req.body.expand_target_item_ids as unknown[])
       : [];
-    const expandTargetItemIds = [...new Set(expandTargetItemIdsRaw.map((v: unknown) => String(v).trim()).filter(Boolean))];
+    const expandTargetItemIds: string[] = Array.from(
+      new Set(
+        expandTargetItemIdsRaw
+          .map((v) => String(v).trim())
+          .filter((s) => s.length > 0),
+      ),
+    );
 
     if (!summaryName) {
       return res.status(400).json({ error: "summary_name is required" });

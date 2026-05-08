@@ -241,7 +241,9 @@ export function DocumentBoxReviewModal({
               <p
                 className={`text-sm ${isDark ? "text-slate-200" : "text-gray-800"}`}
               >
-                Remove "{row.file_name}" permanently from Uploaded Document Box?
+                Remove{" "}
+                <span className="font-medium">&quot;{row.file_name}&quot;</span>{" "}
+                permanently from Uploaded Document Box?
               </p>
               <div className="mt-4 flex justify-end gap-2">
                 <button

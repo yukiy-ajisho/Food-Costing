@@ -251,14 +251,7 @@ export function RecipeSummaryPanel({
         disabled: !access.allowed,
       };
     });
-  }, [
-    sourceCandidates,
-    baseItems,
-    itemShares,
-    crossTenantShares,
-    userRole,
-    currentUserId,
-  ]);
+  }, [sourceCandidates, baseItems, getItemRoleAccess]);
 
   const loadSummaries = async () => {
     setLoading(true);
@@ -351,7 +344,7 @@ export function RecipeSummaryPanel({
   useEffect(() => {
     if (!sourceItemId) return;
     void loadChildren(sourceItemId);
-  }, [sourceItemId]);
+  }, [sourceItemId, loadChildren]);
 
   const toggleExpandTarget = async (itemId: string) => {
     const next = new Set(selectedExpandIds);
