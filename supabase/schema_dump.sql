@@ -1412,12 +1412,14 @@ BEGIN
         RAISE EXCEPTION 'existing operation requires price > 0';
       END IF;
 
-      IF NOT EXISTS (
-        SELECT 1
-        FROM public.virtual_vendor_products vvp
-        WHERE vvp.id = v_vp_id
-          AND vvp.tenant_id = p_tenant_id
-      ) THEN
+      -- Fetch VVP.case_unit to satisfy purchase-qty check constraint.
+      SELECT vvp.case_unit
+      INTO v_case_unit
+      FROM public.virtual_vendor_products vvp
+      WHERE vvp.id = v_vp_id
+        AND vvp.tenant_id = p_tenant_id;
+
+      IF NOT FOUND THEN
         RAISE EXCEPTION 'vendor_product_id % is not found in tenant %', v_vp_id, p_tenant_id;
       END IF;
 
@@ -1426,14 +1428,20 @@ BEGIN
         virtual_vendor_product_id,
         price,
         source_type,
-        user_id
+        user_id,
+        case_unit,
+        case_purchased,
+        unit_purchased
       )
       VALUES (
         p_tenant_id,
         v_vp_id,
         v_price,
         'manual',
-        p_user_id
+        p_user_id,
+        v_case_unit,
+        NULL,
+        CASE WHEN v_case_unit IS NULL THEN 1 ELSE NULL END
       );
 
       v_changed_ids := array_append(v_changed_ids, v_vp_id);
@@ -2012,6 +2020,8 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
     "user_id" "uuid",
     "tenant_id" "uuid" NOT NULL,
     "responsible_user_id" "uuid",
+    "description" "text",
+    "procedure" "text",
     CONSTRAINT "chk_items_menu_must_be_prepped" CHECK (((NOT "is_menu_item") OR ("item_kind" = 'prepped'::"text"))),
     CONSTRAINT "chk_items_prepped_fields_new" CHECK ((("item_kind" <> 'prepped'::"text") OR (("proceed_yield_amount" IS NOT NULL) AND ("proceed_yield_amount" > (0)::numeric) AND ("proceed_yield_unit" IS NOT NULL) AND ("base_item_id" IS NULL)))),
     CONSTRAINT "chk_items_prepped_has_name" CHECK ((("item_kind" <> 'prepped'::"text") OR ("name" IS NOT NULL))),
@@ -2174,6 +2184,30 @@ CREATE TABLE IF NOT EXISTS "public"."recipe_lines" (
 
 
 ALTER TABLE "public"."recipe_lines" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."recipe_summaries" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "summary_name" "text" NOT NULL,
+    "source_item_id" "uuid" NOT NULL,
+    "created_by" "uuid" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."recipe_summaries" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."recipe_summary_expand_targets" (
+    "summary_id" "uuid" NOT NULL,
+    "target_item_id" "uuid" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."recipe_summary_expand_targets" OWNER TO "postgres";
 
 
 CREATE TABLE IF NOT EXISTS "public"."resource_shares" (
@@ -2619,6 +2653,16 @@ ALTER TABLE ONLY "public"."recipe_lines"
 
 
 
+ALTER TABLE ONLY "public"."recipe_summaries"
+    ADD CONSTRAINT "recipe_summaries_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."recipe_summary_expand_targets"
+    ADD CONSTRAINT "recipe_summary_expand_targets_pkey" PRIMARY KEY ("summary_id", "target_item_id");
+
+
+
 ALTER TABLE ONLY "public"."resource_shares"
     ADD CONSTRAINT "resource_shares_pkey" PRIMARY KEY ("id");
 
@@ -3011,6 +3055,18 @@ CREATE INDEX "idx_recipe_lines_tenant_id_line_type" ON "public"."recipe_lines" U
 
 
 CREATE INDEX "idx_recipe_lines_user_id" ON "public"."recipe_lines" USING "btree" ("user_id");
+
+
+
+CREATE INDEX "idx_recipe_summaries_source_item_id" ON "public"."recipe_summaries" USING "btree" ("source_item_id");
+
+
+
+CREATE INDEX "idx_recipe_summaries_tenant_id" ON "public"."recipe_summaries" USING "btree" ("tenant_id");
+
+
+
+CREATE INDEX "idx_recipe_summary_expand_targets_target_item_id" ON "public"."recipe_summary_expand_targets" USING "btree" ("target_item_id");
 
 
 
@@ -3419,6 +3475,31 @@ ALTER TABLE ONLY "public"."recipe_lines"
 
 
 
+ALTER TABLE ONLY "public"."recipe_summaries"
+    ADD CONSTRAINT "recipe_summaries_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."recipe_summaries"
+    ADD CONSTRAINT "recipe_summaries_source_item_id_fkey" FOREIGN KEY ("source_item_id") REFERENCES "public"."items"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."recipe_summaries"
+    ADD CONSTRAINT "recipe_summaries_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."recipe_summary_expand_targets"
+    ADD CONSTRAINT "recipe_summary_expand_targets_summary_id_fkey" FOREIGN KEY ("summary_id") REFERENCES "public"."recipe_summaries"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."recipe_summary_expand_targets"
+    ADD CONSTRAINT "recipe_summary_expand_targets_target_item_id_fkey" FOREIGN KEY ("target_item_id") REFERENCES "public"."items"("id") ON DELETE RESTRICT;
+
+
+
 ALTER TABLE ONLY "public"."resource_shares"
     ADD CONSTRAINT "resource_shares_owner_tenant_id_fkey" FOREIGN KEY ("owner_tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
 
@@ -3595,6 +3676,9 @@ ALTER TABLE "public"."document_metadata_invoices" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."proceed_validation_settings" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."recipe_summaries" ENABLE ROW LEVEL SECURITY;
 
 
 GRANT USAGE ON SCHEMA "public" TO "postgres";
@@ -3872,6 +3956,18 @@ GRANT ALL ON TABLE "public"."profiles" TO "service_role";
 GRANT ALL ON TABLE "public"."recipe_lines" TO "anon";
 GRANT ALL ON TABLE "public"."recipe_lines" TO "authenticated";
 GRANT ALL ON TABLE "public"."recipe_lines" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."recipe_summaries" TO "anon";
+GRANT ALL ON TABLE "public"."recipe_summaries" TO "authenticated";
+GRANT ALL ON TABLE "public"."recipe_summaries" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."recipe_summary_expand_targets" TO "anon";
+GRANT ALL ON TABLE "public"."recipe_summary_expand_targets" TO "authenticated";
+GRANT ALL ON TABLE "public"."recipe_summary_expand_targets" TO "service_role";
 
 
 

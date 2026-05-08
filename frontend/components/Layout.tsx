@@ -12,6 +12,7 @@ import {
   Utensils,
   SlidersHorizontal,
   LayoutDashboard,
+  ChevronLeft,
   ChevronDown,
   ChevronRight,
   Inbox,
@@ -41,6 +42,7 @@ import { companyRequirementRealDataAPI } from "@/lib/api/reminder/company-requir
  */
 const SIDEBAR_NAV_ROW_MIN = "min-h-14";
 const SIDEBAR_NAV_ROW_ALIGN = `${SIDEBAR_NAV_ROW_MIN} flex items-center gap-2`;
+const SIDEBAR_TEAM_NAV_ROW_ALIGN = "min-h-9 flex items-center gap-2";
 
 /** Food costing / License 直下のサブリンク用（親より詰めて同じ密度に揃える） */
 const SIDEBAR_SUB_NAV_ROW_MIN = "min-h-11";
@@ -632,9 +634,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         isDark ? "bg-slate-900" : "bg-gray-50"
       }`}
     >
-      {/* ヘッダー（上部90px、左端まで） */}
+      {/* ヘッダー（上部64px、左端まで） */}
       <header
-        className={`relative z-100 h-[90px] shadow-sm border-b px-8 flex items-center justify-between transition-colors [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer ${
+        className={`relative z-100 h-[64px] shadow-sm border-b px-8 flex items-center justify-between transition-colors [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer ${
           isDark ? "bg-slate-800 border-slate-700" : "bg-white border-gray-200"
         }`}
         style={{ paddingLeft: "30px" }}
@@ -666,16 +668,36 @@ export function Layout({ children }: { children: React.ReactNode }) {
           {/* ハンバーガーメニュー */}
           <button
             onClick={toggleSidebarMode}
-            className={`p-2 rounded-md transition-colors ${
+            className={`inline-flex items-center gap-0 rounded-md p-2 transition-colors ${
+              sidebarMode === "compact" ? "justify-center" : "justify-start"
+            } ${
               isDark
                 ? "text-slate-300 hover:text-blue-400 hover:bg-slate-700"
-                : "text-gray-600 hover:text-blue-700 hover:bg-blue-50"
+                : "text-black hover:text-blue-900 hover:bg-blue-50"
             }`}
             title={
               sidebarMode === "compact" ? "Expand sidebar" : "Collapse sidebar"
             }
           >
-            <Menu className="h-5 w-5" />
+            {sidebarMode === "full" && <ChevronLeft className="h-4 w-4 -mr-1" />}
+            {sidebarMode === "compact" ? (
+              <svg
+                viewBox="0 0 24 24"
+                className="h-5 w-7"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <line x1="2" y1="6" x2="22" y2="6" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <line x1="2" y1="18" x2="22" y2="18" />
+              </svg>
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
           </button>
 
           {/* ページタイトル */}
@@ -750,7 +772,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         : "text-blue-700 font-semibold"
                       : isDark
                         ? "text-slate-300 hover:text-blue-400"
-                        : "text-gray-600 hover:text-blue-700"
+                        : "text-black hover:text-blue-900"
                   }`}
                   style={{
                     backgroundColor: isDark ? "#1e293b" : "white",
@@ -762,7 +784,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         : "#1d4ed8"
                       : isDark
                         ? "#cbd5e1"
-                        : "#6b7280",
+                        : "#000000",
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.backgroundColor = isDark
@@ -782,7 +804,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         : "#1d4ed8"
                       : isDark
                         ? "#cbd5e1"
-                        : "#6b7280";
+                        : "#000000";
                   }}
                 >
                   <LayoutDashboard className="h-5 w-5 shrink-0" />
@@ -803,7 +825,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "text-blue-700 font-semibold"
                         : isDark
                           ? "text-slate-300 hover:text-blue-400"
-                          : "text-gray-600 hover:text-blue-700"
+                          : "text-black hover:text-blue-900"
                     }`}
                     style={{
                       backgroundColor: isDark ? "#1e293b" : "white",
@@ -813,7 +835,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280",
+                          : "#000000",
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = isDark
@@ -833,7 +855,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280";
+                          : "#000000";
                     }}
                   >
                     <Utensils className="h-5 w-5 shrink-0" />
@@ -866,14 +888,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
                             isActive ? "font-semibold" : ""
                           }`}
                           style={{
-                            backgroundColor: isDark ? "#1e293b" : "white",
+                            backgroundColor: isActive
+                              ? isDark
+                                ? "#334155"
+                                : "#dbeafe"
+                              : isDark
+                                ? "#1e293b"
+                                : "white",
                             color: isActive
                               ? isDark
                                 ? "#60a5fa"
                                 : "#1d4ed8"
                               : isDark
                                 ? "#94a3b8"
-                                : "#6b7280",
+                                : "#000000",
                           }}
                           onMouseEnter={(e) => {
                             e.currentTarget.style.backgroundColor = isDark
@@ -884,16 +912,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
                               : "#1d4ed8";
                           }}
                           onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = isDark
-                              ? "#1e293b"
-                              : "white";
+                            e.currentTarget.style.backgroundColor = isActive
+                              ? isDark
+                                ? "#334155"
+                                : "#dbeafe"
+                              : isDark
+                                ? "#1e293b"
+                                : "white";
                             e.currentTarget.style.color = isActive
                               ? isDark
                                 ? "#60a5fa"
                                 : "#1d4ed8"
                               : isDark
                                 ? "#94a3b8"
-                                : "#6b7280";
+                                : "#000000";
                           }}
                         >
                           {sub.label}
@@ -907,14 +939,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   <button
                     type="button"
                     onClick={() => setTeamExpanded((e) => !e)}
-                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                    className={`w-full ${SIDEBAR_TEAM_NAV_ROW_ALIGN} px-3 py-1 text-left transition-colors border-0 rounded-md cursor-pointer ${
                       isTeamSectionActive
                         ? isDark
                           ? "text-blue-400 font-semibold"
                           : "text-blue-700 font-semibold"
                         : isDark
                           ? "text-slate-300 hover:text-blue-400"
-                          : "text-gray-600 hover:text-blue-700"
+                          : "text-black hover:text-blue-900"
                     }`}
                     style={{
                       backgroundColor: isDark ? "#1e293b" : "white",
@@ -924,7 +956,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280",
+                          : "#000000",
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = isDark
@@ -944,7 +976,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280";
+                          : "#000000";
                     }}
                   >
                     <TeamNavIcon className="h-5 w-5 shrink-0" />
@@ -975,14 +1007,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
                             isActive ? "font-semibold" : ""
                           }`}
                           style={{
-                            backgroundColor: isDark ? "#1e293b" : "white",
+                            backgroundColor: isActive
+                              ? isDark
+                                ? "#334155"
+                                : "#dbeafe"
+                              : isDark
+                                ? "#1e293b"
+                                : "white",
                             color: isActive
                               ? isDark
                                 ? "#60a5fa"
                                 : "#1d4ed8"
                               : isDark
                                 ? "#94a3b8"
-                                : "#6b7280",
+                                : "#000000",
                           }}
                           onMouseEnter={(e) => {
                             e.currentTarget.style.backgroundColor = isDark
@@ -993,16 +1031,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
                               : "#1d4ed8";
                           }}
                           onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = isDark
-                              ? "#1e293b"
-                              : "white";
+                            e.currentTarget.style.backgroundColor = isActive
+                              ? isDark
+                                ? "#334155"
+                                : "#dbeafe"
+                              : isDark
+                                ? "#1e293b"
+                                : "white";
                             e.currentTarget.style.color = isActive
                               ? isDark
                                 ? "#60a5fa"
                                 : "#1d4ed8"
                               : isDark
                                 ? "#94a3b8"
-                                : "#6b7280";
+                                : "#000000";
                           }}
                         >
                           {sub.label}
@@ -1025,7 +1067,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280",
+                          : "#000000",
                     }}
                     onMouseEnter={(e) => {
                       if (!canAccessDocumentBox) return;
@@ -1049,7 +1091,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280";
+                          : "#000000";
                     }}
                     onClick={(e) => {
                       if (!canAccessDocumentBox) e.preventDefault();
@@ -1059,7 +1101,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     <div className="relative shrink-0">
                       <Inbox className="h-5 w-5" />
                       {showSidebarAlerts && hasDocumentPending && (
-                        <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500" />
+                        <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-red-400 ring-1 ring-red-500/30 dark:bg-red-500 dark:ring-red-400/45" />
                       )}
                     </div>
                     {isSidebarExpanded && (
@@ -1084,7 +1126,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "text-blue-700 font-semibold"
                         : isDark
                           ? "text-slate-300 hover:text-blue-400"
-                          : "text-gray-600 hover:text-blue-700"
+                          : "text-black hover:text-blue-900"
                     }`}
                     style={{
                       backgroundColor: isDark ? "#1e293b" : "white",
@@ -1094,7 +1136,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280",
+                          : "#000000",
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = isDark
@@ -1114,13 +1156,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8"
                         : isDark
                           ? "#cbd5e1"
-                          : "#6b7280";
+                          : "#000000";
                     }}
                   >
                     <span className="relative shrink-0">
                       <Award className="h-5 w-5 shrink-0" />
                       {showSidebarAlerts && licenseTotalOverdue > 0 && (
-                        <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500" />
+                        <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-red-400 ring-1 ring-red-500/30 dark:bg-red-500 dark:ring-red-400/45" />
                       )}
                     </span>
                     {isSidebarExpanded && (
@@ -1152,14 +1194,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
                             isActive ? "font-semibold" : ""
                           }`}
                           style={{
-                            backgroundColor: isDark ? "#1e293b" : "white",
+                            backgroundColor: isActive
+                              ? isDark
+                                ? "#334155"
+                                : "#dbeafe"
+                              : isDark
+                                ? "#1e293b"
+                                : "white",
                             color: isActive
                               ? isDark
                                 ? "#60a5fa"
                                 : "#1d4ed8"
                               : isDark
                                 ? "#94a3b8"
-                                : "#6b7280",
+                                : "#000000",
                           }}
                           onMouseEnter={(e) => {
                             e.currentTarget.style.backgroundColor = isDark
@@ -1170,16 +1218,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
                               : "#1d4ed8";
                           }}
                           onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = isDark
-                              ? "#1e293b"
-                              : "white";
+                            e.currentTarget.style.backgroundColor = isActive
+                              ? isDark
+                                ? "#334155"
+                                : "#dbeafe"
+                              : isDark
+                                ? "#1e293b"
+                                : "white";
                             e.currentTarget.style.color = isActive
                               ? isDark
                                 ? "#60a5fa"
                                 : "#1d4ed8"
                               : isDark
                                 ? "#94a3b8"
-                                : "#6b7280";
+                                : "#000000";
                           }}
                         >
                           <span className="min-w-0 flex-1 leading-tight whitespace-normal">
@@ -1191,7 +1243,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                               : sub.id === "tenant-requirements"
                                 ? licenseOverdueCounts.tenant
                                 : licenseOverdueCounts.company) > 0 && (
-                              <span className="relative -top-3 ml-1 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold leading-none text-white">
+                              <span className="relative -top-3 ml-1 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-red-400 px-1 text-[10px] font-bold leading-none text-white ring-1 ring-red-500/35 dark:bg-red-500 dark:ring-red-400/40">
                                 {(sub.id === "employee-requirements"
                                   ? licenseOverdueCounts.employee
                                   : sub.id === "tenant-requirements"
@@ -1219,7 +1271,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         : "text-blue-700 font-semibold"
                       : isDark
                         ? "text-slate-300 hover:text-blue-400"
-                        : "text-gray-600 hover:text-blue-700"
+                        : "text-black hover:text-blue-900"
                   }`}
                   style={{
                     backgroundColor: isDark ? "#1e293b" : "white",
@@ -1231,7 +1283,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         : "#1d4ed8"
                       : isDark
                         ? "#cbd5e1"
-                        : "#6b7280",
+                        : "#000000",
                   }}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.backgroundColor = isDark
@@ -1251,7 +1303,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         : "#1d4ed8"
                       : isDark
                         ? "#cbd5e1"
-                        : "#6b7280";
+                        : "#000000";
                   }}
                 >
                   <SlidersHorizontal className="h-5 w-5 shrink-0" />
@@ -1271,7 +1323,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "text-blue-700 font-semibold"
                         : isDark
                           ? "text-slate-300 hover:text-blue-400"
-                          : "text-gray-600 hover:text-blue-700"
+                          : "text-black hover:text-blue-900"
                     }`}
                     style={{
                       backgroundColor: isDark ? "#1e293b" : "white",
@@ -1284,7 +1336,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                             : "#1d4ed8"
                           : isDark
                             ? "#cbd5e1"
-                            : "#6b7280",
+                            : "#000000",
                     }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.backgroundColor = isDark
@@ -1305,7 +1357,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                             : "#1d4ed8"
                           : isDark
                             ? "#cbd5e1"
-                            : "#6b7280";
+                            : "#000000";
                     }}
                   >
                     <Shield className="h-5 w-5 shrink-0" />

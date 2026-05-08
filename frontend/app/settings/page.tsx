@@ -30,9 +30,9 @@ export default function SettingsPage() {
     }
   };
 
-  return (
+    return (
     <div className="px-8 pt-8 pb-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer">
-      <div className="max-w-7xl mx-auto">
+        <div className="max-w-7xl mx-auto">
         <div className="max-w-2xl space-y-6">
           <h1
             className={`text-2xl font-semibold ${isDark ? "text-slate-100" : "text-gray-900"}`}
@@ -77,9 +77,9 @@ export default function SettingsPage() {
                   }`}
                 />
               </button>
-            </div>
-          </div>
-        </div>
+                  </div>
+                </div>
+              </div>
       </div>
     </div>
   );

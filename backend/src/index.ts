@@ -45,6 +45,7 @@ import companyRequirementRealDataRouter from "./routes/reminder/company-requirem
 import ocrTestRouter from "./routes/ocr-test";
 import documentMetadataInvoicesRouter from "./routes/document-metadata-invoices";
 import documentInboxRouter from "./routes/document-inbox";
+import recipeSummariesRouter from "./routes/recipe-summaries";
 import { getR2Client, getR2BucketName } from "./config/r2";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
@@ -152,6 +153,7 @@ app.use("/company-requirement-real-data", authMiddleware(), companyRequirementRe
 app.use("/ocr-test", authMiddleware(), ocrTestRouter);
 app.use("/document-metadata-invoices", authMiddleware(), documentMetadataInvoicesRouter);
 app.use("/document-inbox", authMiddleware(), documentInboxRouter);
+app.use("/recipe-summaries", authMiddleware(), recipeSummariesRouter);
 
 // ============================================
 // 認証が必要なルート（汎用パス - 最後に配置）

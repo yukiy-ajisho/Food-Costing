@@ -210,6 +210,8 @@ export interface Item {
   // Common fields
   each_grams?: number | null; // grams for 'each' unit (used for both raw and prepped items)
   notes?: string | null;
+  description?: string | null;
+  procedure?: string | null;
   deprecated?: string | null; // timestamp when deprecated
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   wholesale?: number | null; // wholesale price
@@ -291,6 +293,8 @@ export interface CrossTenantAvailableItem extends CrossTenantItemShare {
     proceed_yield_unit?: string | null;
     each_grams?: number | null;
     item_kind?: string | null;
+    is_menu_item?: boolean | null;
+    base_item_id?: string | null;
     deprecated?: string | null;
   } | null;
 }
@@ -302,6 +306,49 @@ export interface CrossTenantGrandfatheredIngredientMeta {
   tenant_id: string;
   proceed_yield_unit: string | null;
   each_grams: number | null;
+}
+
+export interface RecipeSummary {
+  id: string;
+  tenant_id: string;
+  summary_name: string;
+  source_item_id: string;
+  source_item_name?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  expand_target_item_ids?: string[];
+}
+
+export interface RecipeSummaryTechnicalSheetStep {
+  step_key: string;
+  title: string;
+  item_id: string;
+  procedure: string | null;
+}
+
+export interface RecipeSummaryTechnicalSheetIngredientRow {
+  item_id: string;
+  nature: string;
+  vendor_item: string;
+  unit: string;
+  step_quantities: Record<string, number>;
+  total: number;
+  pu: number;
+  pt: number;
+}
+
+export interface RecipeSummaryTechnicalSheet {
+  summary_id: string;
+  summary_name: string;
+  product: {
+    item_id: string;
+    name: string;
+    description: string | null;
+  };
+  steps: RecipeSummaryTechnicalSheetStep[];
+  ingredient_rows: RecipeSummaryTechnicalSheetIngredientRow[];
+  total_ingredient_cost: number;
 }
 
 /**
@@ -920,4 +967,23 @@ export const resourceSharesAPI = {
     fetchAPI<void>(`/resource-shares/${id}`, {
       method: "DELETE",
     }),
+};
+
+export const recipeSummariesAPI = {
+  getAll: () => fetchAPI<RecipeSummary[]>("/recipe-summaries"),
+  create: (payload: {
+    summary_name: string;
+    source_item_id: string;
+    expand_target_item_ids: string[];
+  }) =>
+    fetchAPI<RecipeSummary>("/recipe-summaries", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  delete: (id: string) =>
+    fetchAPI<void>(`/recipe-summaries/${id}`, {
+      method: "DELETE",
+    }),
+  getTechnicalSheet: (id: string) =>
+    fetchAPI<RecipeSummaryTechnicalSheet>(`/recipe-summaries/${id}/technical-sheet`),
 };

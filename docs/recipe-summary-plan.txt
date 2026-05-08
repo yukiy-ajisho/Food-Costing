@@ -1,0 +1,365 @@
+================================================================================
+  RECIPE SUMMARY (Technical Sheet Output) - 実装計画書（改訂版）
+  対象: food_costing プロジェクト
+  作成日: 2026-05-07
+================================================================================
+
+--------------------------------------------------------------------------------
+1. 目的
+--------------------------------------------------------------------------------
+
+costing 画面に「Recipe Summary」タブを追加し、Summary を登録・管理する。
+
+前提:
+- 同一トップレシピに対して複数 summary を作成可能
+- summary ごとに「どの prepped を展開するか」が異なる
+- 将来の Technical Sheet 表示は再帰的に生成する
+
+
+--------------------------------------------------------------------------------
+2. 今回の設計方針（確定）
+--------------------------------------------------------------------------------
+
+- source_type は持たない（source_item_id があれば十分）
+- JSONB にスナップショット保存しない
+- 追加テーブルは最小の 2 テーブルのみ
+- 判定はバックエンドで一元化（UI は can_select/can_expand を表示するだけ）
+- 再帰展開時は各ノードで権限判定（A/B）を適用する
+- 今回は Summary 登録までを実装し、Technical Sheet 表示機能は後続
+
+
+--------------------------------------------------------------------------------
+3. DB 変更（最小構成）
+--------------------------------------------------------------------------------
+
+3-1. items テーブルへカラム追加（今回は migration のみ）
+  - description  TEXT NULL
+  - procedure    TEXT NULL
+
+  用途:
+  - トップレイヤー item の説明
+  - トップレイヤー item の工程
+
+3-2. 新規テーブル: recipe_summaries
+
+  想定カラム:
+  - id              UUID PK default gen_random_uuid()
+  - tenant_id       UUID NOT NULL references tenants(id)
+  - summary_name    TEXT NOT NULL
+  - source_item_id  UUID NOT NULL references items(id)
+  - created_by      UUID NOT NULL references auth.users(id)
+  - created_at      TIMESTAMPTZ NOT NULL default now()
+  - updated_at      TIMESTAMPTZ NOT NULL default now()
+
+  制約:
+  - 同一 source_item_id に複数 summary を許可（UNIQUE は張らない）
+
+3-3. 新規テーブル: recipe_summary_expand_targets
+
+  想定カラム:
+  - summary_id      UUID NOT NULL references recipe_summaries(id) on delete cascade
+  - target_item_id  UUID NOT NULL references items(id)
+  - created_at      TIMESTAMPTZ NOT NULL default now()
+
+  制約:
+  - primary key (summary_id, target_item_id)
+
+  意味:
+  - チェックされた prepped item だけここに保存
+  - チェックされない prepped は保存しない（= 展開しない）
+
+
+--------------------------------------------------------------------------------
+4. データ取得・再帰ルール（将来の Technical Sheet 表示用）
+--------------------------------------------------------------------------------
+
+入力:
+- summary_id
+
+処理:
+1) recipe_summaries から source_item_id を取得
+2) recipe_summary_expand_targets から target_item_id 集合を取得
+3) source_item_id の recipe_lines を取得
+4) 各 child について:
+   - child が prepped かつ target 集合に含まれる -> 子の recipe_lines を再帰で読む
+   - 上記以外 -> その行で停止
+
+出力:
+- UI 表示用のツリー（モーダル表示）
+
+備考:
+- 再帰はアプリ層（TypeScript）で実装
+- DB は最小構成を維持
+
+
+--------------------------------------------------------------------------------
+5. API 設計
+--------------------------------------------------------------------------------
+
+5-1. Summary 一覧
+  GET /recipe-summaries
+  - レスポンス: summary 配列
+
+5-2. Summary 作成
+  POST /recipe-summaries
+  body:
+  {
+    "summary_name": "Tonkatsu Curry - Full",
+    "source_item_id": "uuid",
+    "expand_target_item_ids": ["uuid-steamed-rice", "uuid-tonkatsu"]
+  }
+
+  処理:
+  - recipe_summaries INSERT
+  - expand_target_item_ids を recipe_summary_expand_targets へ一括 INSERT
+
+5-3. Summary 削除
+  DELETE /recipe-summaries/:id
+  - 親削除で expand_targets は cascade 削除
+
+5-4. Technical Sheet 取得（表示用 / 後続実装）
+  GET /recipe-summaries/:id/technical-sheet
+  - 上記「再帰ルール」で生成して返す（今回は未実装）
+
+
+--------------------------------------------------------------------------------
+6. フロントエンド実装
+--------------------------------------------------------------------------------
+
+6-1. costing タブ追加
+- 既存 Costing の右側に Recipe Summary タブを追加
+
+6-2. Recipe Summary タブ本体（今回）
+- 左上: + Create Summary ボタン
+- 下: 一覧テーブル
+  - Summary Name
+  - Base Recipe
+  - Action（View）
+  - Delete は通常表示では出さず、Edit 押下時のみ右端のゴミ箱列で操作
+  - Edit/Save/Cancel の操作感は items ページに合わせる
+  - ゴミ箱列は常時幅を確保し、非 Edit 時は不可視にして列ズレを防ぐ
+
+6-3. Create Summary モーダル
+- Summary Name 入力
+- レシピ選択（menu or prepped の対象）
+- 1段下の子を表示
+- prepped のみチェック表示
+- チェックした prepped だけ次階層を展開
+- Create で保存
+- description は Select Recipe の下に入力欄を配置
+  - 対象はトップアイテムのみ（source_item の description）
+- procedure は Expansion Level 内で prepped ごとに入力
+  - 入力欄は「展開中の prepped」にのみ表示（未展開時は非表示）
+  - トップアイテムは Expansion Level 内に常時表示（チェックボックスなし、デフォルト展開）
+  - 同一 prepped item が複数箇所に出る場合は item 単位で値を共有（1箇所入力で全出現に反映）
+  - summary 名違いで同じ source_item の summary を作成する際、description/procedure は既存 item 値を自動補完
+
+6-4. Technical Sheet モーダル（後続実装）
+- summary_id を受けて API から再帰結果取得
+- ツリー表示（インデント表示）
+- トップレイヤーの description / procedure を表示
+
+6-5. Technical Sheet（View）の確定仕様（今回合意）
+- Action の View 押下で「PDF風UI」の Technical Sheet モーダルを表示する
+- 表示ヘッダー:
+  - Product
+  - Summary
+  - Season / Portion は表示しない
+- 通貨は USD（$）
+- 下部集計は Total Ingredient Cost のみ表示
+  - Final Material Cost / Suggested Price / Seasoning Adjustment / Cost per Serving は表示しない
+- Ingredient Cost Table:
+  - 列: Nature / Vendor Item / Unit / A..N / Total / PU / PT
+  - A..N は Step 列（Stepごとの使用量）
+  - 同一材料が複数 Step で使われる場合、該当 Step 列それぞれに数量を入れる
+  - Total は Step列の合計使用量
+  - PU は Unit単価
+  - PT は PU × Total（実使用量ベース）
+- Step / Procedure:
+  - 展開された prepped のみ表示
+  - 未展開 prepped は Procedure に表示しない
+- Ingredient Cost Table への掲載:
+  - 未展開 prepped でも、材料として使用されているものは表に含める
+
+6-6. Technical Sheet（View）UIイメージ（ASCII）
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Technical Sheet                                                      [Close] │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Product: Complete Meal                                                       │
+│ Summary: Complete Meal - Full                                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Description                                                                   │
+│ Crisp, panko-crusted mushroom roulade wrapped in cabbage...                  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ STEP / PROCEDURE                                                              │
+│                                                                              │
+│ A. Main Dish (Prepped)                                                       │
+│    <procedure text from item.procedure>                                      │
+│                                                                              │
+│ B. Teriyaki Sauce (Prepped)                                                  │
+│    <procedure text from item.procedure>                                      │
+│                                                                              │
+│ C. Diluted Milk (Prepped)                                                    │
+│    <procedure text from item.procedure>                                      │
+│                                                                              │
+│ ※ 未展開 prepped は Procedure セクションに表示しない                          │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ INGREDIENT COST TABLE                                                         │
+│ ┌──────────────────────────────────────────────────────────────────────────┐  │
+│ │ Nature         Vendor Item   Unit   A      B      C      Total   PU  PT │  │
+│ ├──────────────────────────────────────────────────────────────────────────┤  │
+│ │ Soy Sauce      Lowest        L      0.10   0.30   -      0.40   3.00 1.20│ │
+│ │ Vegetable Oil  test2         L      0.15   -      0.05   0.20   1.20 0.24│ │
+│ │ Teriyaki Sauce Prepped Item  kg     0.20   -      -      0.20   8.00 1.60│ │
+│ │ Water          Lowest        L      0.20   0.10   0.15   0.45   0.01 0.00│ │
+│ │ ...                                                                        │ │
+│ └──────────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│ ※ A..N は Step 列。PU は unit単価、PT は PU × Total（実使用量）              │
+│ ※ 未展開 prepped でも材料として使っていればこの表に含める                     │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Total Ingredient Cost:                                            $32.17      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+6-7. Technical Sheet 計算方式（既存ロジック活用）
+
+- 方針:
+  - 新しい重いDB関数は原則追加しない
+  - costing ページと同様に既存API/既存関数を組み合わせて算出する
+
+- 既存関数の利用:
+  - calculate_item_costs_with_breakdown_scoped は「対象メニュー限定」のコスト計算に利用する
+  - ただし返り値は item 単位コストのため、Step列（A..N）や PU/PT 列は直接は返さない
+
+- A..N / Total / PU / PT の算出:
+  - recipe_lines の再帰展開結果から Step別使用量（A..N）を集計
+  - Total は Step列合計使用量
+  - PU は既存の vendor item 選定ロジック（lowest 等）で決定
+  - PT は PU × Total
+  - Total Ingredient Cost は ΣPT
+
+- 展開ルールとの整合:
+  - 未展開 prepped は Procedure には表示しない
+  - ただし材料として使用される場合は Ingredient Cost Table に含める
+
+
+--------------------------------------------------------------------------------
+7. UI イメージ（簡易）
+--------------------------------------------------------------------------------
+
+Create Summary モーダル:
+
+┌──────────────────────────────────────────────────────────────┐
+│ Create Summary                                          [×] │
+├──────────────────────────────────────────────────────────────┤
+│ Summary Name                                                 │
+│ [ Tonkatsu Curry - Full ]                                    │
+│                                                              │
+│ Select Recipe                                                │
+│ [ Tonkatsu Curry ▼ ]                                         │
+│                                                              │
+│ Expansion Level                                              │
+│ Tonkatsu Curry [ROOT]                                        │
+│ ├─ [☑] Steamed Rice [Prepped]                               │
+│ │   ├─ Water [Base]                                          │
+│ │   └─ Rice  [Base]                                          │
+│ ├─ [☐] Curry [Prepped]                                       │
+│ ├─ [☑] Tonkatsu [Prepped]                                    │
+│ │   ├─ 豚肉 [Base]                                            │
+│ │   └─ ...                                                   │
+│ └─ キャベツ [Base]                                            │
+├──────────────────────────────────────────────────────────────┤
+│                                [Cancel] [Create Summary]     │
+└──────────────────────────────────────────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+8. 実装順序
+--------------------------------------------------------------------------------
+
+Phase 1: Migration
+  1) items に description / procedure 追加
+  2) recipe_summaries 作成
+  3) recipe_summary_expand_targets 作成
+
+Phase 2: Backend（今回）
+  4) route: /recipe-summaries (GET/POST/DELETE)
+  5) 権限判定ヘルパー作成（A/B 分離、can_select/can_expand 算出）
+
+Phase 3: Frontend（今回）
+  6) Recipe Summary タブ追加
+  7) Create Summary モーダル実装
+  8) 一覧テーブル + Delete
+  9) disabled 表示（理由文言は TBD）
+
+Phase 4: 後続
+  10) route: /recipe-summaries/:id/technical-sheet 実装
+  11) Technical Sheet モーダル実装（6-5仕様）
+  12) items.description / items.procedure 編集 UI 実装
+
+
+--------------------------------------------------------------------------------
+9. 権限制御ルール（A/B 分離）
+--------------------------------------------------------------------------------
+
+以下は「Access Control（A）」と「Cross-tenant 制約（B）」を分離して判定する。
+最終可否は A AND B。
+
+9-1. トップアイテムのプルダウン選択可否
+
+  9-1-A. Access Control 判定
+  - manager:
+    - hide = false -> 可
+    - hide = true かつ responsible 本人 -> 可
+    - hide = true かつ responsible でない -> 不可
+  - admin / director / company_admin / company_director:
+    - 可（hide でも可）
+
+  9-1-B. Cross-tenant 判定
+  - cross-tenant item:
+    - 可: company_admin, company_director
+    - 不可: admin, director, manager
+  - non-cross-tenant item:
+    - 全ロール可（B では止めない）
+
+9-2. prepped 展開チェックボックス可否
+
+  9-2-A. Access Control 判定
+  - manager:
+    - hide = false -> 可
+    - hide = true かつ responsible 本人 -> 可
+    - hide = true かつ responsible でない -> 不可
+  - admin / director / company_admin / company_director:
+    - 可（hide でも可）
+
+  9-2-B. Cross-tenant 判定
+  - cross-tenant item:
+    - 可: company_admin, company_director
+    - 不可: admin, director, manager
+  - non-cross-tenant item:
+    - 全ロール可（B では止めない）
+
+UI 補足:
+- チェック不可の場合は checkbox を disabled（グレーアウト）表示
+- 理由文言（英語/日本語、ツールチップ or 注釈）は後で決定（TBD）
+
+
+--------------------------------------------------------------------------------
+10. 受け入れ条件
+--------------------------------------------------------------------------------
+
+- 同一 source_item_id で summary を複数作成できる
+- summary ごとに展開結果が異なる
+- チェックされた prepped のみ展開対象として保存される
+- JSON 保存なしで要件を満たす
+- 権限制御は A（Access Control）/ B（Cross-tenant）分離で動作する
+- 今回スコープは Summary 登録・一覧・削除まで（Technical Sheet 表示は後続）
+- Summary 一覧の通常 Action は View のみ
+- Delete は Edit モード時のみ右端ゴミ箱から実行できる
+- description は source_item 単位で補完される
+- procedure は prepped item 単位で補完・共有される（重複出現時も同一値）
+
+================================================================================
+  END OF PLAN (REVISION)
+================================================================================
