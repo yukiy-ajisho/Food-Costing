@@ -1751,6 +1751,7 @@ export default function ItemsPage() {
                             >
                               {isVendorItemsRowEditable(vp) ? (
                                 <SearchableSelect
+                                  useFloatingPortal
                                   options={(() => {
                                     // 使用済みbase_item_idのSetを作成
                                     const usedBaseItemIds = new Set(
@@ -1809,6 +1810,7 @@ export default function ItemsPage() {
                             >
                               {isVendorItemsRowEditable(vp) ? (
                                 <SearchableSelect
+                                  useFloatingPortal
                                   options={vendors.map((v) => ({
                                     id: v.id,
                                     name: v.name,
