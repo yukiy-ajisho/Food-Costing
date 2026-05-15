@@ -317,7 +317,8 @@ router.post(
 
 /**
  * POST /vendor-products/bulk/edit-save
- * Items tab edit mode: VVP updates (incl. case_unit) + mapping churn + new rows in one transaction.
+ * Items tab edit mode: VVP updates (incl. case_unit) + new rows (with mapping) in one transaction.
+ * Existing rows: base_item mapping is immutable.
  */
 router.post(
   "/bulk/edit-save",

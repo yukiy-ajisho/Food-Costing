@@ -649,7 +649,6 @@ export default function ItemsPage() {
             kind: "update";
             vp_id: string;
             vendor_id: string;
-            base_item_id: string | null;
             product_name: string | null;
             brand_name: string | null;
             purchase_unit: string;
@@ -687,7 +686,6 @@ export default function ItemsPage() {
             kind: "update",
             vp_id: vp.id,
             vendor_id: vp.vendor_id,
-            base_item_id: vp.base_item_id || null,
             product_name: vp.product_name || null,
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
@@ -698,11 +696,8 @@ export default function ItemsPage() {
       }
 
       if (editOperations.length > 0) {
-        const bulkResult =
-          await vendorProductsAPI.saveEditBulk(editOperations);
-        changedVendorProductIds.push(
-          ...bulkResult.changed_vendor_product_ids,
-        );
+        const bulkResult = await vendorProductsAPI.saveEditBulk(editOperations);
+        changedVendorProductIds.push(...bulkResult.changed_vendor_product_ids);
       }
 
       // Deprecate処理
@@ -812,6 +807,9 @@ export default function ItemsPage() {
     setVendorProducts(
       vendorProducts.map((vp) => {
         if (vp.id === id) {
+          if (field === "base_item_id" && !vp.isNew) {
+            return vp;
+          }
           const updated = { ...vp, [field]: value };
           // base_item_idまたはpurchase_unitが変更された場合、警告フラグを再計算
           if (field === "base_item_id" || field === "purchase_unit") {
@@ -1783,7 +1781,7 @@ export default function ItemsPage() {
                                 alignItems: "center",
                               }}
                             >
-                              {isVendorItemsRowEditable(vp) ? (
+                              {isVendorItemsRowEditable(vp) && vp.isNew ? (
                                 <SearchableSelect
                                   useFloatingPortal
                                   options={(() => {

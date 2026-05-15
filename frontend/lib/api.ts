@@ -701,7 +701,6 @@ export const vendorProductsAPI = {
           kind: "update";
           vp_id: string;
           vendor_id: string;
-          base_item_id: string | null;
           product_name: string | null;
           brand_name: string | null;
           purchase_unit: string;
