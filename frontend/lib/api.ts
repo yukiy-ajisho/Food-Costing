@@ -695,6 +695,39 @@ export const vendorProductsAPI = {
         body: JSON.stringify({ operations }),
       }
     ),
+  saveEditBulk: (
+    operations: Array<
+      | {
+          kind: "update";
+          vp_id: string;
+          vendor_id: string;
+          base_item_id: string | null;
+          product_name: string | null;
+          brand_name: string | null;
+          purchase_unit: string;
+          purchase_quantity: number;
+          case_unit: number | null;
+        }
+      | {
+          kind: "create";
+          vendor_id: string;
+          base_item_id: string;
+          product_name: string | null;
+          brand_name: string | null;
+          purchase_unit: string;
+          purchase_quantity: number;
+          case_unit: number | null;
+          current_price: number;
+        }
+    >
+  ) =>
+    fetchAPI<{ changed_vendor_product_ids: string[] }>(
+      "/vendor-products/bulk/edit-save",
+      {
+        method: "POST",
+        body: JSON.stringify({ operations }),
+      }
+    ),
 };
 
 export type PriceHistoryRow = {
