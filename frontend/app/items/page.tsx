@@ -611,65 +611,98 @@ export default function ItemsPage() {
             setLoadingItems(false);
             return;
           }
+          const qty = vp.purchase_quantity;
+          if (
+            !vp.vendor_id ||
+            !vp.base_item_id ||
+            !vp.purchase_unit ||
+            !Number.isFinite(qty) ||
+            qty <= 0
+          ) {
+            alert(
+              "新規行: Base Item、仕入先、購入単位、数量（0より大きい）を指定してください。",
+            );
+            setLoadingItems(false);
+            return;
+          }
+        } else {
+          const qty = vp.purchase_quantity;
+          if (
+            !vp.vendor_id ||
+            !vp.purchase_unit ||
+            !Number.isFinite(qty) ||
+            qty <= 0
+          ) {
+            alert(
+              "各商品行: 仕入先、購入単位、数量（0より大きい）を指定してください。",
+            );
+            setLoadingItems(false);
+            return;
+          }
         }
       }
 
-      // 変更されたvendor_productのIDを追跡
       const changedVendorProductIds: string[] = [];
 
-      // API呼び出し
+      const editOperations: Array<
+        | {
+            kind: "update";
+            vp_id: string;
+            vendor_id: string;
+            base_item_id: string | null;
+            product_name: string | null;
+            brand_name: string | null;
+            purchase_unit: string;
+            purchase_quantity: number;
+            case_unit: number | null;
+          }
+        | {
+            kind: "create";
+            vendor_id: string;
+            base_item_id: string;
+            product_name: string | null;
+            brand_name: string | null;
+            purchase_unit: string;
+            purchase_quantity: number;
+            case_unit: number | null;
+            current_price: number;
+          }
+      > = [];
+
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
-          // 新規作成: virtual_vendor_products + price_events（バックエンド）
-          const newVp = await vendorProductsAPI.create({
+          editOperations.push({
+            kind: "create",
             vendor_id: vp.vendor_id,
+            base_item_id: vp.base_item_id,
             product_name: vp.product_name || null,
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
+            case_unit: vp.case_unit ?? null,
             current_price: vp.current_price,
           });
-          changedVendorProductIds.push(newVp.id);
-
-          // product_mappingsを作成
-          if (vp.base_item_id) {
-            await productMappingsAPI.create({
-              base_item_id: vp.base_item_id,
-              virtual_product_id: newVp.id,
-            });
-          }
-
-          // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         } else {
-          // 更新: virtual_vendor_productsを更新（base_item_idは含めない）
-          await vendorProductsAPI.update(vp.id, {
+          editOperations.push({
+            kind: "update",
+            vp_id: vp.id,
             vendor_id: vp.vendor_id,
+            base_item_id: vp.base_item_id || null,
             product_name: vp.product_name || null,
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
+            case_unit: vp.case_unit ?? null,
           });
-          changedVendorProductIds.push(vp.id);
-
-          // product_mappingsを更新（既存のマッピングを削除して新規作成）
-          if (vp.base_item_id) {
-            // 既存のマッピングを取得
-            const existingMappings = await productMappingsAPI.getAll({
-              virtual_product_id: vp.id,
-            });
-            // 既存のマッピングを削除
-            for (const mapping of existingMappings) {
-              await productMappingsAPI.delete(mapping.id);
-            }
-            // 新しいマッピングを作成
-            await productMappingsAPI.create({
-              base_item_id: vp.base_item_id,
-              virtual_product_id: vp.id,
-            });
-          }
-
-          // each_gramsはBase Itemsタブで管理するため、ここでは更新しない
         }
+      }
+
+      if (editOperations.length > 0) {
+        const bulkResult =
+          await vendorProductsAPI.saveEditBulk(editOperations);
+        changedVendorProductIds.push(
+          ...bulkResult.changed_vendor_product_ids,
+        );
       }
 
       // Deprecate処理
@@ -747,6 +780,7 @@ export default function ItemsPage() {
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
             current_price: vp.current_price,
+            case_unit: vp.case_unit ?? null,
             each_grams: item?.each_grams ?? null,
             needsWarning,
             created_at: vp.created_at,
