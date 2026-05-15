@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment, useEffect, useRef } from "react";
+import { useState, Fragment, useEffect, useRef, useMemo } from "react";
 import {
   Edit,
   Save,
@@ -64,6 +64,23 @@ function parseDecimalInputForCommit(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Base items with at least one product_mapping to a non-deprecated VVP. */
+function baseItemIdsWithActiveVendorProduct(
+  mappings: ProductMapping[],
+  vendorProducts: Pick<VendorProduct, "id" | "deprecated">[],
+): Set<string> {
+  const activeVpIds = new Set(
+    vendorProducts.filter((vp) => !vp.deprecated).map((vp) => vp.id),
+  );
+  const result = new Set<string>();
+  for (const m of mappings) {
+    if (activeVpIds.has(m.virtual_product_id)) {
+      result.add(m.base_item_id);
+    }
+  }
+  return result;
+}
+
 /** 入力中 Map のドラフトを行データへ反映（種別と一致する行のみ） */
 function flushBaseItemDraftsIntoRows(
   rows: BaseItemUI[],
@@ -98,6 +115,9 @@ export default function ItemsPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [items, setItems] = useState<Item[]>([]); // itemsテーブル（each_gramsを取得するため）
   const [mappings, setMappings] = useState<ProductMapping[]>([]); // product_mappings（未使用base item判定用）
+  const [vendorProductsCatalog, setVendorProductsCatalog] = useState<
+    VendorProduct[]
+  >([]); // deprecated 含む（赤点判定用）
   const [originalVendorProducts, setOriginalVendorProducts] = useState<
     VendorProductUI[]
   >([]);
@@ -120,6 +140,12 @@ export default function ItemsPage() {
   // Manual record new price 用の入力値（vp.id -> 入力中の文字列）
   const [newPriceInputs, setNewPriceInputs] = useState<Map<string, string>>(
     new Map(),
+  );
+
+  const baseItemIdsWithActiveVp = useMemo(
+    () =>
+      baseItemIdsWithActiveVendorProduct(mappings, vendorProductsCatalog),
+    [mappings, vendorProductsCatalog],
   );
 
   // Base Itemsタブ用のstate
@@ -254,6 +280,7 @@ export default function ItemsPage() {
         setVendors(vendorsData);
         setItems(itemsData);
         setMappings(mappingsData || []);
+        setVendorProductsCatalog(vendorProductsData);
 
         // product_mappingsからbase_item_idを取得するマップを作成
         const virtualProductToBaseItemMap = new Map<string, string>();
@@ -526,6 +553,7 @@ export default function ItemsPage() {
         setVendors(vendorsData);
         setItems(itemsData);
         setMappings(mappingsData || []);
+        setVendorProductsCatalog(vendorProductsData);
 
         const virtualProductToBaseItemMap = new Map<string, string>();
         mappingsData?.forEach((mapping) => {
@@ -735,6 +763,7 @@ export default function ItemsPage() {
       setVendors(vendorsData);
       setItems(itemsData);
       setMappings(mappingsData || []);
+      setVendorProductsCatalog(vendorProductsData);
 
       // product_mappingsからbase_item_idを取得するマップを作成
       const virtualProductToBaseItemMap = new Map<string, string>();
@@ -1784,19 +1813,15 @@ export default function ItemsPage() {
                               {isVendorItemsRowEditable(vp) && vp.isNew ? (
                                 <SearchableSelect
                                   useFloatingPortal
-                                  options={(() => {
-                                    // 使用済みbase_item_idのSetを作成
-                                    const usedBaseItemIds = new Set(
-                                      mappings.map((m) => m.base_item_id),
-                                    );
-                                    return baseItems
-                                      .filter((b) => !b.deprecated)
-                                      .map((b) => ({
-                                        id: b.id,
-                                        name: b.name,
-                                        isUnused: !usedBaseItemIds.has(b.id),
-                                      }));
-                                  })()}
+                                  options={baseItems
+                                    .filter((b) => !b.deprecated)
+                                    .map((b) => ({
+                                      id: b.id,
+                                      name: b.name,
+                                      isUnused: !baseItemIdsWithActiveVp.has(
+                                        b.id,
+                                      ),
+                                    }))}
                                   value={vp.base_item_id}
                                   onChange={(value) =>
                                     handleVendorProductChange(
