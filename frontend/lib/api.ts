@@ -695,6 +695,43 @@ export const vendorProductsAPI = {
         body: JSON.stringify({ operations }),
       }
     ),
+  recordInvoiceImportBulk: (
+    operations: Array<
+      | {
+          kind: "existing";
+          vendor_product_id: string;
+          price: number;
+          apply_to_current_price?: boolean;
+          invoice_date?: string;
+          invoice_id?: string | null;
+          case_unit?: number | null;
+          case_purchased?: number | null;
+          unit_purchased?: number | null;
+        }
+      | {
+          kind: "new";
+          vendor_id: string;
+          base_item_id: string;
+          product_name: string | null;
+          brand_name: string | null;
+          purchase_unit: string;
+          purchase_quantity: number;
+          case_unit: number | null;
+          price: number;
+          invoice_date?: string;
+          invoice_id?: string | null;
+          case_purchased?: number | null;
+          unit_purchased?: number | null;
+        }
+    >,
+  ) =>
+    fetchAPI<{ changed_vendor_product_ids: string[] }>(
+      "/vendor-products/bulk/invoice-import",
+      {
+        method: "POST",
+        body: JSON.stringify({ operations }),
+      },
+    ),
   saveEditBulk: (
     operations: Array<
       | {

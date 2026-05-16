@@ -316,6 +316,79 @@ router.post(
 );
 
 /**
+ * POST /vendor-products/bulk/invoice-import
+ * Invoice import confirm: existing invoice price events + new VVP/mapping/events atomically.
+ * Runs autoUndeprecate after success (mapping exists before undeprecate).
+ */
+router.post(
+  "/bulk/invoice-import",
+  unifiedAuthorizationMiddleware(
+    UnifiedTenantAction.create_item,
+    getUnifiedTenantResource,
+  ),
+  async (req, res) => {
+    try {
+      const selectedTenantId =
+        req.user!.selected_tenant_id || req.user!.tenant_ids[0];
+      const operations = req.body?.operations;
+
+      if (!Array.isArray(operations) || operations.length === 0) {
+        return res
+          .status(400)
+          .json({ error: "operations must be a non-empty array" });
+      }
+
+      const { data, error } = await supabase.rpc("record_invoice_import_atomic", {
+        p_tenant_id: selectedTenantId,
+        p_user_id: req.user!.id,
+        p_operations: operations,
+      });
+
+      if (error) {
+        if (
+          error.code === "23505" ||
+          error.message.includes("duplicate key") ||
+          error.message.includes("unique constraint")
+        ) {
+          return res.status(400).json({
+            error:
+              "A vendor product with the same item, supplier, and product name already exists for your account.",
+          });
+        }
+        return res.status(400).json({ error: error.message });
+      }
+
+      const changedVendorProductIds: string[] =
+        Array.isArray(data) &&
+        data.length > 0 &&
+        data[0]?.changed_vendor_product_ids
+          ? data[0].changed_vendor_product_ids
+          : [];
+
+      if (changedVendorProductIds.length > 0) {
+        const { autoUndeprecateAfterVendorProductCreation } =
+          await import("../services/deprecation");
+        await Promise.allSettled(
+          changedVendorProductIds.map((vpId) =>
+            autoUndeprecateAfterVendorProductCreation(
+              vpId,
+              req.user!.tenant_ids,
+            ),
+          ),
+        );
+      }
+
+      return res.status(201).json({
+        changed_vendor_product_ids: changedVendorProductIds,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ error: message });
+    }
+  },
+);
+
+/**
  * POST /vendor-products/bulk/edit-save
  * Items tab edit mode: VVP updates (incl. case_unit) + new rows (with mapping) in one transaction.
  * Existing rows: base_item mapping is immutable.
