@@ -43,6 +43,24 @@ interface VendorProductUI extends VendorProduct {
   isMarkedForDeletion?: boolean;
   isNew?: boolean;
   needsWarning?: boolean; // 警告フラグ（非質量単位/eachでspecific_weight/each_gramsが未設定）
+  /** Record new price の新規行のみ: Case トグル（既存行は case_unit から導出） */
+  isCaseMode?: boolean;
+}
+
+function vendorProductIsCase(
+  vp: Pick<VendorProductUI, "case_unit" | "isCaseMode">,
+): boolean {
+  if (vp.isCaseMode !== undefined) return vp.isCaseMode;
+  return vp.case_unit != null && vp.case_unit > 0;
+}
+
+function unitPriceFromCaseCost(
+  caseCost: number,
+  caseUnit: number,
+): number | null {
+  if (!Number.isFinite(caseCost) || caseCost <= 0) return null;
+  if (!Number.isFinite(caseUnit) || caseUnit <= 0) return null;
+  return caseCost / caseUnit;
 }
 
 interface BaseItemUI {
@@ -133,10 +151,13 @@ export default function ItemsPage() {
   const [purchaseQuantityInputs, setPurchaseQuantityInputs] = useState<
     Map<string, string>
   >(new Map());
-  // 入力中の current_price（新規行のみ Edit で編集可）
+  // 入力中の unit cost / case cost（Record new price の新規行）
   const [currentPriceInputs, setCurrentPriceInputs] = useState<
     Map<string, string>
   >(new Map());
+  const [casePriceInputs, setCasePriceInputs] = useState<Map<string, string>>(
+    new Map(),
+  );
   // Manual record new price 用の入力値（vp.id -> 入力中の文字列）
   const [newPriceInputs, setNewPriceInputs] = useState<Map<string, string>>(
     new Map(),
@@ -329,6 +350,7 @@ export default function ItemsPage() {
               purchase_quantity: vp.purchase_quantity,
               current_price: vp.current_price,
               case_unit: vp.case_unit ?? null,
+              case_price: vp.case_price ?? null,
               each_grams: item?.each_grams ?? null,
               needsWarning,
               created_at: vp.created_at,
@@ -425,6 +447,7 @@ export default function ItemsPage() {
     setIsRecordPriceModeItems(false);
     setNewPriceInputs(new Map());
     setCurrentPriceInputs(new Map());
+    setCasePriceInputs(new Map());
     setIsEditModeItems(true);
   };
 
@@ -433,6 +456,7 @@ export default function ItemsPage() {
     setIsEditModeItems(false);
     setPurchaseQuantityInputs(new Map());
     setCurrentPriceInputs(new Map());
+    setCasePriceInputs(new Map());
     setIsRecordPriceModeItems(true);
   };
 
@@ -440,6 +464,7 @@ export default function ItemsPage() {
     if (isRecordPriceModeItems) {
       setNewPriceInputs(new Map());
       setPurchaseQuantityInputs(new Map());
+      setCasePriceInputs(new Map());
       setVendorProducts(JSON.parse(JSON.stringify(originalVendorProducts)));
       setIsRecordPriceModeItems(false);
       return;
@@ -447,6 +472,7 @@ export default function ItemsPage() {
     setVendorProducts(JSON.parse(JSON.stringify(originalVendorProducts)));
     setPurchaseQuantityInputs(new Map());
     setCurrentPriceInputs(new Map());
+    setCasePriceInputs(new Map());
     setIsEditModeItems(false);
   };
 
@@ -459,6 +485,7 @@ export default function ItemsPage() {
               kind: "existing";
               vendor_product_id: string;
               price: number;
+              case_price?: number | null;
             }
           | {
               kind: "new";
@@ -469,20 +496,13 @@ export default function ItemsPage() {
               purchase_unit: string;
               purchase_quantity: number;
               case_unit: number | null;
+              case_price?: number | null;
               price: number;
             }
         > = [];
 
         for (const vp of vendorProducts) {
-          const raw = newPriceInputs.get(vp.id);
-          if (raw === undefined) continue;
-          const parsed = parseDecimalInputForCommit(raw);
-          if (parsed === null) continue;
-          if (parsed <= 0) {
-            alert("New price must be greater than 0");
-            setLoadingItems(false);
-            return;
-          }
+          const isCase = vendorProductIsCase(vp);
 
           if (vp.isNew) {
             const qty = vp.purchase_quantity;
@@ -494,10 +514,54 @@ export default function ItemsPage() {
               qty <= 0
             ) {
               alert(
-                "For each new row: select base item and vendor, enter quantity greater than 0, and enter New price.",
+                "For each new row: select base item and vendor, enter quantity greater than 0, and enter a price.",
               );
               setLoadingItems(false);
               return;
+            }
+
+            let unitPrice: number;
+            let casePrice: number | null = null;
+
+            if (isCase) {
+              const caseUnit = vp.case_unit;
+              if (!caseUnit || caseUnit <= 0) {
+                alert("Case unit must be a positive integer.");
+                setLoadingItems(false);
+                return;
+              }
+              const rawCase =
+                casePriceInputs.get(vp.id) ??
+                (vp.case_price != null && vp.case_price > 0
+                  ? String(vp.case_price)
+                  : newPriceInputs.get(vp.id) ?? "");
+              const caseCost = parseDecimalInputForCommit(rawCase);
+              if (caseCost === null || caseCost <= 0) {
+                alert("Enter Case cost greater than 0.");
+                setLoadingItems(false);
+                return;
+              }
+              const computed = unitPriceFromCaseCost(caseCost, caseUnit);
+              if (computed === null) {
+                alert("Invalid Case cost or Case unit.");
+                setLoadingItems(false);
+                return;
+              }
+              unitPrice = computed;
+              casePrice = caseCost;
+            } else {
+              const rawUnit =
+                currentPriceInputs.get(vp.id) ??
+                (vp.current_price > 0 ? String(vp.current_price) : "") ??
+                newPriceInputs.get(vp.id) ??
+                "";
+              const unitCost = parseDecimalInputForCommit(rawUnit);
+              if (unitCost === null || unitCost <= 0) {
+                alert("Enter Unit cost greater than 0.");
+                setLoadingItems(false);
+                return;
+              }
+              unitPrice = unitCost;
             }
 
             operations.push({
@@ -508,8 +572,41 @@ export default function ItemsPage() {
               brand_name: vp.brand_name || null,
               purchase_unit: vp.purchase_unit,
               purchase_quantity: qty,
-              case_unit: vp.case_unit ?? null,
-              price: parsed,
+              case_unit: isCase ? vp.case_unit ?? null : null,
+              case_price: casePrice,
+              price: unitPrice,
+            });
+            continue;
+          }
+
+          const raw = newPriceInputs.get(vp.id);
+          if (raw === undefined) continue;
+          const parsed = parseDecimalInputForCommit(raw);
+          if (parsed === null) continue;
+          if (parsed <= 0) {
+            alert("New price must be greater than 0");
+            setLoadingItems(false);
+            return;
+          }
+
+          if (isCase) {
+            const caseUnit = vp.case_unit;
+            if (!caseUnit || caseUnit <= 0) {
+              alert("This case product is missing Case unit.");
+              setLoadingItems(false);
+              return;
+            }
+            const unitPrice = unitPriceFromCaseCost(parsed, caseUnit);
+            if (unitPrice === null) {
+              alert("Invalid Case cost.");
+              setLoadingItems(false);
+              return;
+            }
+            operations.push({
+              kind: "existing",
+              vendor_product_id: vp.id,
+              price: unitPrice,
+              case_price: parsed,
             });
           } else {
             operations.push({
@@ -591,6 +688,7 @@ export default function ItemsPage() {
               purchase_quantity: vp.purchase_quantity,
               current_price: vp.current_price,
               case_unit: vp.case_unit ?? null,
+              case_price: vp.case_price ?? null,
               each_grams: item?.each_grams ?? null,
               needsWarning,
               created_at: vp.created_at,
@@ -602,6 +700,8 @@ export default function ItemsPage() {
         setVendorProducts(vendorProductsUI);
         setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
         setNewPriceInputs(new Map());
+        setCasePriceInputs(new Map());
+        setCurrentPriceInputs(new Map());
         setIsRecordPriceModeItems(false);
       } catch (error: unknown) {
         console.error("Failed to record prices:", error);
@@ -635,7 +735,7 @@ export default function ItemsPage() {
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
           if (!Number.isFinite(vp.current_price) || vp.current_price <= 0) {
-            alert("新規行の Cost は 0 より大きい数値にしてください。");
+            alert("新規行の Unit cost は 0 より大きい数値にしてください。");
             setLoadingItems(false);
             return;
           }
@@ -681,7 +781,6 @@ export default function ItemsPage() {
             brand_name: string | null;
             purchase_unit: string;
             purchase_quantity: number;
-            case_unit: number | null;
           }
         | {
             kind: "create";
@@ -692,12 +791,14 @@ export default function ItemsPage() {
             purchase_unit: string;
             purchase_quantity: number;
             case_unit: number | null;
+            case_price?: number | null;
             current_price: number;
           }
       > = [];
 
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
+          const isCase = vendorProductIsCase(vp);
           editOperations.push({
             kind: "create",
             vendor_id: vp.vendor_id,
@@ -706,7 +807,8 @@ export default function ItemsPage() {
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
-            case_unit: vp.case_unit ?? null,
+            case_unit: isCase ? vp.case_unit ?? null : null,
+            case_price: isCase ? vp.case_price ?? null : null,
             current_price: vp.current_price,
           });
         } else {
@@ -718,7 +820,6 @@ export default function ItemsPage() {
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
-            case_unit: vp.case_unit ?? null,
           });
         }
       }
@@ -805,6 +906,7 @@ export default function ItemsPage() {
             purchase_quantity: vp.purchase_quantity,
             current_price: vp.current_price,
             case_unit: vp.case_unit ?? null,
+            case_price: vp.case_price ?? null,
             each_grams: item?.each_grams ?? null,
             needsWarning,
             created_at: vp.created_at,
@@ -817,6 +919,7 @@ export default function ItemsPage() {
       setOriginalVendorProducts(JSON.parse(JSON.stringify(vendorProductsUI)));
       setPurchaseQuantityInputs(new Map());
       setCurrentPriceInputs(new Map());
+      setCasePriceInputs(new Map());
       setIsEditModeItems(false);
       setIsRecordPriceModeItems(false);
     } catch (error: unknown) {
@@ -875,6 +978,31 @@ export default function ItemsPage() {
     );
   };
 
+  const handleCaseModeChange = (id: string, isCase: boolean) => {
+    setVendorProducts(
+      vendorProducts.map((vp) => {
+        if (vp.id !== id || !vp.isNew) return vp;
+        if (isCase) {
+          return { ...vp, isCaseMode: true };
+        }
+        return {
+          ...vp,
+          isCaseMode: false,
+          case_unit: null,
+          case_price: null,
+          current_price: 0,
+        };
+      }),
+    );
+    if (!isCase) {
+      setCasePriceInputs((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
   const handleAddClickItems = (insertAfterId: string) => {
     const newVendorProduct: VendorProductUI = {
       id: `new-${Date.now()}`,
@@ -885,6 +1013,9 @@ export default function ItemsPage() {
       purchase_unit: "kg",
       purchase_quantity: 0,
       current_price: 0,
+      case_unit: null,
+      case_price: null,
+      isCaseMode: false,
       isNew: true,
     };
 
@@ -909,6 +1040,11 @@ export default function ItemsPage() {
       return next;
     });
     setCurrentPriceInputs((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+    setCasePriceInputs((prev) => {
       const next = new Map(prev);
       next.delete(id);
       return next;
@@ -1716,10 +1852,18 @@ export default function ItemsPage() {
                         );
                       })}
                       <th
+                        className={`px-3 py-3 text-center text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "5%" }}
+                      >
+                        Case
+                      </th>
+                      <th
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "10%" }}
+                        style={{ width: "8%" }}
                       >
                         Quantity
                       </th>
@@ -1727,7 +1871,7 @@ export default function ItemsPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "10%" }}
+                        style={{ width: "8%" }}
                       >
                         Unit
                       </th>
@@ -1735,9 +1879,9 @@ export default function ItemsPage() {
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "8%" }}
+                        style={{ width: "7%" }}
                       >
-                        Case size
+                        Case unit
                       </th>
                       <th
                         className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
@@ -1745,7 +1889,15 @@ export default function ItemsPage() {
                         }`}
                         style={{ width: "8%" }}
                       >
-                        Cost
+                        Unit cost
+                      </th>
+                      <th
+                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                          isDark ? "text-slate-300" : "text-gray-500"
+                        }`}
+                        style={{ width: "8%" }}
+                      >
+                        Case cost
                       </th>
                       <th
                         className="px-1 py-3"
@@ -2014,6 +2166,51 @@ export default function ItemsPage() {
                             </div>
                           </td>
 
+                          {/* Case toggle */}
+                          <td
+                            className="px-3 whitespace-nowrap text-center"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              className="flex items-center justify-center"
+                              style={{ height: "20px" }}
+                            >
+                              {(() => {
+                                const isCase = vendorProductIsCase(vp);
+                                const canToggleCase =
+                                  isRecordPriceModeItems && Boolean(vp.isNew);
+                                return (
+                                  <button
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={isCase}
+                                    aria-label="Case product"
+                                    disabled={!canToggleCase}
+                                    onClick={() =>
+                                      canToggleCase &&
+                                      handleCaseModeChange(vp.id, !isCase)
+                                    }
+                                    className={`h-4 w-4 shrink-0 rounded-full border-2 transition-colors ${
+                                      isCase
+                                        ? "border-blue-600 bg-blue-600"
+                                        : isDark
+                                          ? "border-slate-500 bg-transparent"
+                                          : "border-gray-400 bg-white"
+                                    } ${
+                                      canToggleCase
+                                        ? "cursor-pointer"
+                                        : "cursor-default opacity-80"
+                                    }`}
+                                  />
+                                );
+                              })()}
+                            </div>
+                          </td>
+
                           {/* Quantity */}
                           <td
                             className="px-6 whitespace-nowrap"
@@ -2237,7 +2434,7 @@ export default function ItemsPage() {
                             </div>
                           </td>
 
-                          {/* Case */}
+                          {/* Case unit */}
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
@@ -2255,7 +2452,9 @@ export default function ItemsPage() {
                                 alignItems: "center",
                               }}
                             >
-                              {isVendorItemsRowEditable(vp) ? (
+                              {isRecordPriceModeItems &&
+                              vp.isNew &&
+                              vendorProductIsCase(vp) ? (
                                 <input
                                   type="text"
                                   inputMode="numeric"
@@ -2267,11 +2466,30 @@ export default function ItemsPage() {
                                   onChange={(e) => {
                                     const v = e.target.value;
                                     if (/^\d*$/.test(v)) {
+                                      const nextUnit =
+                                        v === "" ? null : parseInt(v, 10);
                                       handleVendorProductChange(
                                         vp.id,
                                         "case_unit",
-                                        v === "" ? null : parseInt(v, 10),
+                                        nextUnit,
                                       );
+                                      if (
+                                        nextUnit &&
+                                        vp.case_price &&
+                                        vp.case_price > 0
+                                      ) {
+                                        const unit = unitPriceFromCaseCost(
+                                          vp.case_price,
+                                          nextUnit,
+                                        );
+                                        if (unit !== null) {
+                                          handleVendorProductChange(
+                                            vp.id,
+                                            "current_price",
+                                            unit,
+                                          );
+                                        }
+                                      }
                                     }
                                   }}
                                   placeholder="-"
@@ -2290,7 +2508,13 @@ export default function ItemsPage() {
                               ) : (
                                 <div
                                   className={`w-full min-w-0 truncate text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
+                                    !vendorProductIsCase(vp)
+                                      ? isDark
+                                        ? "text-slate-500"
+                                        : "text-gray-400"
+                                      : isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
                                   }`}
                                   style={{ height: "20px", lineHeight: "20px" }}
                                 >
@@ -2300,7 +2524,7 @@ export default function ItemsPage() {
                             </div>
                           </td>
 
-                          {/* Cost */}
+                          {/* Unit cost */}
                           <td
                             className="px-6 whitespace-nowrap"
                             style={{
@@ -2318,20 +2542,25 @@ export default function ItemsPage() {
                                 alignItems: "center",
                               }}
                             >
-                              {isRecordPriceModeItems && vp.isNew ? (
-                                <div
-                                  className={`text-sm select-none ${
-                                    isDark ? "text-slate-500" : "text-gray-400"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
-                                  title="Enter the first price in New price"
-                                >
-                                  —
-                                </div>
-                              ) : isEditModeItems ? (
-                                vp.isNew ? (
+                              {(() => {
+                                const isCase = vendorProductIsCase(vp);
+                                const unitCostEditable =
+                                  isRecordPriceModeItems &&
+                                  Boolean(vp.isNew) &&
+                                  !isCase;
+                                const displayUnit =
+                                  isCase &&
+                                  vp.case_price &&
+                                  vp.case_unit &&
+                                  vp.case_unit > 0
+                                    ? unitPriceFromCaseCost(
+                                        vp.case_price,
+                                        vp.case_unit,
+                                      )
+                                    : vp.current_price;
+                                return unitCostEditable ? (
                                   <div
-                                    className="flex items-center gap-1"
+                                    className="flex w-full items-center gap-1"
                                     style={{ height: "20px" }}
                                   >
                                     <span
@@ -2396,29 +2625,161 @@ export default function ItemsPage() {
                                 ) : (
                                   <div
                                     className={`text-sm ${
-                                      isDark
-                                        ? "text-slate-100"
-                                        : "text-gray-900"
+                                      isCase
+                                        ? isDark
+                                          ? "text-slate-500"
+                                          : "text-gray-400"
+                                        : isDark
+                                          ? "text-slate-100"
+                                          : "text-gray-900"
                                     }`}
                                     style={{
                                       height: "20px",
                                       lineHeight: "20px",
                                     }}
-                                    title="Change price using Record new price"
+                                    title={
+                                      isEditModeItems && !vp.isNew
+                                        ? "Change price using Record new price"
+                                        : undefined
+                                    }
                                   >
-                                    ${(vp.current_price ?? 0).toFixed(2)}
+                                    {displayUnit != null && displayUnit > 0
+                                      ? `$${displayUnit.toFixed(2)}`
+                                      : "—"}
                                   </div>
-                                )
-                              ) : (
-                                <div
-                                  className={`text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
-                                >
-                                  ${(vp.current_price ?? 0).toFixed(2)}
-                                </div>
-                              )}
+                                );
+                              })()}
+                            </div>
+                          </td>
+
+                          {/* Case cost */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {(() => {
+                                const isCase = vendorProductIsCase(vp);
+                                const caseCostEditable =
+                                  isRecordPriceModeItems &&
+                                  Boolean(vp.isNew) &&
+                                  isCase;
+                                return caseCostEditable ? (
+                                  <div
+                                    className="flex w-full items-center gap-1"
+                                    style={{ height: "20px" }}
+                                  >
+                                    <span
+                                      className="text-gray-500"
+                                      style={{ lineHeight: "20px" }}
+                                    >
+                                      $
+                                    </span>
+                                    <input
+                                      type="text"
+                                      inputMode="decimal"
+                                      value={
+                                        casePriceInputs.has(vp.id)
+                                          ? casePriceInputs.get(vp.id) || ""
+                                          : vp.case_price != null &&
+                                              vp.case_price > 0
+                                            ? String(vp.case_price)
+                                            : ""
+                                      }
+                                      onChange={(e) => {
+                                        const value = e.target.value;
+                                        const numericPattern =
+                                          /^(\d+\.?\d*|\.\d+)?$/;
+                                        if (numericPattern.test(value)) {
+                                          setCasePriceInputs((prev) => {
+                                            const newMap = new Map(prev);
+                                            newMap.set(vp.id, value);
+                                            return newMap;
+                                          });
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        const value = e.target.value;
+                                        const numValue =
+                                          value === "" || value === "."
+                                            ? 0
+                                            : parseFloat(value) || 0;
+                                        handleVendorProductChange(
+                                          vp.id,
+                                          "case_price",
+                                          numValue > 0 ? numValue : null,
+                                        );
+                                        if (
+                                          numValue > 0 &&
+                                          vp.case_unit &&
+                                          vp.case_unit > 0
+                                        ) {
+                                          const unit = unitPriceFromCaseCost(
+                                            numValue,
+                                            vp.case_unit,
+                                          );
+                                          if (unit !== null) {
+                                            handleVendorProductChange(
+                                              vp.id,
+                                              "current_price",
+                                              unit,
+                                            );
+                                          }
+                                        }
+                                        setCasePriceInputs((prev) => {
+                                          const newMap = new Map(prev);
+                                          newMap.delete(vp.id);
+                                          return newMap;
+                                        });
+                                      }}
+                                      className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      placeholder="0.00"
+                                      style={{
+                                        height: "20px",
+                                        minHeight: "20px",
+                                        maxHeight: "20px",
+                                        lineHeight: "20px",
+                                        padding: "0 4px",
+                                        fontSize: "0.875rem",
+                                        boxSizing: "border-box",
+                                        margin: 0,
+                                      }}
+                                    />
+                                  </div>
+                                ) : (
+                                  <div
+                                    className={`text-sm ${
+                                      !isCase
+                                        ? isDark
+                                          ? "text-slate-500"
+                                          : "text-gray-400"
+                                        : isDark
+                                          ? "text-slate-100"
+                                          : "text-gray-900"
+                                    }`}
+                                    style={{
+                                      height: "20px",
+                                      lineHeight: "20px",
+                                    }}
+                                  >
+                                    {vp.case_price != null && vp.case_price > 0
+                                      ? `$${vp.case_price.toFixed(2)}`
+                                      : "—"}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           </td>
 
@@ -2498,7 +2859,11 @@ export default function ItemsPage() {
                                         ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
                                         : "border-gray-300"
                                     }`}
-                                    placeholder="0.00"
+                                    placeholder={
+                                      vendorProductIsCase(vp)
+                                        ? "Case cost"
+                                        : "Unit cost"
+                                    }
                                     style={{
                                       height: "20px",
                                       minHeight: "20px",
@@ -2581,7 +2946,7 @@ export default function ItemsPage() {
                     {isRecordPriceModeItems && (
                       <tr>
                         <td
-                          colSpan={9}
+                          colSpan={12}
                           className="px-6"
                           style={{
                             paddingTop: "16px",

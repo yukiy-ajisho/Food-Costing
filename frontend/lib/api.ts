@@ -183,6 +183,7 @@ export interface VendorProduct {
   purchase_quantity: number;
   current_price: number;
   case_unit?: number | null; // 1ケース = 何ユニット。NULL = ばら前提
+  case_price?: number | null; // 1ケースあたりの総額。NULL = ばら前提
   deprecated?: string | null; // timestamp when deprecated
   created_at?: string;
   /** Set when listing VVPs; used for invoice-date vs last-update warnings */
@@ -674,6 +675,7 @@ export const vendorProductsAPI = {
           kind: "existing";
           vendor_product_id: string;
           price: number;
+          case_price?: number | null;
         }
       | {
           kind: "new";
@@ -684,6 +686,7 @@ export const vendorProductsAPI = {
           purchase_unit: string;
           purchase_quantity: number;
           case_unit: number | null;
+          case_price?: number | null;
           price: number;
         }
     >
@@ -742,7 +745,6 @@ export const vendorProductsAPI = {
           brand_name: string | null;
           purchase_unit: string;
           purchase_quantity: number;
-          case_unit: number | null;
         }
       | {
           kind: "create";
@@ -753,6 +755,7 @@ export const vendorProductsAPI = {
           purchase_unit: string;
           purchase_quantity: number;
           case_unit: number | null;
+          case_price?: number | null;
           current_price: number;
         }
     >

@@ -390,7 +390,7 @@ router.post(
 
 /**
  * POST /vendor-products/bulk/edit-save
- * Items tab edit mode: VVP updates (incl. case_unit) + new rows (with mapping) in one transaction.
+ * Items tab edit mode: VVP field updates (case_unit immutable on existing rows) + new rows.
  * Existing rows: base_item mapping is immutable.
  */
 router.post(

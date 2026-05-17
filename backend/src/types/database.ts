@@ -30,6 +30,7 @@ export interface VendorProduct {
   purchase_quantity: number;
   current_price: number;
   case_unit?: number | null; // 1ケース = 何ユニット。NULL = ばら前提
+  case_price?: number | null; // 1ケースあたりの総額。NULL = ばら前提
   deprecated?: string | null; // timestamp when deprecated
   tenant_id: string; // FK to tenants
   created_at?: string;
