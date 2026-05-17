@@ -1615,6 +1615,7 @@ DECLARE
   v_purchase_unit text;
   v_purchase_quantity numeric;
   v_price numeric;
+  v_case_price numeric;
   v_case_unit integer;
   v_changed_ids uuid[] := ARRAY[]::uuid[];
 BEGIN
@@ -1633,6 +1634,12 @@ BEGIN
     IF v_kind = 'existing' THEN
       v_vp_id := (op->>'vendor_product_id')::uuid;
       v_price := (op->>'price')::numeric;
+      v_case_price :=
+        CASE
+          WHEN op ? 'case_price' AND op->>'case_price' IS NOT NULL AND op->>'case_price' <> ''
+            THEN (op->>'case_price')::numeric
+          ELSE NULL
+        END;
 
       IF v_vp_id IS NULL THEN
         RAISE EXCEPTION 'existing operation requires vendor_product_id';
@@ -1641,7 +1648,6 @@ BEGIN
         RAISE EXCEPTION 'existing operation requires price > 0';
       END IF;
 
-      -- Fetch VVP.case_unit to satisfy purchase-qty check constraint.
       SELECT vvp.case_unit
       INTO v_case_unit
       FROM public.virtual_vendor_products vvp
@@ -1652,10 +1658,18 @@ BEGIN
         RAISE EXCEPTION 'vendor_product_id % is not found in tenant %', v_vp_id, p_tenant_id;
       END IF;
 
+      IF v_case_unit IS NOT NULL AND v_case_price IS NULL THEN
+        RAISE EXCEPTION 'existing case product requires case_price';
+      END IF;
+      IF v_case_unit IS NULL AND v_case_price IS NOT NULL THEN
+        RAISE EXCEPTION 'case_price is only valid for case products';
+      END IF;
+
       INSERT INTO public.price_events (
         tenant_id,
         virtual_vendor_product_id,
         price,
+        case_price,
         source_type,
         user_id,
         case_unit,
@@ -1666,6 +1680,7 @@ BEGIN
         p_tenant_id,
         v_vp_id,
         v_price,
+        v_case_price,
         'manual',
         p_user_id,
         v_case_unit,
@@ -1689,6 +1704,12 @@ BEGIN
             THEN (op->>'case_unit')::integer
           ELSE NULL
         END;
+      v_case_price :=
+        CASE
+          WHEN op ? 'case_price' AND op->>'case_price' IS NOT NULL AND op->>'case_price' <> ''
+            THEN (op->>'case_price')::numeric
+          ELSE NULL
+        END;
 
       IF v_vendor_id IS NULL OR v_base_item_id IS NULL OR v_purchase_unit IS NULL OR btrim(v_purchase_unit) = '' THEN
         RAISE EXCEPTION 'new operation requires vendor_id, base_item_id, and purchase_unit';
@@ -1702,6 +1723,15 @@ BEGIN
       IF v_case_unit IS NOT NULL AND v_case_unit <= 0 THEN
         RAISE EXCEPTION 'case_unit must be a positive integer';
       END IF;
+      IF v_case_unit IS NOT NULL AND v_case_price IS NULL THEN
+        RAISE EXCEPTION 'new operation with case_unit requires case_price';
+      END IF;
+      IF v_case_unit IS NULL AND v_case_price IS NOT NULL THEN
+        RAISE EXCEPTION 'case_price requires case_unit';
+      END IF;
+      IF v_case_price IS NOT NULL AND v_case_price <= 0 THEN
+        RAISE EXCEPTION 'case_price must be > 0';
+      END IF;
 
       INSERT INTO public.virtual_vendor_products (
         vendor_id,
@@ -1711,6 +1741,7 @@ BEGIN
         purchase_quantity,
         current_price,
         case_unit,
+        case_price,
         tenant_id
       )
       VALUES (
@@ -1721,6 +1752,7 @@ BEGIN
         v_purchase_quantity,
         v_price,
         v_case_unit,
+        v_case_price,
         p_tenant_id
       )
       RETURNING id INTO v_new_vp_id;
@@ -1740,6 +1772,7 @@ BEGIN
         tenant_id,
         virtual_vendor_product_id,
         price,
+        case_price,
         source_type,
         user_id,
         case_unit,
@@ -1750,6 +1783,7 @@ BEGIN
         p_tenant_id,
         v_new_vp_id,
         v_price,
+        v_case_price,
         'manual',
         p_user_id,
         v_case_unit,
@@ -1788,6 +1822,7 @@ DECLARE
   v_purchase_unit text;
   v_purchase_quantity numeric;
   v_price numeric;
+  v_case_price numeric;
   v_case_unit integer;
   v_changed_ids uuid[] := ARRAY[]::uuid[];
   v_rowcount integer;
@@ -1811,12 +1846,6 @@ BEGIN
       v_brand_name := NULLIF(op->>'brand_name', '');
       v_purchase_unit := op->>'purchase_unit';
       v_purchase_quantity := (op->>'purchase_quantity')::numeric;
-      v_case_unit :=
-        CASE
-          WHEN op ? 'case_unit' AND op->>'case_unit' IS NOT NULL AND op->>'case_unit' <> ''
-            THEN (op->>'case_unit')::integer
-          ELSE NULL
-        END;
 
       IF v_vp_id IS NULL THEN
         RAISE EXCEPTION 'update operation requires vp_id';
@@ -1830,9 +1859,6 @@ BEGIN
       IF v_purchase_quantity IS NULL OR v_purchase_quantity <= 0 THEN
         RAISE EXCEPTION 'update operation requires purchase_quantity > 0';
       END IF;
-      IF v_case_unit IS NOT NULL AND v_case_unit <= 0 THEN
-        RAISE EXCEPTION 'case_unit must be a positive integer';
-      END IF;
 
       IF NOT EXISTS (
         SELECT 1
@@ -1843,7 +1869,6 @@ BEGIN
         RAISE EXCEPTION 'vp_id % is not found in tenant %', v_vp_id, p_tenant_id;
       END IF;
 
-      -- Reject attempts to remap base_item on existing vendor products.
       IF op ? 'base_item_id' AND op->>'base_item_id' IS NOT NULL AND btrim(op->>'base_item_id') <> '' THEN
         v_target_base := (op->>'base_item_id')::uuid;
 
@@ -1861,6 +1886,7 @@ BEGIN
         END IF;
       END IF;
 
+      -- Existing rows: case_unit / case_price / current_price are immutable in edit mode.
       UPDATE public.virtual_vendor_products vvp
       SET
         vendor_id = v_vendor_id,
@@ -1868,7 +1894,6 @@ BEGIN
         brand_name = v_brand_name,
         purchase_unit = v_purchase_unit,
         purchase_quantity = v_purchase_quantity,
-        case_unit = v_case_unit,
         updated_at = now()
       WHERE vvp.id = v_vp_id
         AND vvp.tenant_id = p_tenant_id;
@@ -1894,6 +1919,12 @@ BEGIN
             THEN (op->>'case_unit')::integer
           ELSE NULL
         END;
+      v_case_price :=
+        CASE
+          WHEN op ? 'case_price' AND op->>'case_price' IS NOT NULL AND op->>'case_price' <> ''
+            THEN (op->>'case_price')::numeric
+          ELSE NULL
+        END;
 
       IF v_vendor_id IS NULL OR v_target_base IS NULL OR v_purchase_unit IS NULL OR btrim(v_purchase_unit) = '' THEN
         RAISE EXCEPTION 'create operation requires vendor_id, base_item_id, and purchase_unit';
@@ -1907,6 +1938,15 @@ BEGIN
       IF v_case_unit IS NOT NULL AND v_case_unit <= 0 THEN
         RAISE EXCEPTION 'case_unit must be a positive integer';
       END IF;
+      IF v_case_unit IS NOT NULL AND v_case_price IS NULL THEN
+        RAISE EXCEPTION 'create operation with case_unit requires case_price';
+      END IF;
+      IF v_case_unit IS NULL AND v_case_price IS NOT NULL THEN
+        RAISE EXCEPTION 'case_price requires case_unit';
+      END IF;
+      IF v_case_price IS NOT NULL AND v_case_price <= 0 THEN
+        RAISE EXCEPTION 'case_price must be > 0';
+      END IF;
 
       INSERT INTO public.virtual_vendor_products (
         vendor_id,
@@ -1916,6 +1956,7 @@ BEGIN
         purchase_quantity,
         current_price,
         case_unit,
+        case_price,
         tenant_id
       )
       VALUES (
@@ -1926,6 +1967,7 @@ BEGIN
         v_purchase_quantity,
         v_price,
         v_case_unit,
+        v_case_price,
         p_tenant_id
       )
       RETURNING id INTO v_new_vp_id;
@@ -1945,6 +1987,7 @@ BEGIN
         tenant_id,
         virtual_vendor_product_id,
         price,
+        case_price,
         source_type,
         user_id,
         case_unit,
@@ -1955,6 +1998,7 @@ BEGIN
         p_tenant_id,
         v_new_vp_id,
         v_price,
+        v_case_price,
         'manual',
         p_user_id,
         v_case_unit,
@@ -2009,10 +2053,14 @@ BEGIN
   IF COALESCE(NEW.apply_to_current_price, true) IS NOT TRUE THEN
     RETURN NEW;
   END IF;
-  UPDATE public.virtual_vendor_products
+  UPDATE public.virtual_vendor_products vvp
      SET current_price = NEW.price,
-        updated_at = NEW.created_at
-   WHERE id = NEW.virtual_vendor_product_id;
+         updated_at = NEW.created_at,
+         case_price = CASE
+           WHEN NEW.case_price IS NOT NULL THEN NEW.case_price
+           ELSE vvp.case_price
+         END
+   WHERE vvp.id = NEW.virtual_vendor_product_id;
   RETURN NEW;
 END;
 $$;
@@ -2543,6 +2591,8 @@ CREATE TABLE IF NOT EXISTS "public"."price_events" (
     "case_unit" integer,
     "case_purchased" integer,
     "unit_purchased" integer,
+    "case_price" numeric,
+    CONSTRAINT "pe_case_price_positive" CHECK ((("case_price" IS NULL) OR ("case_price" > (0)::numeric))),
     CONSTRAINT "pe_case_purchased_positive" CHECK (("case_purchased" > 0)),
     CONSTRAINT "pe_case_unit_positive" CHECK (("case_unit" > 0)),
     CONSTRAINT "pe_purchase_qty_not_all_null" CHECK ((("case_unit" IS NOT NULL) OR ("case_purchased" IS NOT NULL) OR ("unit_purchased" IS NOT NULL))),
@@ -2556,6 +2606,10 @@ ALTER TABLE "public"."price_events" OWNER TO "postgres";
 
 
 COMMENT ON COLUMN "public"."price_events"."apply_to_current_price" IS 'When true (default), AFTER INSERT trigger syncs VVP current_price/updated_at from this row. When false, ledger row only.';
+
+
+
+COMMENT ON COLUMN "public"."price_events"."case_price" IS 'Total price per case at time of event when product is sold by case. NULL for loose (per-unit) events. price remains per-unit.';
 
 
 
@@ -2898,13 +2952,19 @@ CREATE TABLE IF NOT EXISTS "public"."virtual_vendor_products" (
     "deprecated" timestamp with time zone,
     "tenant_id" "uuid" NOT NULL,
     "case_unit" integer,
+    "case_price" numeric,
     CONSTRAINT "vendor_products_current_price_check" CHECK (("current_price" > (0)::numeric)),
     CONSTRAINT "vendor_products_purchase_quantity_check" CHECK (("purchase_quantity" > (0)::numeric)),
+    CONSTRAINT "vvp_case_price_positive" CHECK ((("case_price" IS NULL) OR ("case_price" > (0)::numeric))),
     CONSTRAINT "vvp_case_unit_positive" CHECK (("case_unit" > 0))
 );
 
 
 ALTER TABLE "public"."virtual_vendor_products" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."virtual_vendor_products"."case_price" IS 'Total price per case when case_unit is set. NULL for loose (per-unit) products. current_price remains per-unit.';
+
 
 
 ALTER TABLE ONLY "public"."allowlist"

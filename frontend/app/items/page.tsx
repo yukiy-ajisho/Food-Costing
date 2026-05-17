@@ -464,6 +464,7 @@ export default function ItemsPage() {
     if (isRecordPriceModeItems) {
       setNewPriceInputs(new Map());
       setPurchaseQuantityInputs(new Map());
+      setCurrentPriceInputs(new Map());
       setCasePriceInputs(new Map());
       setVendorProducts(JSON.parse(JSON.stringify(originalVendorProducts)));
       setIsRecordPriceModeItems(false);
@@ -520,6 +521,15 @@ export default function ItemsPage() {
               return;
             }
 
+            const rawNewPrice = newPriceInputs.get(vp.id) ?? "";
+            if (rawNewPrice.trim() === "") {
+              alert(
+                "For each new row: enter a price in the New price column.",
+              );
+              setLoadingItems(false);
+              return;
+            }
+
             let unitPrice: number;
             let casePrice: number | null = null;
 
@@ -530,14 +540,9 @@ export default function ItemsPage() {
                 setLoadingItems(false);
                 return;
               }
-              const rawCase =
-                casePriceInputs.get(vp.id) ??
-                (vp.case_price != null && vp.case_price > 0
-                  ? String(vp.case_price)
-                  : newPriceInputs.get(vp.id) ?? "");
-              const caseCost = parseDecimalInputForCommit(rawCase);
+              const caseCost = parseDecimalInputForCommit(rawNewPrice);
               if (caseCost === null || caseCost <= 0) {
-                alert("Enter Case cost greater than 0.");
+                alert("Enter Case cost greater than 0 in New price.");
                 setLoadingItems(false);
                 return;
               }
@@ -550,14 +555,9 @@ export default function ItemsPage() {
               unitPrice = computed;
               casePrice = caseCost;
             } else {
-              const rawUnit =
-                currentPriceInputs.get(vp.id) ??
-                (vp.current_price > 0 ? String(vp.current_price) : "") ??
-                newPriceInputs.get(vp.id) ??
-                "";
-              const unitCost = parseDecimalInputForCommit(rawUnit);
+              const unitCost = parseDecimalInputForCommit(rawNewPrice);
               if (unitCost === null || unitCost <= 0) {
-                alert("Enter Unit cost greater than 0.");
+                alert("Enter Unit cost greater than 0 in New price.");
                 setLoadingItems(false);
                 return;
               }
@@ -2545,7 +2545,7 @@ export default function ItemsPage() {
                               {(() => {
                                 const isCase = vendorProductIsCase(vp);
                                 const unitCostEditable =
-                                  isRecordPriceModeItems &&
+                                  isEditModeItems &&
                                   Boolean(vp.isNew) &&
                                   !isCase;
                                 const displayUnit =
@@ -2673,7 +2673,7 @@ export default function ItemsPage() {
                               {(() => {
                                 const isCase = vendorProductIsCase(vp);
                                 const caseCostEditable =
-                                  isRecordPriceModeItems &&
+                                  isEditModeItems &&
                                   Boolean(vp.isNew) &&
                                   isCase;
                                 return caseCostEditable ? (
