@@ -183,6 +183,7 @@ export interface VendorProduct {
   purchase_quantity: number;
   current_price: number;
   case_unit?: number | null; // 1ケース = 何ユニット。NULL = ばら前提
+  case_price?: number | null; // 1ケースあたりの総額。NULL = ばら前提
   deprecated?: string | null; // timestamp when deprecated
   created_at?: string;
   /** Set when listing VVPs; used for invoice-date vs last-update warnings */
@@ -674,6 +675,7 @@ export const vendorProductsAPI = {
           kind: "existing";
           vendor_product_id: string;
           price: number;
+          case_price?: number | null;
         }
       | {
           kind: "new";
@@ -684,6 +686,7 @@ export const vendorProductsAPI = {
           purchase_unit: string;
           purchase_quantity: number;
           case_unit: number | null;
+          case_price?: number | null;
           price: number;
         }
     >
@@ -695,18 +698,53 @@ export const vendorProductsAPI = {
         body: JSON.stringify({ operations }),
       }
     ),
+  recordInvoiceImportBulk: (
+    operations: Array<
+      | {
+          kind: "existing";
+          vendor_product_id: string;
+          price: number;
+          apply_to_current_price?: boolean;
+          invoice_date?: string;
+          invoice_id?: string | null;
+          case_unit?: number | null;
+          case_purchased?: number | null;
+          unit_purchased?: number | null;
+        }
+      | {
+          kind: "new";
+          vendor_id: string;
+          base_item_id: string;
+          product_name: string | null;
+          brand_name: string | null;
+          purchase_unit: string;
+          purchase_quantity: number;
+          case_unit: number | null;
+          price: number;
+          invoice_date?: string;
+          invoice_id?: string | null;
+          case_purchased?: number | null;
+          unit_purchased?: number | null;
+        }
+    >,
+  ) =>
+    fetchAPI<{ changed_vendor_product_ids: string[] }>(
+      "/vendor-products/bulk/invoice-import",
+      {
+        method: "POST",
+        body: JSON.stringify({ operations }),
+      },
+    ),
   saveEditBulk: (
     operations: Array<
       | {
           kind: "update";
           vp_id: string;
           vendor_id: string;
-          base_item_id: string | null;
           product_name: string | null;
           brand_name: string | null;
           purchase_unit: string;
           purchase_quantity: number;
-          case_unit: number | null;
         }
       | {
           kind: "create";
@@ -717,6 +755,7 @@ export const vendorProductsAPI = {
           purchase_unit: string;
           purchase_quantity: number;
           case_unit: number | null;
+          case_price?: number | null;
           current_price: number;
         }
     >

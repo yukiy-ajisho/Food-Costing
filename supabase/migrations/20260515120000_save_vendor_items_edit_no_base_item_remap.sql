@@ -1,5 +1,5 @@
--- Atomic Vendor Items (Edit mode) save: VVP field updates and new rows (VVP + mapping +
--- initial price_event). Superseded for update mapping policy by 20260515120000_*.
+-- Existing vendor products: base_item mapping is immutable after creation.
+-- update operations only touch virtual_vendor_products fields; create still inserts product_mappings.
 
 CREATE OR REPLACE FUNCTION public.save_vendor_items_edit_atomic(
   p_tenant_id uuid,
@@ -79,6 +79,24 @@ BEGIN
         RAISE EXCEPTION 'vp_id % is not found in tenant %', v_vp_id, p_tenant_id;
       END IF;
 
+      -- Reject attempts to remap base_item on existing vendor products.
+      IF op ? 'base_item_id' AND op->>'base_item_id' IS NOT NULL AND btrim(op->>'base_item_id') <> '' THEN
+        v_target_base := (op->>'base_item_id')::uuid;
+
+        SELECT pm.base_item_id
+        INTO v_mapped_base
+        FROM public.product_mappings pm
+        WHERE pm.virtual_product_id = v_vp_id
+          AND pm.tenant_id = p_tenant_id
+        LIMIT 1;
+
+        IF v_mapped_base IS DISTINCT FROM v_target_base THEN
+          RAISE EXCEPTION
+            'base_item_id cannot be changed for existing vendor product %',
+            v_vp_id;
+        END IF;
+      END IF;
+
       UPDATE public.virtual_vendor_products vvp
       SET
         vendor_id = v_vendor_id,
@@ -94,34 +112,6 @@ BEGIN
       GET DIAGNOSTICS v_rowcount = ROW_COUNT;
       IF v_rowcount = 0 THEN
         RAISE EXCEPTION 'update affected 0 rows for vp_id %', v_vp_id;
-      END IF;
-
-      IF op->>'base_item_id' IS NOT NULL AND btrim(op->>'base_item_id') <> '' THEN
-        v_target_base := (op->>'base_item_id')::uuid;
-
-        SELECT pm.base_item_id
-        INTO v_mapped_base
-        FROM public.product_mappings pm
-        WHERE pm.virtual_product_id = v_vp_id
-          AND pm.tenant_id = p_tenant_id
-        LIMIT 1;
-
-        IF v_mapped_base IS DISTINCT FROM v_target_base THEN
-          DELETE FROM public.product_mappings pm
-          WHERE pm.virtual_product_id = v_vp_id
-            AND pm.tenant_id = p_tenant_id;
-
-          INSERT INTO public.product_mappings (
-            base_item_id,
-            virtual_product_id,
-            tenant_id
-          )
-          VALUES (
-            v_target_base,
-            v_vp_id,
-            p_tenant_id
-          );
-        END IF;
       END IF;
 
       v_changed_ids := array_append(v_changed_ids, v_vp_id);
@@ -217,6 +207,3 @@ BEGIN
   RETURN QUERY SELECT v_changed_ids;
 END;
 $$;
-
-GRANT EXECUTE ON FUNCTION public.save_vendor_items_edit_atomic(uuid, uuid, jsonb)
-TO authenticated, service_role;

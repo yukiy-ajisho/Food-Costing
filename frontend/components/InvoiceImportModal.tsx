@@ -18,8 +18,6 @@ import {
 import {
   ocrTestAPI,
   vendorProductsAPI,
-  productMappingsAPI,
-  priceEventsAPI,
   saveChangeHistory,
   type Vendor,
   type VendorProduct,
@@ -1080,49 +1078,59 @@ export function InvoiceImportModal({
         invoiceDocId = uploadResult.id;
       }
 
-      const changedVendorProductIds: string[] = [];
+      const operations: Parameters<
+        typeof vendorProductsAPI.recordInvoiceImportBulk
+      >[0] = [];
       for (const g of groups) {
         for (const r of g.rows) {
+          const invoiceDate = g.invoiceDate.trim();
           if (r.matchMode === "existing") {
-            await priceEventsAPI.recordInvoice(
-              r.linked_vvp_id,
-              r.current_price,
-              {
-                applyToCurrentPrice: r.existingPriceAction !== "keep_current",
-                invoiceDate: g.invoiceDate.trim(),
-                invoiceId: invoiceDocId,
-                caseUnit: r.case_unit,
-                casePurchased: r.case_purchased,
-                unitPurchased: r.unit_purchased,
-              },
-            );
-            changedVendorProductIds.push(r.linked_vvp_id);
+            operations.push({
+              kind: "existing",
+              vendor_product_id: r.linked_vvp_id,
+              price: r.current_price,
+              ...(r.existingPriceAction === "keep_current"
+                ? { apply_to_current_price: false }
+                : {}),
+              invoice_date: invoiceDate,
+              ...(invoiceDocId != null ? { invoice_id: invoiceDocId } : {}),
+              ...(r.case_unit != null ? { case_unit: r.case_unit } : {}),
+              ...(r.case_purchased != null
+                ? { case_purchased: r.case_purchased }
+                : {}),
+              ...(r.unit_purchased != null
+                ? { unit_purchased: r.unit_purchased }
+                : {}),
+            });
           } else {
-            const newVp = await vendorProductsAPI.create({
+            operations.push({
+              kind: "new",
               vendor_id: g.vendorId,
+              base_item_id: r.base_item_id,
               product_name: r.product_name.trim() || null,
               brand_name: r.brand_name.trim() || null,
               purchase_unit: r.purchase_unit,
               purchase_quantity: r.purchase_quantity,
-              current_price: r.current_price,
-              case_unit: r.case_unit,
-              initial_price_event_source: "invoice",
-              invoice_date: g.invoiceDate.trim(),
-              invoice_id: invoiceDocId,
-              initial_case_purchased: r.case_purchased,
-              initial_unit_purchased: r.unit_purchased,
+              case_unit: r.case_unit ?? null,
+              price: r.current_price,
+              invoice_date: invoiceDate,
+              ...(invoiceDocId != null ? { invoice_id: invoiceDocId } : {}),
+              ...(r.case_purchased != null
+                ? { case_purchased: r.case_purchased }
+                : {}),
+              ...(r.unit_purchased != null
+                ? { unit_purchased: r.unit_purchased }
+                : {}),
             });
-            await productMappingsAPI.create({
-              base_item_id: r.base_item_id,
-              virtual_product_id: newVp.id,
-            });
-            changedVendorProductIds.push(newVp.id);
           }
         }
       }
-      if (changedVendorProductIds.length > 0) {
+
+      const bulkResult =
+        await vendorProductsAPI.recordInvoiceImportBulk(operations);
+      if (bulkResult.changed_vendor_product_ids.length > 0) {
         saveChangeHistory({
-          changed_vendor_product_ids: changedVendorProductIds,
+          changed_vendor_product_ids: bulkResult.changed_vendor_product_ids,
         });
       }
       if (initialInboxId) {

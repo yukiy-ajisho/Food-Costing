@@ -642,6 +642,8 @@ function SearchableSelectMenuBody({
                   className={`w-2 h-2 rounded-full ml-2 flex-shrink-0 ${
                     isDark ? "bg-red-500" : "bg-red-600"
                   }`}
+                  title="No active vendor item is mapped to this base item"
+                  aria-hidden
                 />
               )}
               {option.hoverLabel ? (
