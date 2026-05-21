@@ -34,6 +34,7 @@ import {
   proceedValidationSettingsAPI,
   resourceSharesAPI,
   crossTenantItemSharesAPI,
+  standardTechnicalSheetsAPI,
   apiRequest,
   saveChangeHistory,
   getItemDisplayName,
@@ -1835,7 +1836,7 @@ export default function CostPage() {
         await refreshCrossTenantShares();
       }
 
-      // Recipe Summaryモードでも権限制御判定に必要な share 情報をロード
+      // Technical Sheetモードでも権限制御判定に必要な share 情報をロード
       if (newMode === "recipe-summary") {
         await Promise.all([refreshItemShares(), refreshCrossTenantShares()]);
       }
@@ -3246,6 +3247,14 @@ export default function CostPage() {
       setItems(itemsWithRecipes);
       setOriginalItems(JSON.parse(JSON.stringify(itemsWithRecipes)));
 
+      if (newlyCreatedItemIds.length > 0) {
+        try {
+          await standardTechnicalSheetsAPI.ensureV0(newlyCreatedItemIds);
+        } catch (ensureError) {
+          console.error("Failed to ensure standard technical sheet v0:", ensureError);
+        }
+      }
+
       setIsEditModeCosting(false);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -4133,7 +4142,7 @@ export default function CostPage() {
                       : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
                 }`}
               >
-                Recipe Summary
+                Technical Sheet
               </button>
               <div
                 className={`-mx-4 h-6 w-0.5 shrink-0 ${isDark ? "bg-slate-500" : "bg-gray-400"}`}
@@ -4427,7 +4436,7 @@ export default function CostPage() {
           />
         )}
 
-        {/* Recipe Summary */}
+        {/* Technical Sheet */}
         {activeMode === "recipe-summary" ? (
           <RecipeSummaryPanel
             isDark={isDark}

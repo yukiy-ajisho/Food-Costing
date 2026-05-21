@@ -1,0 +1,886 @@
+================================================================================
+  TECHNICAL SHEET プラットフォーム — 設計・要件書（Standard Output 中心）
+  対象: food_costing プロジェクト
+  作成日: 2026-05-17
+  ステータス: 要件整理（実装前）
+================================================================================
+
+本書は、Technical Sheet（テクニカルシート）まわりの全体像・今回スコープ・
+将来機能をまとめたものである。
+
+関連ドキュメント:
+- docs/recipe-summary-plan.txt … 既存「Recipe Summary」実装計画（expand ベース）。
+  本書の「Custom」に近いが、Custom は将来扱いとし、今回は Standard を主眼とする。
+
+DB/API/UI の詳細は実装フェーズで確定する。
+§5（UI）・§5.5（Edit 試算）・§7（スナップショット・価格）・§14（ワイヤー）は product 合意に基づく確定仕様。
+
+
+================================================================================
+1. 背景と課題
+================================================================================
+
+1-1. 現状
+- costing 画面に「Recipe Summary」タブがある。
+- 現時点の主機能は **Output に近い** もの: 既存レシピを Technical Sheet 形式で表示する。
+- expand（どの prepped を展開するか）を選んで Summary を作る流れは、将来の **Custom**
+  に相当する（今回スコープ外）。
+
+1-2. 課題
+- 現状の Recipe Summary タブは **+ Create Summary** と summary 名一覧（expand 登録）が中心で、
+  Standard の base recipe 主軸・バージョン管理とは合わない（§5-1）。
+- 現状の Recipe Summary / Technical Sheet 表示は要件を満たしきれていない可能性がある。
+- **バージョン管理**、**レシピとの差分**、**作成時点の価格の保存**、
+  **レシピへの書き戻し** などが未整備。
+- 根本から、Technical Sheet を「レシピの派生物＋履歴」として設計し直す必要がある。
+
+
+================================================================================
+2. 全体像（3本柱）
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         レシピ（Recipe）— 常に「正」                          │
+│  - 構成（recipe_lines）、数量、工程、原価計算のマスタ                          │
+│  - 常に最新状態が運用上の真実（true）                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+         ▲                              │
+         │ Input（将来）                 │ Output（今回の主戦場）
+         │ TS → レシピへ取り込み          │ レシピ → TS 生成 ＋ **バージョン作成**
+         │                              ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              Technical Sheet（Standard / Custom）＋ バージョン列             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+2-1. レシピ（Recipe）
+- システム上の **唯一のマスタ**（常に true）。
+- Vendor Items（VVP）の **最新単価** で原価が変わる。
+- Technical Sheet はレシピの「写し」ではなく、**特定時点の成果物（バージョン）** として扱う。
+
+2-2. Input（将来 — 今回は実装しない）
+- Technical Sheet（ファイルまたは UI 上の表形式）を **import** し、レシピに落とし込む。
+- Output の逆方向。詳細は未設計。
+
+2-3. Output（今回集中）
+- レシピから Technical Sheet を **生成・表示・バージョン管理** する。
+- **バージョンは「Technical Sheet を作る／保存する」ことで増える。**
+- 今回は **Standard のみ**。Custom / Branch は将来。
+
+
+================================================================================
+3. Technical Sheet の種類
+================================================================================
+
+3-1. Standard（標準）— 今回スコープ
+- **Expand 設定なし**（ユーザーが prepped 展開を選ばない）。
+- **表示深度: 最大 2 階層**（base recipe → 直下の子まで）。
+- 例: トンカツカレー
+    - 表示する: カレー（prepped）、トンカツ（prepped）、福神漬け（base） 等、**1 段目の子**
+    - 表示しない: カレーの中の材料（2 段目より深い展開）
+
+3-2. Custom（カスタム）— 将来
+- 現在の Recipe Summary に近い: **expand_targets** で prepped の展開を選ぶ。
+- 再帰的・深い表示が可能（recipe-summary-plan.txt 参照）。
+- 今回の DB / UI / API には含めない。
+
+3-3. 種類の関係
+- 1 つの source_item（base recipe）に対し、将来は Standard 用バージョン列と
+  Custom 用 Summary 列が並ぶ想定だが、**今回は Standard のみ** を新設する。
+- 既存 recipe_summaries / expand_targets は Custom 向けとして温存し、
+  Standard 用に別テーブル群を用意するか、段階的に統合するかは実装時に決定（TBD）。
+
+
+================================================================================
+4. バージョンとは何か
+================================================================================
+
+4-1. 定義
+- **Technical Sheet のバージョン** = Output の成果物を 1 回固定したスナップショット。
+- バージョン番号は **0 から始まる整数** を基本とする（v0, v1, … v10）。
+- 各バージョンは DB 1 行の **`snapshot` JSONB** にまとめて保持する（§7-3）:
+  - **sheet** … その時点の帳票（表・工程・保存時 PU/PT）
+  - **recipe_snapshot** … 差分比較用の正規化レシピ行
+  - **cost_inputs** … 版保存時の単価（価格トグル用）
+  - 行メタ: 作成日時、作成者 等（テーブル列）
+- **history_logs は使わない**（§7-0 · §8-1）
+
+4-2. レシピ更新とバージョンの関係
+- **レシピを更新しても、Standard Technical Sheet は自動では増えない。**
+- レシピだけが進み、**最新バージョンの sheet が「古い写し」になる** 状態がありうる。
+- そのとき **最新バージョンを表示している画面** でのみ、レシピとの差分 UI を出す（§6）。
+
+4-3. バージョンが増える操作（Standard）
+| 操作 | レシピ | 新バージョン |
+|------|--------|--------------|
+| 新規レシピ作成 | 新規 | **v0 を自動生成** |
+| レシピのみ編集（costing 等） | 更新 | 増えない |
+| Create new version based on latest recipe | 変更なし | **最新レシピから新規生成** |
+| Edit sheet → Save | **sheet の内容でレシピを更新** | **新バージョンも生成** |
+
+4-4. 新規レシピ時の v0（確定）
+- **base recipe**（§5-1）が **新規作成されたタイミング** で、
+  Standard Technical Sheet **version 0** を自動生成する。
+- base recipe = **menu item**（`is_menu_item = true`）と **prepped item**（`is_menu_item = false`）の **両方**。
+- v0 を開くと「その時点のレシピ」に基づく sheet が見える（いわゆる初期スナップショット）。
+
+
+================================================================================
+5. Standard Technical Sheet — 表示・UX 要件
+================================================================================
+
+5-1. Recipe Summary タブ — 一覧（確定）
+
+入口: costing 画面の **Recipe Summary** タブ。
+
+**base recipe（用語 · 確定）:**
+- Technical Sheet の **親になる item** = **base recipe**。
+- **menu item**（`is_menu_item = true`）と **prepped item**（`is_menu_item = false`）の **両方** を含む（完成品だけに限定しない）。
+- costing でレシピとして作られる item が対象。新規作成時に v0 自動生成（§4-4）。
+- トンカツカレー（menu）の **子行** として表に出る「Curry prepped」とは別に、**Curry 自体を base recipe とした TS** もありうる。
+
+**行の単位（重要）:**
+- 1 行 = **base recipe 1 件**（menu item **または** prepped item）。
+- summary やバージョンごとに行を増やさない（行数 = base recipe 数のみ）。
+- 旧 recipe_summaries の「summary 名ごと 1 行」UI は **採用しない**。
+
+**列:**
+| 列 | 内容 |
+|----|------|
+| Base recipe | item 表示名（menu / prepped とも）。種別表示（Menu · Prepped）は任意（TBD） |
+| （Action） | **Show Standard** ボタン |
+| （Action） | **Show Custom** ボタン |
+
+**採用しない列:**
+- Created / Updated 等の日時列（不要）
+- Summary Name 列（Standard は base recipe 主軸のため不要）
+
+**Show Custom:**
+- ボタンは表示するが、**今は押しても何も起こらない**（無効・no-op）。
+
+**Show Standard:**
+- 押下で §5-2 の Technical Sheet 画面（モーダル or 全画面）を開く。
+- 対象 base recipe の Standard バージョン列（v0 … vn）を操作する。
+
+**データとの対応（方針）:**
+- 一覧の行キー = `source_item_id`（base recipe の item id）。
+- Standard バージョン実体は `standard_technical_sheets`（名称 TBD）等に **source_item あたり複数行（v0, v1, …）**。
+- 旧 `recipe_summaries` テーブルは Custom 将来用。Standard 一覧の主テーブルにはしない。
+
+**既存 UI: + Create Summary ボタン / Create Summary モーダル（確定）:**
+
+現行 `RecipeSummaryPanel` には recipe-summary-plan.txt 由来の **+ Create Summary** ボタンと
+**Create Summary モーダル**（Summary Name · expand 選択 · recipe_summaries 登録）がある。
+
+| 対象 | Standard 実装時 | 理由 |
+|------|-----------------|------|
+| **+ Create Summary ボタン** | **表示しない**（一覧から外す） | Standard はbase recipe 1 行 + v0 自動生成。ユーザーが summary を手動作成する流れは不要 |
+| **Create Summary モーダル** | **Standard フローでは開かない** | 同上。バージョン作成は §5-2 の Create new version / Edit → Save で行う |
+
+**コードは削除しない（Custom 用に温存）:**
+- Custom 実装時に **expand 付き summary をユーザーが作る** 入口として、同ボタン・同モーダル（またはその派生）を **再利用する** 想定。
+- 詳細 UX は recipe-summary-plan.txt §6-2〜6-3 を Custom 側の参照とする。
+- Standard 作業では UI から隠すだけで、コンポーネント・API（recipe_summaries 作成）は残してよい。
+
+5-2. Show Standard — Technical Sheet 画面（確定）
+
+Show Standard 押下後のレイアウト。
+
+**上段ツールバー（左 → 右）:**
+- **Version** プルダウン: v0, v1, … **最新** を選択。最新には Latest 表示（TBD）。
+- **Create new version based on latest recipe** ボタン（プルダウンの右）:
+  - **有効（押せる）:** **最新版**の `recipe_snapshot` と **いまのレシピ**に構成差があるときのみ（§6 · `has_recipe_diff` と同条件）。
+  - **グレーアウト（disabled）:** 差分がないとき。中身のほぼ同じ版を増やさないため。
+    - Version プルダウンで **過去 v を表示中でも同じ**（判定は常に「最新版 vs live」）。
+    - ツールチップ等で理由を示す（例: *Current recipe matches the latest technical sheet.* · 文言 TBD）。
+  - **not-difference 専用モーダルは出さない**（押せないので開かない）。
+  - 有効時: 押下 → **プレビューモーダル**（§5-2-1）。単なる Yes/No 確認ダイアログではない。
+  - Confirm 後: **現在のレシピ**から TS を生成し、**新しい最新バージョン** になる。
+
+**中央:**
+- 選択中バージョンの **Technical Sheet 本体**（§5-3 PDF 風 UI）。
+
+**右側（通常モード — 3 コントロール）:**
+| # | UI | 挙動 |
+|---|-----|------|
+| 1 | **Show difference** | §6。最新バージョン表示中のみ。**差分なしはグレーアウト（disabled）** |
+| 2 | **Edit** | §5-4。**最新バージョンのみ有効**。過去バージョンは **グレーアウト**（Branch 未実装のため） |
+| 3 | **価格トグル** | §7。Latest vendor prices ↔ Prices when this version was created |
+
+**差分あり（最新バージョン vs live レシピ）:**
+- TS 表示エリアの **一番上** に英文バナー（例: *This technical sheet differs from the current recipe.*）。
+  - **最新 v を表示しているときのみ** バナーを出す（過去 v 表示中はバナーなし · §5-2-2）。
+- バナーがある ⇔ `has_recipe_diff` ⇔ **Show difference** と **Create new version based on latest recipe** が有効（いずれもグレーアウトでない）。
+
+**モード別 — 右側コントロールの差し替え:**
+
+| モード | 右側に表示 |
+|--------|------------|
+| 通常閲覧 | Show difference · Edit · 価格トグル |
+| Show difference 表示中 | **Cancel** · **Create new version** |
+| Edit 中 | **Save** · **Cancel**（＋価格トグルは Edit 中も可、TBD） |
+
+- **Show difference 表示中の Cancel:** 差分オーバーレイを閉じ、通常の TS 表示に戻る。
+- **Show difference 表示中の Create new version:** 現在レシピから **新バージョン TS** を作成（レシピ本体は変更しない）。完了後 Latest 更新。
+
+5-2-1. Create new version based on latest recipe — プレビューモーダル（確定）
+
+**単なる確認モーダル（文言のみ）は使わない。**
+**§5-2 のとおり、レシピに構成差がないときはツールバーボタンがグレーアウトのため、本モーダルには到達しない。**
+
+1. ユーザーがツールバーの **Create new version based on latest recipe**（有効時）を押す。
+2. モーダルを開き、**現在のレシピから生成した Technical Sheet をそのまま表示**（プレビュー）。
+   - 読み取り専用。Description / Steps / Ingredient Cost Table / Total まで含む。
+   - 価格はプレビュー生成時の方針（通常は latest）に従う（TBD）。
+3. モーダルフッター: **Cancel** · **Confirm**
+4. **Confirm** でバージョン保存 → 新バージョンが **Latest**。モーダルを閉じ、親画面の Version プルダウンも最新に更新。
+
+（API 案: POST preview-from-latest-recipe → sheet JSON、Confirm で POST from-latest-recipe 確定、など TBD）
+
+5-2-2. 任意バージョンの閲覧（過去含む）
+- v6 など **過去バージョン**を Version プルダウンで選んだとき（§7-0）:
+  - **その版の snapshot** に保存された Technical Sheet 全体を表示（材料の g・表の形・当時保存した金額）。
+  - **いまのレシピ（live recipe_lines）は表示に使わない**（当時の帳票を見る）。
+  - **差分バナーなし**。
+  - **Show difference はグレーアウト**（非表示にしない · §6）。
+  - **Edit はグレーアウト**（§5-4 · §9）。
+  - **価格トグルは利用可能**（§7）：同じ v6 の表のまま、単価だけ「当時」か「今日」に切り替え。
+
+5-3. PDF 風 UI（既存合意の継承）
+recipe-summary-plan.txt 6-5 の表示仕様を Standard でも基本踏襲:
+- ヘッダー: Product 名 等（Season / Portion は出さない）
+- Description / Step・Procedure（Standard は 2 階層ルールに従い Procedure を構成）
+- Ingredient Cost Table: Nature / Vendor Item / Unit / Step列 A..N / Total / PU / PT
+- 下部: Total Ingredient Cost のみ（Suggested Price 等は出さない）
+- 通貨: USD（$）
+
+**Standard 固有の表示ルール:**
+- 2 階層まで: トップの直下の子（prepped / base）までを表・工程に反映。
+- 深い prepped の **内訳（孫以下）は Standard では出さない**。
+- ただし **原価計算**はレシピ全体のロジックに従う（表示は浅く、コストは正しく、TBD 要検証）。
+
+5-4. Edit モード（概要）
+
+**Edit ボタンの有効範囲（今回）:**
+- **最新バージョン表示中のみ Edit 有効**。
+- **過去バージョン表示中は Edit をグレーアウト**（disabled）。Branch（§9）未実装のため。
+
+**Edit 開始（最新 v のみ）:**
+- 右側ボタンが **Save** · **Cancel** に差し替わる。
+- sheet 上で数量（g）の変更、材料行の追加 等（§5.5 試算）。
+
+**Save（最新バージョン + Edit 中）— 今回実装:**
+1. 編集内容を **base recipe の recipe_lines 等に反映**（その TS の source_item）
+2. 反映後の状態で **新しい Standard バージョン** の TS を生成（新 Latest）
+
+**Save（過去バージョン + Edit 中）— 将来（Branch · 今回やらない）:**
+- 新レシピ（例: トンカツカレー version 6-1）を作成し、派生 TS 列を持つ（§9）。
+- 起点バージョン（例: v6）の内容を土台にした **初期 TS がその派生の v0** 相当になる想定。
+- Branch 実装までは Edit は **グレーアウト** のみ（押せない）ので本パスは到達しない。
+
+**Cancel:** 編集を破棄し、通常閲覧に戻る（draft 破棄）。
+
+**Save 前のリアルタイム原価試算:** §5.5 を参照。
+
+5-5. Edit モード — リアルタイム原価試算（確定）
+
+目的:
+- Save する前に、量や材料を変えたときの **PT・Total Ingredient Cost** を気軽に確認できる。
+- **Save まで DB（レシピ・バージョン）は更新しない。**
+- 試算の掛け算・合計は **フロントエンド** で行う。
+
+開発の置き場所:
+- 当面は costing 画面の **Recipe Summary タブ**上の Technical Sheet（View / Edit）から実装を進める。
+- 将来 Standard バージョン用の新テーブル群を導入しても、Edit 試算の考え方は同じ。
+
+Standard の階層数との関係:
+- Edit 時の $/g 取得戦略は **Standard の「2 階層・子が少ない」こととは無関係**。
+- Custom でも同様: 行ごとに PU があれば同じ計算式でよい。
+
+基本式:
+- 各行: **PT = Total（g）× PU（$/g）**
+- **Total Ingredient Cost = 全行 PT の合計**
+- Ingredient Cost Table の Step 数量は **グラム（g）** ベース（現行 GET technical-sheet と同じ）。
+
+いつサーバに問い合わせるか:
+
+| 状況 | サーバ API | UI |
+|------|------------|-----|
+| すでに表にある行で g のみ変更 | **不要**（表示時 GET technical-sheet の **pu** を使用） | クルクルなし。PT・合計を即更新 |
+| Edit 中に **新規**で材料を追加（raw / prepped） | その **item_id の $/g を 1 回**取得 | 該当行の PU/PT と **合計がローディング（ぐるぐる）** → 取得後に表示 |
+| **Save** | レシピ反映 + 新バージョン sheet 生成 | — |
+
+- **キーストロークごとの RPC / breakdown 一括は行わない。**
+- **Edit 開始時の先取り（prefetch）は行わない。**
+  - prepped が増えた・変わったあとに古い PU が残るリスクがあるため。
+  - ぐるぐるが出ることは許容し、**その都度・その材料だけ**取りに行く。
+
+$/g（PU）の取得方針:
+- **prepped:** costing ページと同じ **breakdown 系**（子レシピの food + labor を積み上げた **total_cost_per_gram**）。
+  フロントで子レシピを再帰展開して原価計算しない。
+  - 候補 API: POST /items/costs/breakdown/missing（当該 item_ids のみ）
+  - または GET /items/:id/cost（実装時に costing 表示と数値が揃う方を採用）
+- **raw（例: 塩）:** 当該 item の **$/g** をサーバから 1 回取得（VVP / lowest ロジックはサーバ任せ）。
+
+取得タイミング（UI）:
+- 新規行: 材料を選び、使用量（g）を入力し、**フォーカスが外れたとき（onBlur）** などで fetch を開始してよい。
+- 材料選択直後に fetch を始めてもよい（実装 TBD）。いずれも **先取り一括ではない**。
+
+Edit セッション内キャッシュ（先取りではない）:
+- 同一 Edit セッションで **すでに fetch した item_id → pu** を Map に保持し、
+  同じ材料を再度足すときの二重 API を防ぐ。
+- Edit を抜けたら破棄。次回 Edit では改めて必要な id だけ fetch。
+
+フロント状態（イメージ）:
+
+  draftSheet   … 編集中の ingredient_rows / step_quantities（表示用 sheet のコピー）
+  costCache    … この Edit で fetch 済みの item_id → pu（行追加時のみ増える）
+  recompute()  … draft + pu から PT・total_ingredient_cost を算出（純粋 TS、DB なし）
+
+やらないこと:
+- Edit 開始時の tenant 全体 / sheet 全 id の breakdown **先取り**
+- 入力のたびにサーバ preview（POST で毎回再計算）
+- Save 前の recipe_lines・バージョン行への DB 書き込み
+
+既存 API との関係:
+- View 時: GET /recipe-summaries/:id/technical-sheet（現行。各行に pu / pt 付き）
+- Edit 試算: 上記 §5.5。Save 時のみ recipe 更新 API +（将来）バージョン保存 API。
+
+
+================================================================================
+6. レシピとの差分 UI（Show difference）— 条件を厳密に
+================================================================================
+
+6-1. レシピ構成差（has_recipe_diff）— Show difference / ツールバー Create new version 共通（確定）
+
+**判定:** 常に **最新版**の `snapshot.recipe_snapshot` と live **recipe_lines**（Standard 表示深度 · §6-7）を比較。
+API は `{ has_recipe_diff, ... }` を返す想定（名称 TBD）。
+
+**Show difference（右側）— 常に表示、条件でグレーアウト:**
+- **押せる（有効）** のは次の **両方** を満たすときだけ:
+  1. Version プルダウンで **最新バージョン**を表示している
+  2. `has_recipe_diff` が true
+- それ以外は **グレーアウト（disabled）**:
+  - 過去バージョン（v6 など）を表示中
+  - 最新バージョンだが `has_recipe_diff` が false
+
+**Create new version based on latest recipe（ツールバー）— 常に表示、条件でグレーアウト:**
+- **押せる（有効）:** `has_recipe_diff` が true のときのみ（§5-2）。
+- **グレーアウト:** `has_recipe_diff` が false（Version プルダウンが過去 v でも同じ）。
+- not-difference モーダルは **出さない**。
+
+6-2. 差分バナー（最新バージョンのみ）
+- 上記 1+2 を満たすとき、TS 本体の **一番上** に英文バナー（例: *This technical sheet differs from the current recipe.*）。
+- 過去バージョンではバナーなし。
+
+6-3. 出さない・不要なもの
+- 過去バージョンでの差分比較 UI（§5-2-2）。
+- Custom sheet（将来）では別ルールの可能性（今回対象外）。
+
+6-4. Show difference の表示内容（GitHub 風）
+- 比較対象:
+  - **左 / 基準**: 最新バージョンの **snapshot.recipe_snapshot**
+  - **右 / 比較先**: **現在のレシピ**（live recipe_lines）
+- 表示:
+  - 削除された材料・行 → **赤**
+  - 新規追加された材料・行 → **緑**
+  - 数量変更 → 変更ハイライト（詳細 UI TBD）
+
+6-5. Show difference 表示中の右側ボタン
+- 通常の 3 コントロールの代わりに **Cancel** · **Create new version** を表示。
+- **Cancel:** 差分表示を閉じ、通常 TS 表示に戻る。
+- **Create new version:** 現在レシピから新 TS バージョンを作成（§8-5）。レシピは変更しない。
+
+6-6. ツールバーの Create new version based on latest recipe との関係
+- ツールバー版: §5-2-1（**TS プレビュー付き**モーダル → Confirm）。**has_recipe_diff 時のみ有効**。
+- 差分表示中の右側 **Create new version**: 差分表示に入っている時点で `has_recipe_diff` は true のため **有効**（§6-5）。
+- 差分表示中の Create new version: プレビューなしで確定するか、同様にプレビューするかは **実装時 TBD**（推奨: 同じプレビュー UX に揃える）。
+
+6-7. 差分検出の実装方針（候補）
+- 最新版の **snapshot.recipe_snapshot** と live **recipe_lines** を正規化して比較。
+- 比較はバックエンド API が `{ has_diff, diff_summary }` を返し、
+  フロントは最新バージョン表示時のみポーリング or 表示時 1 回取得（TBD）。
+
+
+================================================================================
+7. スナップショット・価格表示（確定方針）
+================================================================================
+
+7-0. まず押さえる3つの操作（混同しやすいので分離）
+
+具体例: トンカツカレー。レシピは costing で随時更新。**TS の版**は v0, v1, … と保存のたびに増える。
+
+| 操作 | 何が変わるか | 例 |
+|------|----------------|-----|
+| **Version プルダウン** | **どの版の帳票**を見るか（材料の g・表全体） | v0＝1月保存の表（塩10g）、v1＝4月保存の表（塩15g） |
+| **価格トグル** | **同じ版**のまま、**単価**を当時か今日か | v1 を見たまま「4月の単価」↔「今日の単価」 |
+| **Show difference** | **最新版の表**と**いまのレシピ**の違い（§6） | 最新 v1 表示中のみ有効可 |
+
+**過去の v6 を「開く」** = プルダウンで v6 を選ぶこと。**トグルだけでは v6 にならない。**
+**過去の金額** = v6 を選んだうえで、トグルを Version prices（当時）にすること。
+
+**レシピ（recipe_lines）** は常に1本で上書きされる → 過去の配合は **snapshot** にしか残らない。
+**history_logs は使わない。** TS 履歴の本体は `standard_technical_sheets.snapshot` のみ。
+
+7-1. なぜ snapshot（JSONB）が要るか
+
+- `recipe_lines` は **いまの正** だけ。昔の配合は残らない。
+- `price_events` は **仕入単価の履歴**。帳票（何 g 何を使ったか）ではない。
+- だから **版ごとに1行** + **`snapshot` JSONB** に、その瞬間の帳票・構成・単価を **丸ごと不変保存**（追記のみ · UPDATE で過去版を書き換えない）。
+
+7-2. DB の形（概要）
+
+テーブル `standard_technical_sheets`（名称 TBD）:
+
+- 1 行 = ある base recipe（menu / prepped）の Standard TS **1 バージョン**（v0, v1, …）
+- 一覧（Recipe Summary タブ）は **base recipe 1 行**。版はこのテーブルに複数行。
+- 列の例: `source_item_id`, `version_number`, `is_latest`, `created_by`, `created_at`, **`snapshot` JSONB NOT NULL**
+
+7-3. snapshot の中身（3層 · schema_version 付き）
+
+初版は **フル保存**（差分のみ圧縮は将来）。例:
+
+{
+  "schema_version": 1,
+  "source_item_id": "uuid",
+  "standard_display_depth": 2,
+
+  "sheet": {
+    "steps": [ ... ],
+    "ingredient_rows": [
+      {
+        "item_id": "uuid",
+        "nature": "Salt",
+        "vendor_item": "Lowest",
+        "unit": "g",
+        "step_quantities": { "A": 10 },
+        "total": 10,
+        "pu": 0.02,
+        "pt": 0.20
+      }
+    ],
+    "total_ingredient_cost": 32.17
+  },
+
+  "recipe_snapshot": {
+    "lines": [
+      {
+        "child_item_id": "uuid",
+        "line_type": "ingredient",
+        "quantity": 1,
+        "unit": "kg",
+        "grams": 1000,
+        "specific_child": "lowest"
+      }
+    ]
+  },
+
+  "cost_inputs": {
+    "by_item_id": {
+      "<item_id>": { "pu_per_gram": 0.02, "vvp_id": "uuid-or-null" }
+    },
+    "captured_at": "2026-05-17T12:00:00Z"
+  },
+
+  "display_meta": {
+    "description": "...",
+    "procedures": { "<item_id>": "..." }
+  }
+}
+
+| 層 | 用途 |
+|----|------|
+| **sheet** | 過去 v を開くとき **そのまま表示**（再計算不要） |
+| **recipe_snapshot** | Show difference: 最新版の構成 vs **live recipe_lines** |
+| **cost_inputs** | 価格トグル ON = **版保存時の PU** で PT/合計 |
+
+版が増えるタイミングで snapshot を組み立てて INSERT:
+- 新規 base recipe（menu / prepped）→ **v0** 自動
+- Create new version based on latest recipe（Confirm 前プレビュー · §5-2-1）
+- Edit → Save（最新のみ · レシピ更新後に新版）
+
+7-4. 価格トグル（2モード）
+
+| トグル | 意味 | デフォルト |
+|--------|------|------------|
+| **Latest vendor prices** | 表示中バージョンの **構成（g）** は snapshot の sheet。**単価はいま**の VVP / breakdown で再計算 | **ON（デフォルト）** |
+| **Version snapshot prices** | 同じ版の構成のまま、**cost_inputs / sheet に保存した PU・PT** を使用 | OFF |
+
+- 構成（何 g か）は **常に表示中バージョンの snapshot**（プルダウンで選んだ v）。
+- 最新版かつレシピ一致でも、トグル OFF なら **保存時金額** を見られる。
+
+7-5. Latest トグル時 — 単価が取れない材料（確定）
+
+**Version snapshot prices（当時）:** snapshot に PU があれば **数字**（当時は買えていた前提）。
+
+**Latest vendor prices（現在）:** いまの VVP / prepped 原価を取得。**取れない場合は PU・PT を `-` 表示**（`$0.00` にしない）。
+
+該当例（costing と同様の失敗扱い）:
+- 参照 VVP が deprecated / マッピングなし / 有効 VVP 0 件
+- prepped が deprecated または原価計算不可
+- 権限・cross-tenant で breakdown 不可 等
+
+**合計（Total Ingredient Cost）:**
+- **推奨:** PT が `-` の行は合計から **除外**し、注記（例: *Some lines could not be priced at current rates.*）。
+- 代替案: 1 行でも `-` なら合計も `-`（実装時に costing と揃える · TBD）。
+
+7-6. 版を開いたときのデータの読み方（まとめ）
+
+| ユーザー操作 | 読むデータ |
+|--------------|------------|
+| プルダウン v6 | その行の **snapshot.sheet**（＋トグルで cost_inputs） |
+| プルダウン最新 + Show difference | snapshot.**recipe_snapshot** vs live **recipe_lines** |
+| トグル Latest | sheet の g × **いまの単価**（取れなければ `-`） |
+| トグル Version prices | sheet の **保存済み PU/PT** |
+
+7-7. 使わないもの
+
+- **history_logs** … TS 版管理とは無関係
+- **recipe_lines を過去記録代わり** … 上書きされるため
+- Edit 中のキー入力ごとの DB ログ … Save で 1 版のみ増やす（§5.5）
+
+
+================================================================================
+8. データモデル — 方針と候補（確定前）
+================================================================================
+
+8-1. 設計原則
+- レシピ（items, recipe_lines）はマスタのまま。上書きしない設計にはしない
+  （Edit → Save でレシピは **意図的に更新** される）。
+- Standard バージョンは **append-only** に近い（削除は管理者のみ等、TBD）。
+- **TS 履歴の記録 = `standard_technical_sheets.snapshot` のみ。** history_logs は使わない。
+- `price_events` は VVP 単価の台帳（別系統）。TS 版の「帳票」本体ではない。
+- 既存 recipe_summaries は Custom 将来用として触らないか、名前を整理（TBD）。
+
+8-2. 候補テーブル: standard_technical_sheets（名称 TBD）
+
+  standard_technical_sheets
+  - id                    UUID PK
+  - tenant_id             UUID NOT NULL
+  - source_item_id        UUID NOT NULL  -- base recipe item
+  - version_number        INTEGER NOT NULL  -- 0, 1, 2, ...
+  - is_latest             BOOLEAN NOT NULL DEFAULT false
+                        -- または latest は (source_item_id, kind) で最大 version を都度 SELECT
+  - snapshot              JSONB NOT NULL   -- §7-3（sheet + recipe_snapshot + cost_inputs）
+  - created_by            UUID NOT NULL
+  - created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+  - recipe_updated_at_snapshot  TIMESTAMPTZ NULL  -- 任意: 生成時の items.updated_at
+
+  制約:
+  - UNIQUE (tenant_id, source_item_id, version_number)
+  - 部分 UNIQUE: (tenant_id, source_item_id) WHERE is_latest = true
+    またはアプリで latest 更新をトランザクション化
+
+8-3. v0 自動生成のトリガー（候補）
+- 対象: **menu item · prepped item** の新規作成（§4-4 · §5-1）。いずれも items 作成フローにフック。
+- アプリ: base recipe 初回保存 API の成功後に RPC で v0 INSERT
+- DB: items INSERT 後トリガー（複雑になりやすいのでアプリ推奨）
+
+8-4. Edit → Save のトランザクション（候補）
+1. sheet 編集差分を recipe_lines に適用（既存 costing API / 新 RPC）
+2. 更新後レシピ + 最新 VVP 価格で snapshot 構築
+3. version_number = max+1 で standard_technical_sheets INSERT
+4. 旧 latest の is_latest を false、新行を true
+
+8-5. Create new version based on latest recipe
+- レシピは変更しない。
+- live レシピ + live 価格（作成時スナップショット用 cost_inputs も保存）で snapshot 構築 → 新バージョン INSERT。
+- UI: §5-2-1。**Confirm 前に現在レシピ由来の TS をモーダル内にフル表示**（プレビュー API → 確定 API の 2 段でも可）。
+
+
+================================================================================
+9. Branch（分岐）— 将来機能（今回実装しない）
+================================================================================
+
+9-1. 動機（Git と同様）
+- 最新が v10 のとき **v6 だけ直したい** 場合、v7–v10 の直線履歴とレシピを壊したくない。
+- **過去バージョンの修正 = 本流の上書きではなく、派生レシピ + 派生バージョン列** を作る。
+
+9-2. 例
+- 本流: トンカツカレー … v0 … v10
+- v6 から編集を始める → 新レシピ「トンカツカレー version 6-1」（名称 TBD）ができる
+- 派生レシピ側の Standard バージョン: v6-1, v6-2, …（表記は product 名 + branch 名でも可）
+- v6-6 がある状態で v6-2 を編集 → さらに新レシピ「トンカツカレー version 6-2」
+
+9-3. 必要になりそうなテーブル（将来）
+  recipe_lineage または recipe_branches
+  - id
+  - tenant_id
+  - root_item_id          -- オリジナルbase recipe
+  - derived_item_id       -- 派生base recipe
+  - branched_from_version -- 何番から分岐したか
+  - branch_label          -- "6-1" 等
+  - created_at
+
+- 派生レシピは **独立した source_item_id** を持ち、独自の Standard バージョン列を持つ。
+- 本流の v7–v10 には影響しない。
+
+9-4. 今回やらないこと
+- Branch 用 UI / API / マイグレーション
+- 過去バージョン表示中の **Edit → Save**（派生レシピ作成）
+- 上記までの間、過去バージョンでは **Edit ボタンをグレーアウト**（§5-2 · §5-4）
+
+
+================================================================================
+10. Input（import）— 将来機能（今回実装しない）
+================================================================================
+
+- Technical Sheet（外部形式）を読み込み、**新規または既存レシピ**に反映する。
+- Output で作った sheet を編集して戻すのとは別経路の可能性あり（TBD）。
+- スキーマ・ファイル形式・OCR 等は未定。
+
+
+================================================================================
+11. Custom — 将来機能（今回実装しない）
+================================================================================
+
+- 既存 recipe_summaries + recipe_summary_expand_targets をベースに拡張する想定。
+- expand 選択により **深い再帰** の Technical Sheet を生成。
+- Standard とは **別バージョン体系** または **別 product ライン** として共存（TBD）。
+- recipe-summary-plan.txt の Phase 4 以降は Custom 側に回す。
+
+**+ Create Summary / Create Summary モーダル（温存）:**
+- Standard では §5-1 のとおり **一覧に出さない**。
+- Custom では **Show Custom** から、または一覧上の **+ Create Summary** を再度有効化し、
+  現行モーダル（Summary Name · 展開 prepped 選択 → recipe_summaries 登録）を起点に実装する。
+- モーダル・`POST /recipe-summaries` 等の既存実装は **削除せず残す**。
+
+
+================================================================================
+12. 今回のスコープ（実装対象のまとめ）
+================================================================================
+
+【やる】
+- Recipe Summary タブ一覧: **base recipe 1 行**（menu + prepped）· Show Standard / Show Custom（§5-1）
+- **+ Create Summary ボタンを非表示**（モーダル実装はコード温存 · §5-1）
+- Standard Technical Sheet: Version プルダウン · 右側 3 コントロール · モード差し替え（§5-2）
+- Create new version based on latest recipe: **has_recipe_diff 時のみ有効** · プレビューモーダル → Confirm（§5-2-1）
+- バージョン 0 自動生成（新規 base recipe: menu · prepped）
+- 最新 v のみ: 差分バナー · Show difference（差分なしはグレーアウト）· 差分表示モード
+- Edit: **最新 v のみ有効**。過去 v は **Edit グレーアウト**
+- Edit → Save（最新）→ base recipe 反映 + 新 TS バージョン
+- Edit 試算（§5.5）: 先取りなし · 新規材料のみ都度 $/g 取得
+- 価格トグル: Latest vendor prices ↔ Version snapshot prices（§7）
+- 2 階層 Standard 表示ルール
+- DB: standard_technical_sheets 等（source_item = menu / prepped）。旧 recipe_summaries は Custom 将来用
+
+【やらない（将来）】
+- Show Custom（no-op のまま）
+- Custom（expand）本実装 · **+ Create Summary の再有効化**（§11）
+- Create Summary モーダル / recipe_summaries 手動登録フローの **削除**（Standard では使わないが Custom で再利用）
+- Branch: 過去 v の Edit → Save → 派生レシピ（§9）
+- Input（import）
+
+
+================================================================================
+13. API 概要（候補 — 名称・パスは実装時確定）
+================================================================================
+
+13-1. バージョン一覧
+  GET /items/:sourceItemId/standard-technical-sheets
+  → [{ id, version_number, is_latest, created_at, created_by }, ...]
+
+13-2. 1 バージョン取得（表示用）
+  GET /standard-technical-sheets/:id
+  → { sheet, snapshot, is_latest, has_recipe_diff, ... }
+  - **sheet**: snapshot.sheet（過去 v も含め表示の本体）
+  - **has_recipe_diff**: 最新版のみ live recipe と recipe_snapshot を比較（Show difference 有効判定 · §6）
+  - 価格トグル Latest 時は sheet の g × live 単価を再計算（取れなければ `-` · §7-5）
+  - 価格トグル Version prices 時は sheet / cost_inputs の保存 PU・PT を使用
+
+13-3. レシピとの差分
+  GET /standard-technical-sheets/:id/recipe-diff
+  - **最新バージョンの id にのみ 200**。過去バージョンは 404 または has_diff: false
+  → { has_diff, lines: [{ type: 'added'|'removed'|'changed', ... }] }
+
+13-4. 最新レシピから TS プレビュー（Create new version モーダル用）
+  POST /items/:sourceItemId/standard-technical-sheets/preview-from-latest-recipe
+  → RecipeSummaryTechnicalSheet 相当 JSON（読み取り専用プレビュー）
+  - モーダル内に §5-3 と同じ PDF 風 UI で表示
+
+13-4b. 最新レシピから新バージョン確定
+  POST /items/:sourceItemId/standard-technical-sheets/from-latest-recipe
+  → 新バージョン id（Latest 更新）
+  - §5-2-1 の Confirm で呼ぶ
+
+13-5. Edit 保存（レシピ反映 + 新バージョン）
+  POST /standard-technical-sheets/:id/save-edits
+  body: { edits: ... }
+  → トランザクションで recipe 更新 + 新バージョン
+
+13-6. 新規 base recipe 時 v0（内部）
+  POST 内部 RPC または items 作成フローにフック（menu · prepped 共通）
+
+13-7. Edit 試算用の $/g 取得（既存 API 流用 — Edit 中・材料ごと）
+  GET /items/:id/cost
+  → { item_id, cost_per_gram }
+  または
+  POST /items/costs/breakdown/missing
+  body: { item_ids: ["uuid", ...] }
+  → { costs: { [itemId]: { food_cost_per_gram, labor_cost_per_gram, total_cost_per_gram } } }
+  - prepped は breakdown の total_cost_per_gram を PU として使用
+  - **Edit 開始時の一括呼び出しはしない**（§5.5）
+
+
+================================================================================
+14. 画面フロー — ワイヤー（確定 UI）
+================================================================================
+
+14-1. Recipe Summary 一覧（Standard · + Create Summary は出さない）
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Recipe Summary                                                            │
+│  （現行の [+ Create Summary] は Standard では非表示 · Custom 用にコード温存）   │
+├────────────────────────────┬──────────────────┬─────────────────────────┤
+│ Base recipe                │                  │                         │
+├────────────────────────────┼──────────────────┼─────────────────────────┤
+│ Tonkatsu Curry (menu)      │ [Show Standard]  │ [Show Custom]  (no-op)  │
+│ Curry Sauce (prepped)      │ [Show Standard]  │ [Show Custom]  (no-op)  │
+└────────────────────────────┴──────────────────┴─────────────────────────┘
+
+14-2. Show Standard — 通常閲覧（最新 v10 · 差分あり）
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ ← Back to list                                                                │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Version [ v10 (latest) ▼ ]    [ Create new version based on latest recipe ]  │ enabled
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ⚠ This technical sheet differs from the current recipe.          (banner)    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  Description / Steps / Ingredient Cost Table / Total: $32.17                 │
+│                                                          ┌──────────────────┤
+│                                                          │ [Show difference]│ enabled
+│                                                          │ [Edit]           │ enabled
+│                                                          │ Latest ●  Snap ○ │ toggle
+│                                                          └──────────────────┘
+└──────────────────────────────────────────────────────────────────────────────┘
+
+14-2b. 最新 v10 · 差分なし（Show difference · Create new version グレーアウト）
+│ Version [ v10 (latest) ▼ ]    [ Create new version based on latest recipe ]  │ gray
+│ ⚠ (no banner)                                                                │
+│                                                          │ [Show difference]│ gray
+│                                                          │ [Edit]           │
+
+14-2c. 過去 v6 閲覧（v6 の帳票 · 当時/現在の単価はトグルで）
+│ Version [ v6 ▼ ]    [ Create new version… ]  │ enabled if has_recipe_diff, else gray
+│ (no diff banner)                                                               │
+│  … v6 保存時の表（塩10g 等 · snapshot.sheet）…                                  │
+│                                                          │ [Show difference]│ gray
+│                                                          │ [Edit]           │ gray
+│                                                          │ Latest ●  Snap ○ │
+│  （Snap ON → v6 保存時の金額 / Latest → 同じ g で今日の単価、取れなければ -）   │
+
+14-3. Create new version based on latest recipe — プレビューモーダル
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Create new version from current recipe                                   [×] │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  （現在レシピから生成した TS をフル表示 — 読み取り専用）                          │
+│  Description / Steps / Ingredient Cost Table / Total                         │
+│  ※ 文言のみの確認ダイアログにはしない                                          │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                              [ Cancel ]  [ Confirm ]         │
+└──────────────────────────────────────────────────────────────────────────────┘
+  Confirm → 新 Latest バージョン保存 → 親画面を v11 に更新
+
+14-4. Show difference 表示中（右ボタン差し替え）
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Version [ v10 (latest) ▼ ]    [ Create new version based on latest recipe ]  │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ⚠ This technical sheet differs from the current recipe.                      │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  DIFF: − removed (red)  + added (green)  qty changes                         │
+│                                                          ┌──────────────────┤
+│                                                          │ [ Cancel ]       │
+│                                                          │ [Create new      │
+│                                                          │  version]        │
+│                                                          └──────────────────┘
+└──────────────────────────────────────────────────────────────────────────────┘
+
+14-5. Edit モード（最新 v10）
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Version [ v10 (latest) ▼ ]                                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  （表: g 編集 · 行追加 · §5.5 リアルタイム PT/合計）                             │
+│                                                          ┌──────────────────┤
+│                                                          │ [ Save ]         │
+│                                                          │ [ Cancel ]       │
+│                                                          │ Latest ●  Snap ○ │
+│                                                          └──────────────────┘
+└──────────────────────────────────────────────────────────────────────────────┘
+  Save → base recipe 更新 + 新 TS バージョン（例: v11）
+
+
+================================================================================
+15. 実装フェーズ案（参考）
+================================================================================
+
+Phase A: データモデル
+  - standard_technical_sheets（名称確定）
+  - snapshot JSONB schema v1（sheet + recipe_snapshot + cost_inputs · §7-3）
+  - v0 自動生成フック
+
+Phase B: Recipe Summary 一覧 + Show Standard 殻
+  - base recipe 1 行一覧（menu + prepped · §14-1）
+  - + Create Summary 非表示（モーダルは温存 · §5-1）
+  - Show Custom no-op
+  - Version プルダウン + TS 表示 + 右側 3 コントロール
+
+Phase C: 差分
+  - recipe-diff API · has_diff
+  - 最新のみバナー · Show difference（無差分は gray）
+  - 差分表示モード: Cancel + Create new version
+
+Phase D: バージョン作成
+  - preview-from-latest-recipe（TS プレビューモーダル §14-3）
+  - from-latest-recipe Confirm
+  - Create new version: has_recipe_diff 時のみ有効 · 無差分は gray（§5-2 · §6-1）
+  - 価格トグル · snapshot 保存
+
+Phase E: Edit → Save
+  - 最新 v のみ Edit 有効 · 過去 v Edit gray
+  - §5.5 試算 · Save → レシピ + 新バージョン
+
+Phase F（将来）: Custom / Branch / Input
+
+
+================================================================================
+16. 未決定事項（TBD）
+================================================================================
+
+- Standard 用新テーブル名・既存 recipe_summaries との統合方針
+- 2 階層表示と原価計算（深い prepped のコストをトップにどうrollupするか）
+- Edit 可能範囲（工程テキストのみか、recipe_lines までか）
+- Edit 新規行の $/g 取得トリガー（onBlur のみか、材料選択時もか）
+- 差分表示中の Create new version も TS プレビューにするか（§6-6 推奨: 揃える）
+- Create new version グレーアウト時のツールチップ英文（§5-2）
+- バージョン削除・アーカイブ要否
+- Total Ingredient Cost: 一部行が `-` のとき合計を除外 vs 全体 `-`（§7-5）
+- Latest トグルで deprecated VVP / prepped の `-` 表示ルールを costing と完全揃えするか
+- 権限（誰が Edit / 新バージョン作成できるか）— 既存 costing 権限の流用
+- 一覧に含める item の下限（prepped/menu 以外を出さないか · deprecated raw 等）
+
+
+================================================================================
+17. 用語集
+================================================================================
+
+Technical Sheet (TS) … レシピを印刷・共有向けに整形した表形式ドキュメント（PDF 風 UI）
+base recipe        … TS の親 item。**menu item と prepped item の両方**（§5-1）
+Standard TS       … 2 階層・expand なしの標準 TS
+Custom TS         … expand あり（将来）
+バージョン (vN)   … TS を固定保存した 1 件（N は 0 始まり）
+Latest            … その source_item の Standard で最大の version_number
+スナップショット  … 版保存時の JSONB（§7-3: sheet / recipe_snapshot / cost_inputs）
+本流レシピ        … 派生前のオリジナル base recipe（item）
+派生レシピ        … Branch で作った別 base recipe（item）（将来）
+Version プルダウン  … どの版（v0, v1, …）の帳票を見るか（§7-0）
+価格トグル          … 同じ版のまま単価を「当時」か「今日」に切替（§7-4）
+snapshot            … 版保存時の JSONB パッケージ（sheet / recipe_snapshot / cost_inputs）
+Show difference   … 最新版のみ有効可；過去版・無差分はグレーアウト（§6）
+PU                … Price per unit（表では $/g）
+PT                … PU × Total（g）。行コスト
+costCache         … Edit セッション内のみ。fetch 済み item_id → pu（先取りではない）
+先取り（prefetch）… Edit 開始時の breakdown 一括取得。**採用しない**（§5.5）
+`-` 表示           … Latest トグルで単価取得不可時（§7-5）。$0.00 にしない
+
+
+================================================================================
+  END OF DOCUMENT
+================================================================================

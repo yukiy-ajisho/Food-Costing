@@ -13,7 +13,11 @@ import {
   type RecipeSummary,
   type RecipeSummaryTechnicalSheet,
   type ResourceShare,
+  standardTechnicalSheetsAPI,
+  type StandardBaseRecipeRow,
 } from "@/lib/api";
+import { StandardTechnicalSheetView } from "@/components/StandardTechnicalSheetView";
+import { formatPtDollars, formatPuPerKg } from "@/lib/technicalSheetFormat";
 
 type PreppedItemLite = {
   id: string;
@@ -135,6 +139,13 @@ export function RecipeSummaryPanel({
     useState<RecipeSummaryTechnicalSheet | null>(null);
   const [technicalSheetLoading, setTechnicalSheetLoading] = useState(false);
 
+  const [baseRecipes, setBaseRecipes] = useState<StandardBaseRecipeRow[]>([]);
+  const [standardView, setStandardView] = useState<{
+    sourceItemId: string;
+    name: string;
+  } | null>(null);
+  const showCreateSummaryUi = false;
+
   const itemMap = useMemo(() => {
     const m = new Map<string, ItemNodeInfo>();
     availableItems.forEach((i) =>
@@ -253,22 +264,28 @@ export function RecipeSummaryPanel({
     });
   }, [sourceCandidates, baseItems, getItemRoleAccess]);
 
-  const loadSummaries = async () => {
+  const loadSummaries = useCallback(async () => {
+    if (!selectedTenantId) {
+      setBaseRecipes([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const data = await recipeSummariesAPI.getAll();
-      setSummaries(data);
+      const data = await standardTechnicalSheetsAPI.listBaseRecipes();
+      setBaseRecipes(data);
     } catch (error) {
-      console.error("Failed to load recipe summaries:", error);
-      alert("Failed to load recipe summaries");
+      console.error("Failed to load base recipes:", error);
+      const detail = error instanceof Error ? error.message : String(error);
+      alert(`Failed to load recipe summary list.\n\n${detail}`);
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedTenantId]);
 
   useEffect(() => {
     void loadSummaries();
-  }, []);
+  }, [loadSummaries]);
 
   useEffect(() => {
     if (!isModalOpen) return;
@@ -663,59 +680,68 @@ export function RecipeSummaryPanel({
     isDark ? "text-slate-300" : "text-gray-500"
   }`;
   const technicalStepKeys = technicalSheet?.steps.map((s) => s.step_key) ?? [];
-  const formatSheetNumber = (value: number, digits = 2) =>
-    value === 0 ? "" : value.toFixed(digits);
+  const formatSheetNumber = (value: number | null | undefined, digits = 2) => {
+    if (value == null || !Number.isFinite(value)) return "—";
+    if (value === 0) return "";
+    return value.toFixed(digits);
+  };
 
   return (
     <>
       <div className="flex flex-col gap-4">
         {/* Toolbar above the table card (same idea as Items page — not inside the table panel) */}
         <div className="flex flex-wrap items-center justify-between gap-2 min-h-[40px]">
-          <button
-            type="button"
-            onClick={() => setIsModalOpen(true)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors disabled:pointer-events-none disabled:opacity-50 bg-blue-600 text-white hover:bg-blue-700`}
-          >
-            <Plus className="w-5 h-5" />
-            Create Summary
-          </button>
-          <div className="flex items-center gap-2">
-            {isEditMode ? (
-              <>
+          {showCreateSummaryUi ? (
+            <button
+              type="button"
+              onClick={() => setIsModalOpen(true)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors disabled:pointer-events-none disabled:opacity-50 bg-blue-600 text-white hover:bg-blue-700`}
+            >
+              <Plus className="w-5 h-5" />
+              Create Summary
+            </button>
+          ) : (
+            <div />
+          )}
+          {showCreateSummaryUi ? (
+            <div className="flex items-center gap-2">
+              {isEditMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleEditSave()}
+                    disabled={savePending}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:pointer-events-none disabled:opacity-50"
+                  >
+                    <Save className="w-5 h-5" />
+                    {savePending ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleEditCancel}
+                    disabled={savePending}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors disabled:pointer-events-none disabled:opacity-50 ${
+                      isDark
+                        ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                    }`}
+                  >
+                    <X className="w-5 h-5" />
+                    Cancel
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => void handleEditSave()}
-                  disabled={savePending}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:pointer-events-none disabled:opacity-50"
+                  onClick={handleEditClick}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
                 >
-                  <Save className="w-5 h-5" />
-                  {savePending ? "Saving…" : "Save"}
+                  <Edit className="w-5 h-5" />
+                  Edit
                 </button>
-                <button
-                  type="button"
-                  onClick={handleEditCancel}
-                  disabled={savePending}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors disabled:pointer-events-none disabled:opacity-50 ${
-                    isDark
-                      ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
-                      : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                  }`}
-                >
-                  <X className="w-5 h-5" />
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={handleEditClick}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
-              >
-                <Edit className="w-5 h-5" />
-                Edit
-              </button>
-            )}
-          </div>
+              )}
+            </div>
+          ) : null}
         </div>
 
         {loading ? (
@@ -749,23 +775,15 @@ export function RecipeSummaryPanel({
                   }`}
                 >
                   <tr>
-                    <th className={thClass} style={{ width: "28%" }}>
-                      Summary name
-                    </th>
-                    <th className={thClass} style={{ width: "36%" }}>
+                    <th className={thClass} style={{ width: "40%" }}>
                       Base recipe
                     </th>
-                    <th className={thClass} style={{ width: "22%" }}>
-                      Created at
+                    <th className={thClass} style={{ width: "30%" }}>
+                      Standard sheet
                     </th>
-                    <th className={thClass} style={{ width: "14%" }}>
-                      Action
+                    <th className={thClass} style={{ width: "30%" }}>
+                      Custom sheet
                     </th>
-                    <th
-                      className="px-1 py-3"
-                      style={{ width: "2%" }}
-                      aria-hidden
-                    />
                   </tr>
                 </thead>
                 <tbody
@@ -773,9 +791,9 @@ export function RecipeSummaryPanel({
                     isDark ? "divide-slate-700" : "divide-gray-200"
                   }`}
                 >
-                  {summaries.map((s) => (
+                  {baseRecipes.map((row) => (
                     <tr
-                      key={s.id}
+                      key={row.source_item_id}
                       className={`transition-colors ${
                         isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
                       }`}
@@ -784,27 +802,24 @@ export function RecipeSummaryPanel({
                         className={`px-6 py-3 align-middle ${isDark ? "text-slate-100" : "text-gray-900"}`}
                       >
                         <div className="min-w-0 truncate font-medium">
-                          {s.summary_name}
+                          {row.name ?? "—"}
+                          <span
+                            className={`ml-2 text-xs font-normal ${isDark ? "text-slate-400" : "text-gray-500"}`}
+                          >
+                            {row.is_menu_item ? "Menu" : "Prepped"}
+                          </span>
                         </div>
-                      </td>
-                      <td
-                        className={`px-6 py-3 align-middle ${isDark ? "text-slate-200" : "text-gray-800"}`}
-                      >
-                        <div className="min-w-0 truncate">
-                          {s.source_item_name ?? "—"}
-                        </div>
-                      </td>
-                      <td
-                        className={`px-6 py-3 align-middle whitespace-nowrap ${
-                          isDark ? "text-slate-400" : "text-gray-600"
-                        }`}
-                      >
-                        {new Date(s.created_at).toLocaleString()}
                       </td>
                       <td className="px-6 py-3 align-middle">
                         <button
                           type="button"
-                          onClick={() => void handleViewSummary(s.id)}
+                          aria-label={`View standard sheet for ${row.name ?? "base recipe"}`}
+                          onClick={() =>
+                            setStandardView({
+                              sourceItemId: row.source_item_id,
+                              name: row.name ?? "—",
+                            })
+                          }
                           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                             isDark
                               ? "bg-blue-900/50 text-blue-200 border border-blue-800 hover:bg-blue-900/70"
@@ -814,35 +829,32 @@ export function RecipeSummaryPanel({
                           View
                         </button>
                       </td>
-                      <td className="px-1 py-3 align-middle">
-                        <div className="flex justify-end items-center">
-                          <button
-                            type="button"
-                            onClick={() => togglePendingDelete(s.id)}
-                            disabled={!isEditMode || savePending}
-                            className={`p-2 rounded-md transition-colors ${
-                              pendingDeleteIds.has(s.id)
-                                ? "bg-red-500 text-white hover:bg-red-600"
-                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                            } ${!isEditMode ? "invisible pointer-events-none" : ""}`}
-                            title={isEditMode ? "Mark for deletion" : undefined}
-                            aria-hidden={!isEditMode}
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </div>
+                      <td className="px-6 py-3 align-middle">
+                        <button
+                          type="button"
+                          disabled
+                          title="Coming soon"
+                          aria-label={`View custom sheet for ${row.name ?? "base recipe"} (coming soon)`}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium opacity-50 cursor-not-allowed ${
+                            isDark
+                              ? "bg-slate-700 text-slate-300 border border-slate-600"
+                              : "bg-gray-200 text-gray-600 border border-gray-300"
+                          }`}
+                        >
+                          View
+                        </button>
                       </td>
                     </tr>
                   ))}
-                  {summaries.length === 0 && (
+                  {baseRecipes.length === 0 && (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={3}
                         className={`px-6 py-12 text-center text-sm ${
                           isDark ? "text-slate-400" : "text-gray-500"
                         }`}
                       >
-                        No summaries yet.
+                        No base recipes with ingredients yet.
                       </td>
                     </tr>
                   )}
@@ -1156,11 +1168,15 @@ export function RecipeSummaryPanel({
                       <div className="overflow-x-auto">
                         <table className="w-full min-w-[900px] border-collapse text-xs">
                           <thead>
-                            <tr className={isDark ? "bg-slate-900" : "bg-white"}>
+                            <tr
+                              className={isDark ? "bg-slate-900" : "bg-white"}
+                            >
                               <th className="border px-2 py-1 text-left">
                                 Nature
                               </th>
-                              <th className="border px-2 py-1 text-left">Unit</th>
+                              <th className="border px-2 py-1 text-left">
+                                Unit
+                              </th>
                               {technicalStepKeys.map((key) => (
                                 <th
                                   key={key}
@@ -1172,17 +1188,25 @@ export function RecipeSummaryPanel({
                               <th className="border px-2 py-1 text-right">
                                 Total
                               </th>
-                              <th className="border px-2 py-1 text-right">PU</th>
-                              <th className="border px-2 py-1 text-right">PT</th>
+                              <th className="border px-2 py-1 text-right">
+                                PU (kg)
+                              </th>
+                              <th className="border px-2 py-1 text-right">
+                                PT
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
                             {technicalSheet.ingredient_rows.map((row) => (
                               <tr
                                 key={row.item_id}
-                                className={isDark ? "bg-slate-800" : "bg-gray-50"}
+                                className={
+                                  isDark ? "bg-slate-800" : "bg-gray-50"
+                                }
                               >
-                                <td className="border px-2 py-1">{row.nature}</td>
+                                <td className="border px-2 py-1">
+                                  {row.nature}
+                                </td>
                                 <td className="border px-2 py-1">{row.unit}</td>
                                 {technicalStepKeys.map((key) => (
                                   <td
@@ -1198,10 +1222,10 @@ export function RecipeSummaryPanel({
                                   {formatSheetNumber(row.total)}
                                 </td>
                                 <td className="border px-2 py-1 text-right">
-                                  {formatSheetNumber(row.pu, 4)}
+                                  {formatPuPerKg(row.pu)}
                                 </td>
                                 <td className="border px-2 py-1 text-right">
-                                  {formatSheetNumber(row.pt)}
+                                  {formatPtDollars(row.pt)}
                                 </td>
                               </tr>
                             ))}
@@ -1214,8 +1238,11 @@ export function RecipeSummaryPanel({
                   <div
                     className={`rounded border p-4 text-right text-sm font-semibold ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-gray-50"}`}
                   >
-                    Total Ingredient Cost: $
-                    {technicalSheet.total_ingredient_cost.toFixed(2)}
+                    Total Ingredient Cost:{" "}
+                    {technicalSheet.total_ingredient_cost != null &&
+                    Number.isFinite(technicalSheet.total_ingredient_cost)
+                      ? `$${technicalSheet.total_ingredient_cost.toFixed(2)}`
+                      : "—"}
                   </div>
                 </>
               )}
@@ -1223,6 +1250,15 @@ export function RecipeSummaryPanel({
           </div>
         </div>
       )}
+
+      {standardView ? (
+        <StandardTechnicalSheetView
+          isDark={isDark}
+          sourceItemId={standardView.sourceItemId}
+          baseRecipeName={standardView.name}
+          onClose={() => setStandardView(null)}
+        />
+      ) : null}
     </>
   );
 }

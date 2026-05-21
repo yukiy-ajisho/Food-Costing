@@ -2698,6 +2698,25 @@ CREATE TABLE IF NOT EXISTS "public"."recipe_summary_expand_targets" (
 ALTER TABLE "public"."recipe_summary_expand_targets" OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."standard_technical_sheets" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "source_item_id" "uuid" NOT NULL,
+    "version_number" integer NOT NULL,
+    "is_latest" boolean DEFAULT false NOT NULL,
+    "snapshot" "jsonb" NOT NULL,
+    "created_by" "uuid" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "standard_technical_sheets_version_nonneg" CHECK (("version_number" >= 0))
+);
+
+
+ALTER TABLE "public"."standard_technical_sheets" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."standard_technical_sheets" IS 'Standard Technical Sheet version rows. snapshot JSONB holds sheet, recipe_snapshot, cost_inputs.';
+
+
 CREATE TABLE IF NOT EXISTS "public"."resource_shares" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "resource_type" "text" NOT NULL,
@@ -3157,6 +3176,16 @@ ALTER TABLE ONLY "public"."recipe_summary_expand_targets"
 
 
 
+ALTER TABLE ONLY "public"."standard_technical_sheets"
+    ADD CONSTRAINT "standard_technical_sheets_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."standard_technical_sheets"
+    ADD CONSTRAINT "standard_technical_sheets_unique_version" UNIQUE ("tenant_id", "source_item_id", "version_number");
+
+
+
 ALTER TABLE ONLY "public"."resource_shares"
     ADD CONSTRAINT "resource_shares_pkey" PRIMARY KEY ("id");
 
@@ -3561,6 +3590,18 @@ CREATE INDEX "idx_recipe_summaries_tenant_id" ON "public"."recipe_summaries" USI
 
 
 CREATE INDEX "idx_recipe_summary_expand_targets_target_item_id" ON "public"."recipe_summary_expand_targets" USING "btree" ("target_item_id");
+
+
+
+CREATE UNIQUE INDEX "idx_standard_technical_sheets_one_latest" ON "public"."standard_technical_sheets" USING "btree" ("tenant_id", "source_item_id") WHERE ("is_latest" = true);
+
+
+
+CREATE INDEX "idx_standard_technical_sheets_source_item_id" ON "public"."standard_technical_sheets" USING "btree" ("source_item_id");
+
+
+
+CREATE INDEX "idx_standard_technical_sheets_tenant_id" ON "public"."standard_technical_sheets" USING "btree" ("tenant_id");
 
 
 
@@ -3994,6 +4035,21 @@ ALTER TABLE ONLY "public"."recipe_summary_expand_targets"
 
 
 
+ALTER TABLE ONLY "public"."standard_technical_sheets"
+    ADD CONSTRAINT "standard_technical_sheets_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."standard_technical_sheets"
+    ADD CONSTRAINT "standard_technical_sheets_source_item_id_fkey" FOREIGN KEY ("source_item_id") REFERENCES "public"."items"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."standard_technical_sheets"
+    ADD CONSTRAINT "standard_technical_sheets_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."resource_shares"
     ADD CONSTRAINT "resource_shares_owner_tenant_id_fkey" FOREIGN KEY ("owner_tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
 
@@ -4173,6 +4229,9 @@ ALTER TABLE "public"."proceed_validation_settings" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."recipe_summaries" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."standard_technical_sheets" ENABLE ROW LEVEL SECURITY;
 
 
 GRANT USAGE ON SCHEMA "public" TO "postgres";
@@ -4474,6 +4533,12 @@ GRANT ALL ON TABLE "public"."recipe_summaries" TO "service_role";
 GRANT ALL ON TABLE "public"."recipe_summary_expand_targets" TO "anon";
 GRANT ALL ON TABLE "public"."recipe_summary_expand_targets" TO "authenticated";
 GRANT ALL ON TABLE "public"."recipe_summary_expand_targets" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."standard_technical_sheets" TO "anon";
+GRANT ALL ON TABLE "public"."standard_technical_sheets" TO "authenticated";
+GRANT ALL ON TABLE "public"."standard_technical_sheets" TO "service_role";
 
 
 
