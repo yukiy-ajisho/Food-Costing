@@ -58,6 +58,7 @@ import {
   isNonMassUnit,
   isMassUnit,
 } from "@/lib/constants";
+import { finishTotalGramsFromEachYield } from "@/lib/finishTotalGramsFromEachYield";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useUser } from "@/hooks/useUser";
 import { useTenant } from "@/contexts/TenantContext";
@@ -254,7 +255,6 @@ function AddItemModal({
 
   const handleModalAddIngredientLine = () => {
     setRecipeLines([
-      ...recipeLines,
       {
         id: `rl-${Date.now()}`,
         line_type: "ingredient",
@@ -264,12 +264,12 @@ function AddItemModal({
         specific_child: null,
         isNew: true,
       },
+      ...recipeLines,
     ]);
   };
 
   const handleModalAddLaborLine = () => {
     setRecipeLines([
-      ...recipeLines,
       {
         id: `rl-${Date.now()}`,
         line_type: "labor",
@@ -277,6 +277,7 @@ function AddItemModal({
         minutes: 0,
         isNew: true,
       },
+      ...recipeLines,
     ]);
   };
 
@@ -342,16 +343,16 @@ function AddItemModal({
 
   return (
     <div
-      className={`fixed inset-0 z-60 flex items-center justify-center ${
+      className={`fixed inset-0 z-60 flex items-center justify-center p-5 ${
         isDark ? "bg-black/70" : "bg-black/50"
       }`}
     >
       <div
-        className={`w-full max-w-6xl rounded-lg shadow-xl p-6 transition-colors ${
+        className={`w-full max-w-6xl max-h-full overflow-y-auto rounded-lg shadow-xl p-4 transition-colors ${
           isDark ? "bg-slate-800" : "bg-white"
         }`}
       >
-        <div className="flex justify-between items-center mb-6">
+        <div className="flex justify-between items-center mb-4">
           <h2
             className={`text-xl font-bold ${
               isDark ? "text-slate-100" : "text-gray-900"
@@ -371,7 +372,7 @@ function AddItemModal({
           </button>
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           {/* Name */}
           <div>
             <label
@@ -571,9 +572,9 @@ function AddItemModal({
           </div>
 
           {/* Recipe Lines */}
-          <div className="mt-6">
+          <div className="mt-4">
             <h3
-              className={`text-lg font-semibold mb-4 ${
+              className={`text-lg font-semibold mb-2.5 ${
                 isDark ? "text-slate-100" : "text-gray-900"
               }`}
             >
@@ -581,9 +582,9 @@ function AddItemModal({
             </h3>
 
             {/* Ingredients Section */}
-            <div className="mb-6">
+            <div className="mb-4">
               <h4
-                className={`text-sm font-semibold mb-3 ${
+                className={`text-sm font-semibold mb-2.5 ${
                   isDark ? "text-slate-300" : "text-gray-700"
                 }`}
               >
@@ -641,6 +642,21 @@ function AddItemModal({
                         : "bg-white divide-gray-200"
                     } transition-colors`}
                   >
+                    <tr>
+                      <td colSpan={5} className="px-4 py-2">
+                        <button
+                          onClick={handleModalAddIngredientLine}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
+                            isDark
+                              ? "text-blue-400 hover:text-blue-300 hover:bg-blue-900/30"
+                              : "text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                          }`}
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span className="text-sm">Add ingredient</span>
+                        </button>
+                      </td>
+                    </tr>
                     {recipeLines
                       .filter((line) => line.line_type === "ingredient")
                       .map((line) => (
@@ -743,6 +759,7 @@ function AddItemModal({
                               })}
                             </div>
                             <SearchableSelect
+                              useFloatingPortal
                               options={getAvailableItemsForSelect(
                                 line.child_item_id,
                                 getIngredientTypeForLineModal(
@@ -1056,21 +1073,6 @@ function AddItemModal({
                           </td>
                         </tr>
                       ))}
-                    <tr>
-                      <td colSpan={5} className="px-4 py-2">
-                        <button
-                          onClick={handleModalAddIngredientLine}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
-                            isDark
-                              ? "text-blue-400 hover:text-blue-300 hover:bg-blue-900/30"
-                              : "text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                          }`}
-                        >
-                          <Plus className="w-4 h-4" />
-                          <span className="text-sm">Add ingredient</span>
-                        </button>
-                      </td>
-                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -1079,7 +1081,7 @@ function AddItemModal({
             {/* Labor Section */}
             <div>
               <h4
-                className={`text-sm font-semibold mb-3 ${
+                className={`text-sm font-semibold mb-2.5 ${
                   isDark ? "text-slate-300" : "text-gray-700"
                 }`}
               >
@@ -1123,6 +1125,21 @@ function AddItemModal({
                         : "bg-white divide-gray-200"
                     } transition-colors`}
                   >
+                    <tr>
+                      <td colSpan={3} className="px-4 py-2">
+                        <button
+                          onClick={handleModalAddLaborLine}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
+                            isDark
+                              ? "text-blue-400 hover:text-blue-300 hover:bg-blue-900/30"
+                              : "text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                          }`}
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span className="text-sm">Add labor</span>
+                        </button>
+                      </td>
+                    </tr>
                     {recipeLines
                       .filter((line) => line.line_type === "labor")
                       .map((line) => (
@@ -1227,21 +1244,6 @@ function AddItemModal({
                           </td>
                         </tr>
                       ))}
-                    <tr>
-                      <td colSpan={3} className="px-4 py-2">
-                        <button
-                          onClick={handleModalAddLaborLine}
-                          className={`flex items-center gap-2 px-3 py-2 rounded-md transition-colors ${
-                            isDark
-                              ? "text-blue-400 hover:text-blue-300 hover:bg-blue-900/30"
-                              : "text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                          }`}
-                        >
-                          <Plus className="w-4 h-4" />
-                          <span className="text-sm">Add labor</span>
-                        </button>
-                      </td>
-                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -1250,7 +1252,7 @@ function AddItemModal({
         </div>
 
         {/* Modal Footer */}
-        <div className="flex justify-end gap-2 mt-6">
+        <div className="flex justify-end gap-2 mt-4">
           <button
             type="button"
             onClick={onCancel}
@@ -3323,6 +3325,43 @@ export default function CostPage() {
     field: keyof PreppedItem,
     value: string | number | boolean | null,
   ) => {
+    if (field === "proceed_yield_unit" && value !== "each") {
+      const item = items.find((i) => i.id === id);
+      if (item?.proceed_yield_unit === "each") {
+        const newUnit = String(value);
+        const totalGrams = finishTotalGramsFromEachYield(
+          item,
+          yieldAmountInputs.get(id),
+          eachGramsInputs.get(id),
+          calculateTotalIngredientsGrams,
+        );
+        const newAmount = newUnit === "kg" ? totalGrams / 1000 : totalGrams;
+        setYieldAmountInputs((prev) => {
+          const next = new Map(prev);
+          next.delete(id);
+          return next;
+        });
+        setEachGramsInputs((prev) => {
+          const next = new Map(prev);
+          next.delete(id);
+          return next;
+        });
+        setItems(
+          items.map((row) =>
+            row.id === id
+              ? {
+                  ...row,
+                  proceed_yield_unit: newUnit,
+                  proceed_yield_amount: newAmount,
+                  each_grams: null,
+                }
+              : row,
+          ),
+        );
+        return;
+      }
+    }
+
     setItems(
       items.map((item) =>
         item.id === id ? { ...item, [field]: value } : item,
@@ -3507,7 +3546,7 @@ export default function CostPage() {
       isNew: true,
       each_grams: null,
     };
-    setItems([...items, newItem]);
+    setItems([newItem, ...items]);
   };
 
   // Addボタンクリック（モーダルを開く）
@@ -3667,7 +3706,6 @@ export default function CostPage() {
           ? {
               ...item,
               recipe_lines: [
-                ...item.recipe_lines,
                 {
                   id: `rl-${Date.now()}`,
                   line_type: "ingredient",
@@ -3677,6 +3715,7 @@ export default function CostPage() {
                   specific_child: null,
                   isNew: true,
                 },
+                ...item.recipe_lines,
               ],
             }
           : item,
@@ -3692,7 +3731,6 @@ export default function CostPage() {
           ? {
               ...item,
               recipe_lines: [
-                ...item.recipe_lines,
                 {
                   id: `rl-${Date.now()}`,
                   line_type: "labor",
@@ -3700,6 +3738,7 @@ export default function CostPage() {
                   minutes: 0,
                   isNew: true,
                 },
+                ...item.recipe_lines,
               ],
             }
           : item,
@@ -4001,8 +4040,8 @@ export default function CostPage() {
     ) {
       return false;
     }
-    // 検索（Name）
-    if (appliedSearchTerm.trim() !== "") {
+    // 検索（Name）— 新規ドラフト（isNew）は名前未入力でも常に一覧に表示
+    if (appliedSearchTerm.trim() !== "" && !item.isNew) {
       const itemDisplayName = getItemDisplayName(item, baseItems);
       if (
         !itemDisplayName
@@ -4064,7 +4103,7 @@ export default function CostPage() {
     const draftRows = stable.filter((item) => item.isNew);
     const existingRows = stable.filter((item) => !item.isNew);
     existingRows.sort(nameCompare);
-    return [...existingRows, ...draftRows];
+    return [...draftRows, ...existingRows];
   }, [activeMode, filteredItems, costingItemsSort, baseItems]);
 
   // 検索クリア
@@ -4812,6 +4851,44 @@ export default function CostPage() {
                       : "bg-white divide-gray-300"
                   }`}
                 >
+                  {isEditModeCosting && activeMode === "costing" && (
+                    <tr
+                      style={{
+                        height: "51px",
+                        minHeight: "51px",
+                        maxHeight: "51px",
+                      }}
+                    >
+                      <td
+                        colSpan={16}
+                        className="px-6 whitespace-nowrap"
+                        style={{
+                          paddingTop: "16px",
+                          paddingBottom: "16px",
+                          boxSizing: "border-box",
+                        }}
+                      >
+                        <div
+                          style={{
+                            height: "20px",
+                            minHeight: "20px",
+                            maxHeight: "20px",
+                            display: "flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={handleAddItemClick}
+                            className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 rounded-md transition-colors"
+                          >
+                            <Plus className="w-4 h-4 shrink-0" />
+                            <span>Add new item</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                   {displayItemsForCostTable.map((item) => {
                     // 新規アイテムのインデックスを計算（isNew: trueのアイテムのみをカウント）
                     const newItemIndex =
@@ -4819,6 +4896,10 @@ export default function CostPage() {
                         .slice(0, displayItemsForCostTable.indexOf(item) + 1)
                         .filter((i) => i.isNew).length - 1;
                     const isNewItem = item.isNew && !item.isMarkedForDeletion;
+                    const finishAmountEachEditRow =
+                      isEditModeCosting &&
+                      activeMode === "costing" &&
+                      item.proceed_yield_unit === "each";
                     const newItemBgClass =
                       isNewItem && newItemIndex >= 0
                         ? newItemIndex % 2 === 0
@@ -5391,9 +5472,11 @@ export default function CostPage() {
                               ) && toggleExpand(item.id)
                             }
                             style={{
-                              height: "51px",
+                              height: finishAmountEachEditRow ? "auto" : "51px",
                               minHeight: "51px",
-                              maxHeight: "51px",
+                              maxHeight: finishAmountEachEditRow
+                                ? "none"
+                                : "51px",
                               ...(item.isExpanded
                                 ? {
                                     borderBottomWidth: 0,
@@ -5652,112 +5735,130 @@ export default function CostPage() {
                             >
                               <div
                                 style={{
-                                  height: "20px",
                                   minHeight: "20px",
-                                  maxHeight: "20px",
+                                  height:
+                                    isEditModeCosting &&
+                                    activeMode === "costing" &&
+                                    item.proceed_yield_unit === "each"
+                                      ? "auto"
+                                      : "20px",
+                                  maxHeight:
+                                    isEditModeCosting &&
+                                    activeMode === "costing" &&
+                                    item.proceed_yield_unit === "each"
+                                      ? "none"
+                                      : "20px",
                                   display: "flex",
                                   alignItems: "center",
                                 }}
                               >
                                 {isEditModeCosting &&
                                 activeMode === "costing" ? (
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <input
-                                      type="text"
-                                      inputMode="decimal"
-                                      value={
-                                        yieldAmountInputs.has(item.id)
-                                          ? yieldAmountInputs.get(item.id)!
-                                          : item.proceed_yield_amount === 0
-                                            ? ""
-                                            : String(item.proceed_yield_amount)
-                                      }
-                                      onChange={(e) => {
-                                        const value = e.target.value;
-                                        // 数字と小数点のみを許可（空文字列も許可）
-                                        const numericPattern =
-                                          /^(\d+\.?\d*|\.\d+)?$/;
-                                        if (numericPattern.test(value)) {
-                                          setYieldAmountInputs((prev) => {
-                                            const newMap = new Map(prev);
-                                            newMap.set(item.id, value);
-                                            return newMap;
-                                          });
-                                        }
-                                        // マッチしない場合は何もしない（前の値を保持）
-                                      }}
-                                      onBlur={(e) => {
-                                        const value = e.target.value;
-                                        // フォーカスアウト時に数値に変換
-                                        const numValue =
-                                          value === "" || value === "."
-                                            ? 0
-                                            : parseFloat(value) || 0;
-                                        handleItemChange(
-                                          item.id,
-                                          "proceed_yield_amount",
-                                          numValue,
-                                        );
-                                        // 入力中の文字列をクリア
-                                        setYieldAmountInputs((prev) => {
-                                          const newMap = new Map(prev);
-                                          newMap.delete(item.id);
-                                          return newMap;
-                                        });
-                                      }}
-                                      className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-                                        isDark
-                                          ? "bg-slate-700 border-slate-600 text-slate-100"
-                                          : "bg-white border-gray-300 text-gray-900"
-                                      }`}
-                                      placeholder="0"
-                                      style={{
-                                        width: "70px",
-                                        height: "20px",
-                                        minHeight: "20px",
-                                        maxHeight: "20px",
-                                        lineHeight: "20px",
-                                        padding: "0 4px",
-                                        fontSize: "0.875rem",
-                                        boxSizing: "border-box",
-                                        margin: 0,
-                                      }}
-                                    />
-                                    <select
-                                      value={item.proceed_yield_unit}
-                                      onChange={(e) =>
-                                        handleItemChange(
-                                          item.id,
-                                          "proceed_yield_unit",
-                                          e.target.value,
-                                        )
-                                      }
-                                      className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
-                                        isDark
-                                          ? "bg-slate-700 border-slate-600 text-slate-100"
-                                          : "bg-white border-gray-300 text-gray-900"
-                                      }`}
-                                      style={{
-                                        width: "60px",
-                                        height: "20px",
-                                        minHeight: "20px",
-                                        maxHeight: "20px",
-                                        lineHeight: "20px",
-                                        padding: "0 4px",
-                                        fontSize: "0.875rem",
-                                        boxSizing: "border-box",
-                                        margin: 0,
-                                      }}
-                                    >
-                                      {yieldUnitOptions.map((unit) => (
-                                        <option key={unit} value={unit}>
-                                          {unit}
-                                        </option>
-                                      ))}
-                                    </select>
-                                    {/* Yield Unitが"each"の場合、右側に入力ボックスを表示 */}
-                                    {item.proceed_yield_unit === "each" && (
-                                      <>
+                                  item.proceed_yield_unit === "each" ? (
+                                    <div className="flex w-full min-w-0 flex-col gap-0.5">
+                                      <div className="flex min-w-0 flex-nowrap items-center gap-1">
+                                        <input
+                                          type="text"
+                                          inputMode="decimal"
+                                          value={
+                                            yieldAmountInputs.has(item.id)
+                                              ? yieldAmountInputs.get(item.id)!
+                                              : item.proceed_yield_amount === 0
+                                                ? ""
+                                                : String(
+                                                    item.proceed_yield_amount,
+                                                  )
+                                          }
+                                          onChange={(e) => {
+                                            const value = e.target.value;
+                                            const numericPattern =
+                                              /^(\d+\.?\d*|\.\d+)?$/;
+                                            if (numericPattern.test(value)) {
+                                              setYieldAmountInputs((prev) => {
+                                                const newMap = new Map(prev);
+                                                newMap.set(item.id, value);
+                                                return newMap;
+                                              });
+                                            }
+                                          }}
+                                          onBlur={(e) => {
+                                            const value = e.target.value;
+                                            const numValue =
+                                              value === "" || value === "."
+                                                ? 0
+                                                : parseFloat(value) || 0;
+                                            handleItemChange(
+                                              item.id,
+                                              "proceed_yield_amount",
+                                              numValue,
+                                            );
+                                            setYieldAmountInputs((prev) => {
+                                              const newMap = new Map(prev);
+                                              newMap.delete(item.id);
+                                              return newMap;
+                                            });
+                                          }}
+                                          className={`shrink-0 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                            isDark
+                                              ? "bg-slate-700 border-slate-600 text-slate-100"
+                                              : "bg-white border-gray-300 text-gray-900"
+                                          }`}
+                                          placeholder="0"
+                                          style={{
+                                            width: "44px",
+                                            height: "20px",
+                                            minHeight: "20px",
+                                            maxHeight: "20px",
+                                            lineHeight: "20px",
+                                            padding: "0 4px",
+                                            fontSize: "0.875rem",
+                                            boxSizing: "border-box",
+                                            margin: 0,
+                                          }}
+                                        />
+                                        <span
+                                          className={`shrink-0 text-xs ${
+                                            isDark
+                                              ? "text-slate-300"
+                                              : "text-gray-600"
+                                          }`}
+                                        >
+                                          each
+                                        </span>
+                                        <select
+                                          value={item.proceed_yield_unit}
+                                          onChange={(e) =>
+                                            handleItemChange(
+                                              item.id,
+                                              "proceed_yield_unit",
+                                              e.target.value,
+                                            )
+                                          }
+                                          className={`ml-auto shrink-0 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                            isDark
+                                              ? "bg-slate-700 border-slate-600 text-slate-100"
+                                              : "bg-white border-gray-300 text-gray-900"
+                                          }`}
+                                          style={{
+                                            width: "44px",
+                                            height: "20px",
+                                            minHeight: "20px",
+                                            maxHeight: "20px",
+                                            lineHeight: "20px",
+                                            padding: "0 2px",
+                                            fontSize: "0.75rem",
+                                            boxSizing: "border-box",
+                                            margin: 0,
+                                          }}
+                                        >
+                                          {yieldUnitOptions.map((unit) => (
+                                            <option key={unit} value={unit}>
+                                              {unit}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </div>
+                                      <div className="flex min-w-0 flex-nowrap items-center gap-1">
                                         <input
                                           type="text"
                                           inputMode="decimal"
@@ -5773,7 +5874,6 @@ export default function CostPage() {
                                           }
                                           onChange={(e) => {
                                             const value = e.target.value;
-                                            // 数字と小数点のみを許可（空文字列も許可）
                                             const numericPattern =
                                               /^(\d+\.?\d*|\.\d+)?$/;
                                             if (numericPattern.test(value)) {
@@ -5783,11 +5883,9 @@ export default function CostPage() {
                                                 return newMap;
                                               });
                                             }
-                                            // マッチしない場合は何もしない（前の値を保持）
                                           }}
                                           onBlur={(e) => {
                                             const value = e.target.value;
-                                            // フォーカスアウト時に数値に変換
                                             const numValue =
                                               value === "" || value === "."
                                                 ? null
@@ -5797,7 +5895,6 @@ export default function CostPage() {
                                               "each_grams",
                                               numValue,
                                             );
-                                            // 入力中の文字列をクリア
                                             setEachGramsInputs((prev) => {
                                               const newMap = new Map(prev);
                                               newMap.delete(item.id);
@@ -5818,13 +5915,13 @@ export default function CostPage() {
                                               2,
                                             )}g)`;
                                           })()}
-                                          className={`text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                          className={`shrink-0 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
                                             isDark
                                               ? "bg-slate-700 border-slate-600 text-slate-100"
                                               : "bg-white border-gray-300 text-gray-900"
                                           }`}
                                           style={{
-                                            width: "70px",
+                                            width: "44px",
                                             height: "20px",
                                             minHeight: "20px",
                                             maxHeight: "20px",
@@ -5836,7 +5933,7 @@ export default function CostPage() {
                                           }}
                                         />
                                         <span
-                                          className={`text-sm ${
+                                          className={`shrink-0 text-xs whitespace-nowrap ${
                                             isDark
                                               ? "text-slate-300"
                                               : "text-gray-600"
@@ -5844,9 +5941,101 @@ export default function CostPage() {
                                         >
                                           g/each
                                         </span>
-                                      </>
-                                    )}
-                                  </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="flex min-w-0 flex-nowrap items-center gap-1">
+                                      <input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={
+                                          yieldAmountInputs.has(item.id)
+                                            ? yieldAmountInputs.get(item.id)!
+                                            : item.proceed_yield_amount === 0
+                                              ? ""
+                                              : String(item.proceed_yield_amount)
+                                        }
+                                        onChange={(e) => {
+                                          const value = e.target.value;
+                                          const numericPattern =
+                                            /^(\d+\.?\d*|\.\d+)?$/;
+                                          if (numericPattern.test(value)) {
+                                            setYieldAmountInputs((prev) => {
+                                              const newMap = new Map(prev);
+                                              newMap.set(item.id, value);
+                                              return newMap;
+                                            });
+                                          }
+                                        }}
+                                        onBlur={(e) => {
+                                          const value = e.target.value;
+                                          const numValue =
+                                            value === "" || value === "."
+                                              ? 0
+                                              : parseFloat(value) || 0;
+                                          handleItemChange(
+                                            item.id,
+                                            "proceed_yield_amount",
+                                            numValue,
+                                          );
+                                          setYieldAmountInputs((prev) => {
+                                            const newMap = new Map(prev);
+                                            newMap.delete(item.id);
+                                            return newMap;
+                                          });
+                                        }}
+                                        className={`shrink-0 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                          isDark
+                                            ? "bg-slate-700 border-slate-600 text-slate-100"
+                                            : "bg-white border-gray-300 text-gray-900"
+                                        }`}
+                                        placeholder="0"
+                                        style={{
+                                          width: "56px",
+                                          height: "20px",
+                                          minHeight: "20px",
+                                          maxHeight: "20px",
+                                          lineHeight: "20px",
+                                          padding: "0 4px",
+                                          fontSize: "0.875rem",
+                                          boxSizing: "border-box",
+                                          margin: 0,
+                                        }}
+                                      />
+                                      <select
+                                        value={item.proceed_yield_unit}
+                                        onChange={(e) =>
+                                          handleItemChange(
+                                            item.id,
+                                            "proceed_yield_unit",
+                                            e.target.value,
+                                          )
+                                        }
+                                        className={`shrink-0 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                                          isDark
+                                            ? "bg-slate-700 border-slate-600 text-slate-100"
+                                            : "bg-white border-gray-300 text-gray-900"
+                                        }`}
+                                        style={{
+                                          width: "52px",
+                                          height: "20px",
+                                          minHeight: "20px",
+                                          maxHeight: "20px",
+                                          lineHeight: "20px",
+                                          padding: "0 4px",
+                                          fontSize: "0.875rem",
+                                          boxSizing: "border-box",
+                                          margin: 0,
+                                        }}
+                                      >
+                                        {yieldUnitOptions.map((unit) => (
+                                          <option key={unit} value={unit}>
+                                            {unit}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  )
                                 ) : (
                                   <div className="flex flex-col items-start gap-0.5 min-w-0">
                                     <span
@@ -6876,6 +7065,29 @@ export default function CostPage() {
                                           : "divide-gray-200"
                                       }`}
                                     >
+                                      {isEditModeCosting &&
+                                        activeMode === "costing" && (
+                                          <tr>
+                                            <td
+                                              colSpan={6}
+                                              className="px-4 py-2"
+                                            >
+                                              <button
+                                                onClick={() =>
+                                                  handleAddIngredientLine(
+                                                    item.id,
+                                                  )
+                                                }
+                                                className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                                              >
+                                                <Plus className="w-4 h-4" />
+                                                <span className="text-sm">
+                                                  Add ingredient
+                                                </span>
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        )}
                                       {item.recipe_lines
                                         .filter(
                                           (line) =>
@@ -7023,6 +7235,7 @@ export default function CostPage() {
                                                     })}
                                                   </div>
                                                   <SearchableSelect
+                                                    useFloatingPortal
                                                     options={getAvailableItemsForSelect(
                                                       line.child_item_id,
                                                       getIngredientTypeForLine(
@@ -7868,24 +8081,7 @@ export default function CostPage() {
                                           </tr>
                                         ))}
                                       <tr>
-                                        <td colSpan={4} className="px-4 py-2">
-                                          {isEditModeCosting &&
-                                            activeMode === "costing" && (
-                                              <button
-                                                onClick={() =>
-                                                  handleAddIngredientLine(
-                                                    item.id,
-                                                  )
-                                                }
-                                                className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                                              >
-                                                <Plus className="w-4 h-4" />
-                                                <span className="text-sm">
-                                                  Add ingredient
-                                                </span>
-                                              </button>
-                                            )}
-                                        </td>
+                                        <td colSpan={4} className="px-4 py-2" />
                                         <td
                                           className={`px-4 py-2 text-right font-semibold ${
                                             isDark
@@ -8148,6 +8344,27 @@ export default function CostPage() {
                                           : "divide-gray-200"
                                       }`}
                                     >
+                                      {isEditModeCosting &&
+                                        activeMode === "costing" && (
+                                          <tr>
+                                            <td
+                                              colSpan={4}
+                                              className="px-4 py-2"
+                                            >
+                                              <button
+                                                onClick={() =>
+                                                  handleAddLaborLine(item.id)
+                                                }
+                                                className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
+                                              >
+                                                <Plus className="w-4 h-4" />
+                                                <span className="text-sm">
+                                                  Add labor
+                                                </span>
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        )}
                                       {item.recipe_lines
                                         .filter(
                                           (line) => line.line_type === "labor",
@@ -8373,22 +8590,7 @@ export default function CostPage() {
                                           </tr>
                                         ))}
                                       <tr>
-                                        <td colSpan={2} className="px-4 py-2">
-                                          {isEditModeCosting &&
-                                            activeMode === "costing" && (
-                                              <button
-                                                onClick={() =>
-                                                  handleAddLaborLine(item.id)
-                                                }
-                                                className="flex items-center gap-2 px-3 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                                              >
-                                                <Plus className="w-4 h-4" />
-                                                <span className="text-sm">
-                                                  Add labor
-                                                </span>
-                                              </button>
-                                            )}
-                                        </td>
+                                        <td colSpan={2} className="px-4 py-2" />
                                         <td
                                           className={`px-4 py-2 text-right font-semibold ${
                                             isDark
@@ -8461,26 +8663,6 @@ export default function CostPage() {
                       </Fragment>
                     );
                   })}
-
-                  {/* プラスマーク行（Editモード時のみ、最後の行の下） */}
-                  {isEditModeCosting && activeMode === "costing" && (
-                    <tr>
-                      <td
-                        colSpan={
-                          isEditModeCosting && activeMode === "costing" ? 6 : 5
-                        }
-                        className="px-6 py-4"
-                      >
-                        <button
-                          onClick={handleAddItemClick}
-                          className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                        >
-                          <Plus className="w-5 h-5" />
-                          <span>Add new item</span>
-                        </button>
-                      </td>
-                    </tr>
-                  )}
                 </tbody>
                 </table>
               )}

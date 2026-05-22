@@ -171,8 +171,14 @@ export default function LaborPage() {
       hourly_wage: 0,
       user_id: "",
     };
-    setLaborRoles([...laborRoles, newRole]);
+    setLaborRoles([newRole, ...laborRoles]);
   };
+
+  const displayLaborRoles = (() => {
+    const draftRows = laborRoles.filter((role) => role.id.startsWith("new-"));
+    const existingRows = laborRoles.filter((role) => !role.id.startsWith("new-"));
+    return [...draftRows, ...existingRows];
+  })();
 
   if (!selectedTenantId) {
     return (
@@ -332,7 +338,45 @@ export default function LaborPage() {
                   isDark ? "divide-slate-700" : "divide-gray-200"
                 }`}
               >
-                {laborRoles.map((role) => (
+                {isEditModeLabor && (
+                  <tr
+                    style={{
+                      height: "52px",
+                      minHeight: "52px",
+                      maxHeight: "52px",
+                    }}
+                  >
+                    <td
+                      colSpan={3}
+                      className="px-6 whitespace-nowrap"
+                      style={{
+                        paddingTop: "16px",
+                        paddingBottom: "16px",
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: "20px",
+                          minHeight: "20px",
+                          maxHeight: "20px",
+                          display: "flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={handleAddLaborRole}
+                          className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 rounded-md transition-colors"
+                        >
+                          <Plus className="w-4 h-4 shrink-0" />
+                          <span>Add new labor role</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                {displayLaborRoles.map((role) => (
                   <tr
                     key={role.id}
                     className={`transition-colors ${
@@ -541,29 +585,6 @@ export default function LaborPage() {
                     </td>
                   </tr>
                 ))}
-
-                {isEditModeLabor && (
-                  <tr>
-                    <td
-                      colSpan={isEditModeLabor ? 3 : 2}
-                      className="px-6"
-                      style={{
-                        paddingTop: "16px",
-                        paddingBottom: "16px",
-                        boxSizing: "border-box",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={handleAddLaborRole}
-                        className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                      >
-                        <Plus className="w-5 h-5" />
-                        <span>Add new labor role</span>
-                      </button>
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
