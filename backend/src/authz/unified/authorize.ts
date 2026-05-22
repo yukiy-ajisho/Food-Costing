@@ -49,6 +49,8 @@ export const UnifiedCompanyAction = {
   create_tenant: "company::create_tenant",
   /** Team ページ: 会社ロールのみでテナントのメンバー・招待・名称などを扱う */
   manage_tenant_team: "company::manage_tenant_team",
+  read_recipe_cost_report: "company::read_recipe_cost_report",
+  manage_recipe_cost_report: "company::manage_recipe_cost_report",
 } as const;
 
 /** Tenant スコープ Action（計画書 2.2） */
@@ -64,7 +66,16 @@ export const UnifiedTenantAction = {
   manage_settings: "tenant::manage_settings",
   manage_tenant: "tenant::manage_tenant",
   manage_members: "tenant::manage_members",
+  read_recipe_cost_report: "tenant::read_recipe_cost_report",
+  manage_recipe_cost_report: "tenant::manage_recipe_cost_report",
 } as const;
+
+/** company::* で Tenant リソースを対象にする Action（manage_tenant_team と同様に company_role を解決） */
+const COMPANY_ACTIONS_ON_TENANT: ReadonlySet<string> = new Set([
+  UnifiedCompanyAction.manage_tenant_team,
+  UnifiedCompanyAction.read_recipe_cost_report,
+  UnifiedCompanyAction.manage_recipe_cost_report,
+]);
 
 type LegacyCrudAction = "read" | "create" | "update" | "delete";
 
@@ -313,13 +324,13 @@ export async function authorizeUnified(
     const principalAttrs: Record<string, CedarValueJson> = { id: userId };
 
     if (isCompanyScope) {
-      const isManageTenantTeam =
-        action === UnifiedCompanyAction.manage_tenant_team;
+      const isCompanyActionOnTenant = COMPANY_ACTIONS_ON_TENANT.has(action);
 
-      if (isManageTenantTeam) {
+      if (isCompanyActionOnTenant) {
         if (resource.type !== "Tenant") {
           console.error(
-            "Unified authorize: manage_tenant_team requires Tenant resource",
+            "Unified authorize: company action on tenant requires Tenant resource",
+            action,
           );
           return false;
         }
@@ -611,4 +622,41 @@ export async function authorizeTeamTenantAccess(
   return ok
     ? { allowed: true, viaCompany: false }
     : { allowed: false, viaCompany: false };
+}
+
+export type RecipeCostReportAuthMode = "read" | "manage";
+
+/**
+ * Recipe Cost Report: 会社オフィサー（profiles 無し可）またはテナント admin/director。
+ */
+export async function authorizeRecipeCostReportAccess(
+  userId: string,
+  tenantId: string,
+  mode: RecipeCostReportAuthMode,
+  rolesMap: Map<string, string>,
+): Promise<boolean> {
+  const resource: UnifiedResource = { type: "Tenant", id: tenantId };
+  const companyAction =
+    mode === "read"
+      ? UnifiedCompanyAction.read_recipe_cost_report
+      : UnifiedCompanyAction.manage_recipe_cost_report;
+
+  if (await authorizeUnified(userId, companyAction, resource)) {
+    return true;
+  }
+
+  const tenantRole = rolesMap.get(tenantId);
+  if (!tenantRole) {
+    return false;
+  }
+
+  const tenantAction =
+    mode === "read"
+      ? UnifiedTenantAction.read_recipe_cost_report
+      : UnifiedTenantAction.manage_recipe_cost_report;
+
+  return authorizeUnified(userId, tenantAction, resource, undefined, {
+    tenantId,
+    tenantRole,
+  });
 }

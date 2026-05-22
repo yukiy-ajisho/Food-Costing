@@ -25,6 +25,57 @@ when {
   (principal.company_role == "company_admin" || principal.company_role == "company_director")
 };
 
+// Recipe Cost Report: 親会社の company_admin / company_director（profiles 無し可）
+permit (
+  principal,
+  action,
+  resource
+)
+when {
+  action in [
+    Action::"company::read_recipe_cost_report",
+    Action::"company::manage_recipe_cost_report"
+  ] &&
+  resource is Tenant &&
+  principal has company_role &&
+  (principal.company_role == "company_admin" || principal.company_role == "company_director")
+};
+
+// Recipe Cost Report: テナント admin / director
+permit (
+  principal,
+  action,
+  resource
+)
+when {
+  action in [
+    Action::"tenant::read_recipe_cost_report",
+    Action::"tenant::manage_recipe_cost_report"
+  ] &&
+  resource is Tenant &&
+  principal has tenant_role &&
+  principal has tenant_id &&
+  (principal.tenant_role == "admin" || principal.tenant_role == "director")
+};
+
+// Recipe Cost Report: manager の Tenant 全許可より優先（RCR 専用 action のみ拒否）
+forbid (
+  principal,
+  action,
+  resource
+)
+when {
+  action in [
+    Action::"tenant::read_recipe_cost_report",
+    Action::"tenant::manage_recipe_cost_report",
+    Action::"company::read_recipe_cost_report",
+    Action::"company::manage_recipe_cost_report"
+  ] &&
+  resource is Tenant &&
+  principal has tenant_role &&
+  principal.tenant_role == "manager"
+};
+
 // ----- Tenant scope: RBAC (admin, director = full; manager with prepped rule; staff = read) -----
 // Admin and director: full access (director = admin equivalent at tenant level)
 permit (
