@@ -1,6 +1,15 @@
 "use client";
 
-import { useState, Fragment, useEffect, useRef, useMemo } from "react";
+import {
+  useState,
+  Fragment,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   Edit,
   Save,
@@ -33,6 +42,13 @@ import {
 } from "@/lib/constants";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
+import {
+  findAdjacentVendorItemsGridCell,
+  focusVendorItemsGridCell,
+  vendorItemsGridCellDataAttrs,
+  VENDOR_ITEMS_GRID_COLS,
+  type VendorItemsGridCol,
+} from "@/lib/vendorItemsGridNavigation";
 
 type TabType = "items" | "raw-items";
 
@@ -119,6 +135,114 @@ function flushBaseItemDraftsIntoRows(
     }
     return next;
   });
+}
+
+const vendorItemsHoverTooltipBaseClass = (isDark: boolean) =>
+  `pointer-events-none z-50 whitespace-nowrap rounded-md border px-2 py-1 text-xs shadow-md backdrop-blur-sm transition-opacity duration-100 ${
+    isDark
+      ? "border-slate-600/80 bg-slate-800/90 text-slate-200"
+      : "border-gray-200/80 bg-white/95 text-gray-700"
+  }`;
+
+const vendorItemsHoverTooltipBelowClass = (isDark: boolean) =>
+  `${vendorItemsHoverTooltipBaseClass(isDark)} absolute left-0 top-[calc(100%+4px)] opacity-0 group-hover/vi-cell-hint:opacity-100`;
+
+const vendorItemsHoverTooltipRightClass = (isDark: boolean) =>
+  `${vendorItemsHoverTooltipBaseClass(isDark)} absolute left-[calc(100%+4px)] top-1/2 -translate-y-1/2 opacity-0 group-hover/each-grams:opacity-100`;
+
+/** Vendor Items: 省略時のみホバーで全文を下に表示 */
+function VendorItemsTruncatedHover({
+  label,
+  isDark,
+  className = "",
+  children,
+}: {
+  label: string;
+  isDark: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const [showHint, setShowHint] = useState(false);
+
+  const updateOverflow = useCallback(() => {
+    const root = containerRef.current;
+    if (!root) {
+      setShowHint(false);
+      return;
+    }
+    const text =
+      root.querySelector<HTMLElement>("[data-truncated-cell]") ??
+      root.querySelector<HTMLElement>(".truncate") ??
+      (root.firstElementChild instanceof HTMLElement ? root.firstElementChild : null);
+    const trimmed = label.trim();
+    if (!text || !trimmed || trimmed === "-") {
+      setShowHint(false);
+      return;
+    }
+    setShowHint(text.scrollWidth > text.clientWidth + 1);
+  }, [label]);
+
+  useEffect(() => {
+    updateOverflow();
+    const root = containerRef.current;
+    if (!root || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => updateOverflow());
+    ro.observe(root);
+    return () => ro.disconnect();
+  }, [updateOverflow]);
+
+  return (
+    <span
+      ref={containerRef}
+      className={`group/vi-cell-hint relative inline-flex w-full min-w-0 max-w-full ${className}`}
+      onMouseEnter={updateOverflow}
+    >
+      {children}
+      {showHint ? (
+        <span
+          role="tooltip"
+          className={vendorItemsHoverTooltipBelowClass(isDark)}
+        >
+          {label}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Vendor Items の Unit 列: each の g をホバーで即時表示（ブラウザ title は遅延が長い） */
+function VendorProductEachGramsHover({
+  purchaseUnit,
+  eachGrams,
+  isDark,
+  className = "",
+  children,
+}: {
+  purchaseUnit: string;
+  eachGrams?: number | null;
+  isDark: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
+  const hint =
+    purchaseUnit === "each" && eachGrams ? `${eachGrams}g` : null;
+  if (!hint) {
+    return <span className={className}>{children}</span>;
+  }
+  return (
+    <span
+      className={`group/each-grams relative inline-flex min-w-0 max-w-full items-center ${className}`}
+    >
+      {children}
+      <span
+        role="tooltip"
+        className={vendorItemsHoverTooltipRightClass(isDark)}
+      >
+        {hint}
+      </span>
+    </span>
+  );
 }
 
 export default function ItemsPage() {
@@ -1003,7 +1127,7 @@ export default function ItemsPage() {
     }
   };
 
-  const handleAddClickItems = (insertAfterId: string) => {
+  const handleAddClickItems = () => {
     const newVendorProduct: VendorProductUI = {
       id: `new-${Date.now()}`,
       base_item_id: "",
@@ -1019,12 +1143,7 @@ export default function ItemsPage() {
       isNew: true,
     };
 
-    const insertIndex = vendorProducts.findIndex(
-      (vp) => vp.id === insertAfterId,
-    );
-    const newVendorProducts = [...vendorProducts];
-    newVendorProducts.splice(insertIndex + 1, 0, newVendorProduct);
-    setVendorProducts(newVendorProducts);
+    setVendorProducts([newVendorProduct, ...vendorProducts]);
   };
 
   const handleRemoveNewVendorProductRow = (id: string) => {
@@ -1437,7 +1556,7 @@ export default function ItemsPage() {
       selectedType: "none",
       isNew: true,
     };
-    setBaseItemsUI((prev) => [...prev, newItem]);
+    setBaseItemsUI((prev) => [newItem, ...prev]);
   };
 
   // =========================================================
@@ -1553,7 +1672,7 @@ export default function ItemsPage() {
     const draftRows = stable.filter((vp) => vp.isNew);
     const existingRows = stable.filter((vp) => !vp.isNew);
     existingRows.sort(compareVendorProductsForSort);
-    return [...existingRows, ...draftRows];
+    return [...draftRows, ...existingRows];
   })();
 
   const handleVendorItemsSortHeaderClick = (column: VendorItemsSortKey) => {
@@ -1592,7 +1711,7 @@ export default function ItemsPage() {
     const draftRows = stable.filter((item) => item.isNew);
     const existingRows = stable.filter((item) => !item.isNew);
     existingRows.sort(compareBaseItemsUIForSort);
-    return [...existingRows, ...draftRows];
+    return [...draftRows, ...existingRows];
   })();
 
   const handleBaseItemsNameSortClick = () => {
@@ -1610,6 +1729,63 @@ export default function ItemsPage() {
 
   const isVendorItemsRowEditable = (vp: VendorProductUI) =>
     isEditModeItems || (isRecordPriceModeItems && Boolean(vp.isNew));
+
+  const isVendorItemsGridCol = (value: string): value is VendorItemsGridCol =>
+    (VENDOR_ITEMS_GRID_COLS as readonly string[]).includes(value);
+
+  const handleVendorItemsGridKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLTableSectionElement>) => {
+      if (!isEditModeItems && !isRecordPriceModeItems) return;
+      if (
+        e.key !== "ArrowUp" &&
+        e.key !== "ArrowDown" &&
+        e.key !== "ArrowLeft" &&
+        e.key !== "ArrowRight"
+      ) {
+        return;
+      }
+
+      const target = e.target as HTMLElement;
+      if (target.closest("[data-searchable-select-dropdown]")) return;
+      if (
+        target.tagName === "SELECT" &&
+        (e.key === "ArrowUp" || e.key === "ArrowDown")
+      ) {
+        return;
+      }
+
+      const rowAttr = target.getAttribute("data-vi-row");
+      const colAttr = target.getAttribute("data-vi-col");
+      if (rowAttr == null || colAttr == null || !isVendorItemsGridCol(colAttr)) {
+        return;
+      }
+
+      const rowIndex = Number.parseInt(rowAttr, 10);
+      if (Number.isNaN(rowIndex)) return;
+
+      const direction =
+        e.key === "ArrowLeft"
+          ? "left"
+          : e.key === "ArrowRight"
+            ? "right"
+            : e.key === "ArrowUp"
+              ? "up"
+              : "down";
+
+      const next = findAdjacentVendorItemsGridCell(
+        rowIndex,
+        colAttr,
+        direction,
+        sortedVendorProducts,
+        { isEditModeItems, isRecordPriceModeItems },
+      );
+      if (!next) return;
+
+      e.preventDefault();
+      focusVendorItemsGridCell(next.row, next.col);
+    },
+    [isEditModeItems, isRecordPriceModeItems, sortedVendorProducts],
+  );
 
   if (permissionDenied) {
     return (
@@ -1631,7 +1807,7 @@ export default function ItemsPage() {
 
   return (
     <div className="px-8 pb-8 [&_a]:cursor-pointer [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed [&_select:not(:disabled)]:cursor-pointer [&_[role=button]:not(:disabled)]:cursor-pointer">
-      <div className="max-w-7xl mx-auto">
+      <div className="w-full">
         {/* 固定ヘッダー（タブ＋ボタン） */}
         <div
           ref={fixedHeaderRef}
@@ -1791,10 +1967,10 @@ export default function ItemsPage() {
                     <tr>
                       {(
                         [
-                          ["base_item", "Base Item Name", "14%"],
-                          ["vendor", "Vendor Name", "14%"],
+                          ["base_item", "Base item", "14%"],
+                          ["vendor", "vendor", "14%"],
                           ["product", "Product Name", "16%"],
-                          ["brand", "Brand Name", "16%"],
+                          ["brand", "Brand Name", "14%"],
                         ] as const
                       ).map(([sortKey, label, widthPct]) => {
                         const active = vendorItemsSort.key === sortKey;
@@ -1808,7 +1984,7 @@ export default function ItemsPage() {
                         return (
                           <th
                             key={sortKey}
-                            className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                            className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                               isDark ? "text-slate-300" : "text-gray-500"
                             }`}
                             style={{ width: widthPct }}
@@ -1818,16 +1994,14 @@ export default function ItemsPage() {
                               onClick={() =>
                                 handleVendorItemsSortHeaderClick(sortKey)
                               }
-                              className={`flex w-full min-w-0 justify-start text-left uppercase tracking-wider ${
+                              className={`flex w-full items-center justify-start gap-1.5 whitespace-nowrap text-left uppercase tracking-wider ${
                                 isDark
                                   ? "text-slate-300 hover:text-slate-100"
                                   : "text-gray-500 hover:text-gray-800"
                               }`}
                             >
-                              <span className="flex min-w-0 max-w-full items-center gap-1.5">
-                                <span className="min-w-0 truncate">
-                                  {label}
-                                </span>
+                              <span className="flex shrink-0 items-center gap-1.5">
+                                <span>{label}</span>
                                 {active ? (
                                   asc ? (
                                     <ChevronUp
@@ -1852,7 +2026,7 @@ export default function ItemsPage() {
                         );
                       })}
                       <th
-                        className={`px-3 py-3 text-center text-xs font-medium uppercase tracking-wider ${
+                        className={`whitespace-nowrap px-3 py-3 text-center text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
                         style={{ width: "5%" }}
@@ -1860,7 +2034,7 @@ export default function ItemsPage() {
                         Case
                       </th>
                       <th
-                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                        className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
                         style={{ width: "8%" }}
@@ -1868,7 +2042,7 @@ export default function ItemsPage() {
                         Quantity
                       </th>
                       <th
-                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                        className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
                         style={{ width: "8%" }}
@@ -1876,15 +2050,15 @@ export default function ItemsPage() {
                         Unit
                       </th>
                       <th
-                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                        className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
-                        style={{ width: "7%" }}
+                        style={{ width: "9%" }}
                       >
                         Case unit
                       </th>
                       <th
-                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                        className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
                         style={{ width: "8%" }}
@@ -1892,7 +2066,7 @@ export default function ItemsPage() {
                         Unit cost
                       </th>
                       <th
-                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                        className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isDark ? "text-slate-300" : "text-gray-500"
                         }`}
                         style={{ width: "8%" }}
@@ -1900,12 +2074,12 @@ export default function ItemsPage() {
                         Case cost
                       </th>
                       <th
-                        className="px-1 py-3"
+                        className="whitespace-nowrap px-1 py-3"
                         style={{ width: "2%" }}
                         aria-hidden
                       />
                       <th
-                        className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
+                        className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isRecordPriceModeItems
                             ? "text-blue-700"
                             : isDark
@@ -1925,8 +2099,51 @@ export default function ItemsPage() {
                     className={`divide-y transition-colors ${
                       isDark ? "divide-slate-700" : "divide-gray-200"
                     }`}
+                    onKeyDown={
+                      isEditModeItems || isRecordPriceModeItems
+                        ? handleVendorItemsGridKeyDown
+                        : undefined
+                    }
                   >
-                    {sortedVendorProducts.map((vp) => (
+                    {isRecordPriceModeItems && (
+                      <tr
+                        style={{
+                          height: "52px",
+                          minHeight: "52px",
+                          maxHeight: "52px",
+                        }}
+                      >
+                        <td
+                          colSpan={12}
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={handleAddClickItems}
+                              className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 rounded-md transition-colors"
+                            >
+                              <Plus className="w-4 h-4 shrink-0" />
+                              <span>Add new vendor product</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    {sortedVendorProducts.map((vp, rowIndex) => (
                       <Fragment key={vp.id}>
                         <tr
                           className={`transition-colors ${
@@ -1963,38 +2180,67 @@ export default function ItemsPage() {
                               }}
                             >
                               {isVendorItemsRowEditable(vp) && vp.isNew ? (
-                                <SearchableSelect
-                                  useFloatingPortal
-                                  options={baseItems
-                                    .filter((b) => !b.deprecated)
-                                    .map((b) => ({
-                                      id: b.id,
-                                      name: b.name,
-                                      isUnused: !baseItemIdsWithActiveVp.has(
-                                        b.id,
-                                      ),
-                                    }))}
-                                  value={vp.base_item_id}
-                                  onChange={(value) =>
-                                    handleVendorProductChange(
-                                      vp.id,
-                                      "base_item_id",
-                                      value,
-                                    )
+                                <VendorItemsTruncatedHover
+                                  label={
+                                    baseItems.find((b) => b.id === vp.base_item_id)
+                                      ?.name ?? ""
                                   }
-                                  placeholder="Select base item"
-                                />
-                              ) : (
-                                <div
-                                  className={`w-full min-w-0 truncate text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
+                                  isDark={isDark}
+                                  className="w-full"
                                 >
-                                  {baseItems.find(
-                                    (b) => b.id === vp.base_item_id,
-                                  )?.name || "-"}
-                                </div>
+                                  <SearchableSelect
+                                    useFloatingPortal
+                                    gridCell={{
+                                      row: rowIndex,
+                                      col: "base_item",
+                                    }}
+                                    options={baseItems
+                                      .filter((b) => !b.deprecated)
+                                      .map((b) => ({
+                                        id: b.id,
+                                        name: b.name,
+                                        isUnused: !baseItemIdsWithActiveVp.has(
+                                          b.id,
+                                        ),
+                                      }))}
+                                    value={vp.base_item_id}
+                                    onChange={(value) =>
+                                      handleVendorProductChange(
+                                        vp.id,
+                                        "base_item_id",
+                                        value,
+                                      )
+                                    }
+                                    placeholder="Select base item"
+                                  />
+                                </VendorItemsTruncatedHover>
+                              ) : (
+                                <VendorItemsTruncatedHover
+                                  label={
+                                    baseItems.find(
+                                      (b) => b.id === vp.base_item_id,
+                                    )?.name || "-"
+                                  }
+                                  isDark={isDark}
+                                  className="w-full"
+                                >
+                                  <div
+                                    data-truncated-cell
+                                    className={`w-full min-w-0 truncate text-sm ${
+                                      isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
+                                    }`}
+                                    style={{
+                                      height: "20px",
+                                      lineHeight: "20px",
+                                    }}
+                                  >
+                                    {baseItems.find(
+                                      (b) => b.id === vp.base_item_id,
+                                    )?.name || "-"}
+                                  </div>
+                                </VendorItemsTruncatedHover>
                               )}
                             </div>
                           </td>
@@ -2018,32 +2264,60 @@ export default function ItemsPage() {
                               }}
                             >
                               {isVendorItemsRowEditable(vp) ? (
-                                <SearchableSelect
-                                  useFloatingPortal
-                                  options={vendors.map((v) => ({
-                                    id: v.id,
-                                    name: v.name,
-                                  }))}
-                                  value={vp.vendor_id}
-                                  onChange={(value) =>
-                                    handleVendorProductChange(
-                                      vp.id,
-                                      "vendor_id",
-                                      value,
-                                    )
+                                <VendorItemsTruncatedHover
+                                  label={
+                                    vendors.find((v) => v.id === vp.vendor_id)
+                                      ?.name ?? ""
                                   }
-                                  placeholder="Select vendor"
-                                />
-                              ) : (
-                                <div
-                                  className={`w-full min-w-0 truncate text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
+                                  isDark={isDark}
+                                  className="w-full"
                                 >
-                                  {vendors.find((v) => v.id === vp.vendor_id)
-                                    ?.name || "-"}
-                                </div>
+                                  <SearchableSelect
+                                    useFloatingPortal
+                                    gridCell={{
+                                      row: rowIndex,
+                                      col: "vendor",
+                                    }}
+                                    options={vendors.map((v) => ({
+                                      id: v.id,
+                                      name: v.name,
+                                    }))}
+                                    value={vp.vendor_id}
+                                    onChange={(value) =>
+                                      handleVendorProductChange(
+                                        vp.id,
+                                        "vendor_id",
+                                        value,
+                                      )
+                                    }
+                                    placeholder="Select vendor"
+                                  />
+                                </VendorItemsTruncatedHover>
+                              ) : (
+                                <VendorItemsTruncatedHover
+                                  label={
+                                    vendors.find((v) => v.id === vp.vendor_id)
+                                      ?.name || "-"
+                                  }
+                                  isDark={isDark}
+                                  className="w-full"
+                                >
+                                  <div
+                                    data-truncated-cell
+                                    className={`w-full min-w-0 truncate text-sm ${
+                                      isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
+                                    }`}
+                                    style={{
+                                      height: "20px",
+                                      lineHeight: "20px",
+                                    }}
+                                  >
+                                    {vendors.find((v) => v.id === vp.vendor_id)
+                                      ?.name || "-"}
+                                  </div>
+                                </VendorItemsTruncatedHover>
                               )}
                             </div>
                           </td>
@@ -2067,42 +2341,65 @@ export default function ItemsPage() {
                               }}
                             >
                               {isVendorItemsRowEditable(vp) ? (
-                                <input
-                                  type="text"
-                                  value={vp.product_name || ""}
-                                  onChange={(e) =>
-                                    handleVendorProductChange(
-                                      vp.id,
-                                      "product_name",
-                                      e.target.value,
-                                    )
-                                  }
-                                  className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                    isDark
-                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
-                                      : "border-gray-300"
-                                  }`}
-                                  placeholder="Product name"
-                                  style={{
-                                    height: "20px",
-                                    minHeight: "20px",
-                                    maxHeight: "20px",
-                                    lineHeight: "20px",
-                                    padding: "0 4px",
-                                    fontSize: "0.875rem",
-                                    boxSizing: "border-box",
-                                    margin: 0,
-                                  }}
-                                />
-                              ) : (
-                                <div
-                                  className={`w-full min-w-0 truncate text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
+                                <VendorItemsTruncatedHover
+                                  label={vp.product_name || ""}
+                                  isDark={isDark}
+                                  className="w-full"
                                 >
-                                  {vp.product_name}
-                                </div>
+                                  <input
+                                    {...vendorItemsGridCellDataAttrs(
+                                      rowIndex,
+                                      "product",
+                                    )}
+                                    data-truncated-cell
+                                    type="text"
+                                    value={vp.product_name || ""}
+                                    onChange={(e) =>
+                                      handleVendorProductChange(
+                                        vp.id,
+                                        "product_name",
+                                        e.target.value,
+                                      )
+                                    }
+                                    className={`w-full truncate border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                      isDark
+                                        ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                        : "border-gray-300"
+                                    }`}
+                                    placeholder="Product name"
+                                    style={{
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
+                                  />
+                                </VendorItemsTruncatedHover>
+                              ) : (
+                                <VendorItemsTruncatedHover
+                                  label={vp.product_name || "-"}
+                                  isDark={isDark}
+                                  className="w-full"
+                                >
+                                  <div
+                                    data-truncated-cell
+                                    className={`w-full min-w-0 truncate text-sm ${
+                                      isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
+                                    }`}
+                                    style={{
+                                      height: "20px",
+                                      lineHeight: "20px",
+                                    }}
+                                  >
+                                    {vp.product_name}
+                                  </div>
+                                </VendorItemsTruncatedHover>
                               )}
                             </div>
                           </td>
@@ -2126,42 +2423,65 @@ export default function ItemsPage() {
                               }}
                             >
                               {isVendorItemsRowEditable(vp) ? (
-                                <input
-                                  type="text"
-                                  value={vp.brand_name || ""}
-                                  onChange={(e) =>
-                                    handleVendorProductChange(
-                                      vp.id,
-                                      "brand_name",
-                                      e.target.value || null,
-                                    )
-                                  }
-                                  className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                    isDark
-                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
-                                      : "border-gray-300"
-                                  }`}
-                                  placeholder="Brand name (optional)"
-                                  style={{
-                                    height: "20px",
-                                    minHeight: "20px",
-                                    maxHeight: "20px",
-                                    lineHeight: "20px",
-                                    padding: "0 4px",
-                                    fontSize: "0.875rem",
-                                    boxSizing: "border-box",
-                                    margin: 0,
-                                  }}
-                                />
-                              ) : (
-                                <div
-                                  className={`w-full min-w-0 truncate text-sm ${
-                                    isDark ? "text-slate-100" : "text-gray-900"
-                                  }`}
-                                  style={{ height: "20px", lineHeight: "20px" }}
+                                <VendorItemsTruncatedHover
+                                  label={vp.brand_name || ""}
+                                  isDark={isDark}
+                                  className="w-full"
                                 >
-                                  {vp.brand_name || "-"}
-                                </div>
+                                  <input
+                                    {...vendorItemsGridCellDataAttrs(
+                                      rowIndex,
+                                      "brand",
+                                    )}
+                                    data-truncated-cell
+                                    type="text"
+                                    value={vp.brand_name || ""}
+                                    onChange={(e) =>
+                                      handleVendorProductChange(
+                                        vp.id,
+                                        "brand_name",
+                                        e.target.value || null,
+                                      )
+                                    }
+                                    className={`w-full truncate border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                      isDark
+                                        ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                        : "border-gray-300"
+                                    }`}
+                                    placeholder="Brand name (optional)"
+                                    style={{
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
+                                  />
+                                </VendorItemsTruncatedHover>
+                              ) : (
+                                <VendorItemsTruncatedHover
+                                  label={vp.brand_name || "-"}
+                                  isDark={isDark}
+                                  className="w-full"
+                                >
+                                  <div
+                                    data-truncated-cell
+                                    className={`w-full min-w-0 truncate text-sm ${
+                                      isDark
+                                        ? "text-slate-100"
+                                        : "text-gray-900"
+                                    }`}
+                                    style={{
+                                      height: "20px",
+                                      lineHeight: "20px",
+                                    }}
+                                  >
+                                    {vp.brand_name || "-"}
+                                  </div>
+                                </VendorItemsTruncatedHover>
                               )}
                             </div>
                           </td>
@@ -2190,6 +2510,12 @@ export default function ItemsPage() {
                                     aria-checked={isCase}
                                     aria-label="Case product"
                                     disabled={!canToggleCase}
+                                    {...(canToggleCase
+                                      ? vendorItemsGridCellDataAttrs(
+                                          rowIndex,
+                                          "case",
+                                        )
+                                      : {})}
                                     onClick={() =>
                                       canToggleCase &&
                                       handleCaseModeChange(vp.id, !isCase)
@@ -2231,6 +2557,10 @@ export default function ItemsPage() {
                             >
                               {isVendorItemsRowEditable(vp) ? (
                                 <input
+                                  {...vendorItemsGridCellDataAttrs(
+                                    rowIndex,
+                                    "quantity",
+                                  )}
                                   type="text"
                                   inputMode="decimal"
                                   value={
@@ -2322,7 +2652,17 @@ export default function ItemsPage() {
                                 style={{ height: "20px" }}
                               >
                                 {isVendorItemsRowEditable(vp) ? (
+                                  <VendorProductEachGramsHover
+                                    purchaseUnit={vp.purchase_unit}
+                                    eachGrams={vp.each_grams}
+                                    isDark={isDark}
+                                    className="min-w-0 flex-1"
+                                  >
                                   <select
+                                    {...vendorItemsGridCellDataAttrs(
+                                      rowIndex,
+                                      "unit",
+                                    )}
                                     value={vp.purchase_unit}
                                     onChange={(e) =>
                                       handleVendorProductChange(
@@ -2331,7 +2671,7 @@ export default function ItemsPage() {
                                         e.target.value,
                                       )
                                     }
-                                    className="flex-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     style={{
                                       height: "20px",
                                       minHeight: "20px",
@@ -2396,11 +2736,18 @@ export default function ItemsPage() {
                                       );
                                     })}
                                   </select>
+                                  </VendorProductEachGramsHover>
                                 ) : (
                                   <div
                                     className="flex w-full min-w-0 items-center gap-2"
                                     style={{ height: "20px" }}
                                   >
+                                    <VendorProductEachGramsHover
+                                      purchaseUnit={vp.purchase_unit}
+                                      eachGrams={vp.each_grams}
+                                      isDark={isDark}
+                                      className="min-w-0"
+                                    >
                                     <span
                                       className={`min-w-0 truncate text-sm ${
                                         isDark
@@ -2414,20 +2761,11 @@ export default function ItemsPage() {
                                     >
                                       {vp.purchase_unit}
                                     </span>
+                                    </VendorProductEachGramsHover>
                                     {/* 警告（赤点） */}
                                     {vp.needsWarning && (
-                                      <span className="w-2 h-2 bg-red-500 rounded-full"></span>
+                                      <span className="w-2 h-2 bg-red-500 rounded-full shrink-0"></span>
                                     )}
-                                    {/* each_gramsが設定されている場合、表示 */}
-                                    {vp.purchase_unit === "each" &&
-                                      vp.each_grams && (
-                                        <span
-                                          className="text-xs text-gray-500"
-                                          style={{ lineHeight: "20px" }}
-                                        >
-                                          ({vp.each_grams}g)
-                                        </span>
-                                      )}
                                   </div>
                                 )}
                               </div>
@@ -2456,6 +2794,10 @@ export default function ItemsPage() {
                               vp.isNew &&
                               vendorProductIsCase(vp) ? (
                                 <input
+                                  {...vendorItemsGridCellDataAttrs(
+                                    rowIndex,
+                                    "case_unit",
+                                  )}
                                   type="text"
                                   inputMode="numeric"
                                   value={
@@ -2570,6 +2912,10 @@ export default function ItemsPage() {
                                       $
                                     </span>
                                     <input
+                                      {...vendorItemsGridCellDataAttrs(
+                                        rowIndex,
+                                        "unit_cost",
+                                      )}
                                       type="text"
                                       inputMode="decimal"
                                       value={
@@ -2688,6 +3034,10 @@ export default function ItemsPage() {
                                       $
                                     </span>
                                     <input
+                                      {...vendorItemsGridCellDataAttrs(
+                                        rowIndex,
+                                        "case_cost",
+                                      )}
                                       type="text"
                                       inputMode="decimal"
                                       value={
@@ -2835,6 +3185,10 @@ export default function ItemsPage() {
                                     $
                                   </span>
                                   <input
+                                    {...vendorItemsGridCellDataAttrs(
+                                      rowIndex,
+                                      "new_price",
+                                    )}
                                     type="text"
                                     inputMode="decimal"
                                     value={newPriceInputs.get(vp.id) || ""}
@@ -2941,36 +3295,6 @@ export default function ItemsPage() {
                         </tr>
                       </Fragment>
                     ))}
-
-                    {/* プラスマーク行（Manual record new price のみ） */}
-                    {isRecordPriceModeItems && (
-                      <tr>
-                        <td
-                          colSpan={12}
-                          className="px-6"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              handleAddClickItems(
-                                vendorProducts.length > 0
-                                  ? vendorProducts[vendorProducts.length - 1].id
-                                  : "",
-                              )
-                            }
-                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                          >
-                            <Plus className="w-5 h-5" />
-                            <span>Add new vendor product</span>
-                          </button>
-                        </td>
-                      </tr>
-                    )}
                   </tbody>
                 </table>
               </div>
@@ -2980,6 +3304,7 @@ export default function ItemsPage() {
 
         {/* Base Itemsタブ */}
         {activeTab === "raw-items" && (
+          <div className="mx-auto w-full max-w-7xl">
           <>
             {loadingBaseItems ? (
               <div
@@ -3117,6 +3442,44 @@ export default function ItemsPage() {
                       isDark ? "divide-slate-700" : "divide-gray-200"
                     }`}
                   >
+                    {isEditModeBaseItems && (
+                      <tr
+                        style={{
+                          height: "52px",
+                          minHeight: "52px",
+                          maxHeight: "52px",
+                        }}
+                      >
+                        <td
+                          colSpan={5}
+                          className="px-6 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={handleAddClickBaseItems}
+                              className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 rounded-md transition-colors"
+                            >
+                              <Plus className="w-4 h-4 shrink-0" />
+                              <span>Add new base item</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                     {sortedBaseItemsUI.map((item) => (
                       <tr
                         key={item.id}
@@ -3531,34 +3894,12 @@ export default function ItemsPage() {
                         </td>
                       </tr>
                     ))}
-
-                    {/* プラスマーク行 */}
-                    {isEditModeBaseItems && (
-                      <tr>
-                        <td
-                          colSpan={5}
-                          className="px-6"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <button
-                            onClick={handleAddClickBaseItems}
-                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                          >
-                            <Plus className="w-5 h-5" />
-                            <span>Add new base item</span>
-                          </button>
-                        </td>
-                      </tr>
-                    )}
                   </tbody>
                 </table>
               </div>
             )}
           </>
+          </div>
         )}
       </div>
 

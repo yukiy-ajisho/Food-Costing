@@ -1,9 +1,7 @@
 import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { withTenantFilter } from "../middleware/tenant-filter";
-import { convertToGrams } from "../services/units";
-import type { BaseItem, Item, RecipeLine, VendorProduct } from "../types/database";
-import { calculateCost } from "../services/cost";
+import { buildTechnicalSheet } from "../services/technical-sheet-builder";
 
 const router = Router();
 
@@ -20,24 +18,6 @@ type RecipeSummaryRow = {
 type AccessCheckResult = {
   allowed: boolean;
   reason: "cross_tenant_restricted" | "hidden_by_access_control" | null;
-};
-
-type TechnicalSheetStep = {
-  step_key: string;
-  title: string;
-  item_id: string;
-  procedure: string | null;
-};
-
-type IngredientAccumulator = {
-  item_id: string;
-  nature: string;
-  vendor_item: string;
-  unit: string;
-  step_quantities: Record<string, number>;
-  total: number;
-  pu: number;
-  pt: number;
 };
 
 async function isCompanyOfficerOnTenant(userId: string, tenantId: string): Promise<boolean> {
@@ -84,29 +64,6 @@ function evaluateAccessControl(
   }
 
   return { allowed: true, reason: null };
-}
-
-function nextStepKey(index: number): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  let n = index;
-  let result = "";
-  do {
-    result = alphabet[n % 26] + result;
-    n = Math.floor(n / 26) - 1;
-  } while (n >= 0);
-  return result;
-}
-
-function toDisplayName(item: Pick<Item, "item_kind" | "name" | "base_item_id">, baseItem?: BaseItem | null): string {
-  if (item.item_kind === "raw") {
-    return (baseItem?.name ?? item.name ?? "").trim() || "(Unnamed)";
-  }
-  return (item.name ?? "").trim() || "(Unnamed)";
-}
-
-function normalizePositiveNumber(value: unknown): number {
-  const num = Number(value);
-  return Number.isFinite(num) && num > 0 ? num : 0;
 }
 
 router.get("/", async (req, res) => {
@@ -409,8 +366,8 @@ router.get("/:id/technical-sheet", async (req, res) => {
       return res.status(400).json({ error: "id is required" });
     }
 
-    const selectedTenantId = req.user?.selected_tenant_id || req.user?.tenant_ids?.[0];
-    if (!selectedTenantId) {
+    const tenantIdList = req.user?.tenant_ids ?? [];
+    if (tenantIdList.length === 0) {
       return res.status(400).json({ error: "No tenant associated" });
     }
 
@@ -438,209 +395,16 @@ router.get("/:id/technical-sheet", async (req, res) => {
     }
     const expandSet = new Set((targets ?? []).map((t) => t.target_item_id));
 
-    const itemMap = new Map<string, Item>();
-    const baseItemMap = new Map<string, BaseItem>();
-    const recipeLineMap = new Map<string, RecipeLine[]>();
-    const ingredientRows = new Map<string, IngredientAccumulator>();
-    const steps: TechnicalSheetStep[] = [];
-    const itemCostPerGram = new Map<string, number>();
-
-    const ensureItem = async (itemId: string): Promise<Item> => {
-      const cached = itemMap.get(itemId);
-      if (cached) return cached;
-
-      const { data, error } = await supabase.from("items").select("*").eq("id", itemId).maybeSingle();
-      if (error || !data) {
-        throw new Error(`Item not found: ${itemId}`);
-      }
-      itemMap.set(itemId, data as Item);
-      return data as Item;
-    };
-
-    const ensureBaseItem = async (baseItemId: string): Promise<BaseItem | null> => {
-      const cached = baseItemMap.get(baseItemId);
-      if (cached) return cached;
-      const { data, error } = await supabase
-        .from("base_items")
-        .select("*")
-        .eq("id", baseItemId)
-        .maybeSingle();
-      if (error) {
-        throw new Error(error.message);
-      }
-      if (!data) return null;
-      baseItemMap.set(baseItemId, data as BaseItem);
-      return data as BaseItem;
-    };
-
-    const ensureRecipeLines = async (parentId: string): Promise<RecipeLine[]> => {
-      const cached = recipeLineMap.get(parentId);
-      if (cached) return cached;
-      const { data, error } = await supabase
-        .from("recipe_lines")
-        .select("*")
-        .eq("parent_item_id", parentId)
-        .eq("line_type", "ingredient");
-      if (error) throw new Error(error.message);
-      const lines = (data ?? []) as RecipeLine[];
-      recipeLineMap.set(parentId, lines);
-      return lines;
-    };
-
-    const ensureCostPerGram = async (itemId: string, tenantId: string): Promise<number> => {
-      const cached = itemCostPerGram.get(itemId);
-      if (cached != null) return cached;
-      try {
-        const value = await calculateCost(itemId, [tenantId]);
-        itemCostPerGram.set(itemId, value);
-        return value;
-      } catch {
-        itemCostPerGram.set(itemId, 0);
-        return 0;
-      }
-    };
-
-    const sourceItem = await ensureItem(summary.source_item_id);
-    const sourceBaseItem = sourceItem.base_item_id ? await ensureBaseItem(sourceItem.base_item_id) : null;
-    const sourceName = toDisplayName(sourceItem, sourceBaseItem);
-
-    const allVendorProductsById = new Map<string, VendorProduct>();
-    const { data: allVps } = await supabase
-      .from("virtual_vendor_products")
-      .select("*")
-      .in("tenant_id", req.user?.tenant_ids ?? []);
-    for (const vp of allVps ?? []) {
-      allVendorProductsById.set(vp.id, vp as VendorProduct);
-    }
-
-    const allMappingsByBaseItemId = new Map<string, string[]>();
-    const { data: allMappings } = await supabase
-      .from("product_mappings")
-      .select("base_item_id, virtual_product_id")
-      .in("tenant_id", req.user?.tenant_ids ?? []);
-    for (const mapping of allMappings ?? []) {
-      const existing = allMappingsByBaseItemId.get(mapping.base_item_id) ?? [];
-      existing.push(mapping.virtual_product_id);
-      allMappingsByBaseItemId.set(mapping.base_item_id, existing);
-    }
-
-    const createStep = (item: Item, name: string): string => {
-      const key = nextStepKey(steps.length);
-      steps.push({
-        step_key: key,
-        title: `${key}. ${name} (Prepped)`,
-        item_id: item.id,
-        procedure: item.procedure ?? null,
-      });
-      return key;
-    };
-
-    const collect = async (itemId: string, stepKey: string, path: Set<string>): Promise<void> => {
-      if (path.has(itemId)) return;
-      path.add(itemId);
-      try {
-        const lines = await ensureRecipeLines(itemId);
-        for (const line of lines) {
-          if (!line.child_item_id) continue;
-          const qty = normalizePositiveNumber(line.quantity);
-          if (!qty || !line.unit) continue;
-
-          const child = await ensureItem(line.child_item_id);
-          const childBaseItem = child.base_item_id ? await ensureBaseItem(child.base_item_id) : null;
-          const nature = toDisplayName(child, childBaseItem);
-          const isExpandedPrepped = child.item_kind === "prepped" && expandSet.has(child.id);
-
-          let grams = 0;
-          try {
-            grams = convertToGrams(
-              line.unit,
-              qty,
-              child.id,
-              itemMap,
-              baseItemMap,
-            );
-          } catch {
-            grams = 0;
-          }
-
-          // Nature rows should contain "terminal nodes" at this summary expansion level:
-          // - raw/base nodes
-          // - unexpanded prepped nodes
-          // Expanded prepped nodes are shown in Procedure steps and replaced by their descendants in the table.
-          if (!isExpandedPrepped) {
-            const existing = ingredientRows.get(child.id) ?? {
-              item_id: child.id,
-              nature,
-              vendor_item: child.item_kind === "prepped" ? "Prepped Item" : "Lowest",
-              unit: "g",
-              step_quantities: {},
-              total: 0,
-              pu: 0,
-              pt: 0,
-            };
-
-            if (child.item_kind === "raw" && line.specific_child && line.specific_child !== "lowest") {
-              const selectedVp = allVendorProductsById.get(line.specific_child);
-              existing.vendor_item = selectedVp?.product_name?.trim() || selectedVp?.brand_name?.trim() || "Selected";
-            } else if (child.item_kind === "raw" && child.base_item_id) {
-              const mappedVpIds = allMappingsByBaseItemId.get(child.base_item_id) ?? [];
-              const activeCandidates = mappedVpIds
-                .map((vpId) => allVendorProductsById.get(vpId))
-                .filter((vp): vp is VendorProduct => !!vp && !vp.deprecated);
-              if (activeCandidates.length > 0) {
-                const firstNamed = activeCandidates.find((vp) => (vp.product_name ?? "").trim().length > 0);
-                existing.vendor_item = firstNamed?.product_name?.trim() || "Lowest";
-              }
-            }
-
-            existing.step_quantities[stepKey] = (existing.step_quantities[stepKey] ?? 0) + grams;
-            existing.total += grams;
-            ingredientRows.set(child.id, existing);
-          }
-
-          if (isExpandedPrepped) {
-            const childStepKey = createStep(child, nature);
-            await collect(child.id, childStepKey, path);
-          }
-        }
-      } finally {
-        path.delete(itemId);
-      }
-    };
-
-    const rootStepKey = createStep(sourceItem, sourceName);
-    await collect(sourceItem.id, rootStepKey, new Set<string>());
-
-    const rowList = Array.from(ingredientRows.values());
-    for (const row of rowList) {
-      const rowItem = itemMap.get(row.item_id);
-      if (!rowItem) continue;
-      const costPerGram = await ensureCostPerGram(row.item_id, rowItem.tenant_id);
-      row.pu = costPerGram;
-      row.pt = row.total * costPerGram;
-    }
-    const totalIngredientCost = rowList.reduce((sum, row) => sum + row.pt, 0);
+    const sheet = await buildTechnicalSheet({
+      sourceItemId: summary.source_item_id,
+      tenantIds: tenantIdList,
+      expandItemIds: expandSet,
+    });
 
     return res.json({
       summary_id: summary.id,
       summary_name: summary.summary_name,
-      product: {
-        item_id: sourceItem.id,
-        name: sourceName,
-        description: sourceItem.description ?? null,
-      },
-      steps,
-      ingredient_rows: rowList.map((row) => ({
-        item_id: row.item_id,
-        nature: row.nature,
-        vendor_item: row.vendor_item,
-        unit: row.unit,
-        step_quantities: row.step_quantities,
-        total: row.total,
-        pu: row.pu,
-        pt: row.pt,
-      })),
-      total_ingredient_cost: totalIngredientCost,
+      ...sheet,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

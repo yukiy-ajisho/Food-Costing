@@ -332,11 +332,23 @@ export interface RecipeSummaryTechnicalSheetIngredientRow {
   item_id: string;
   nature: string;
   vendor_item: string;
+  /** Recipe quantity in `unit`; omitted on older snapshots (use total + unit). */
+  quantity?: number;
   unit: string;
+  specific_child?: string | null;
   step_quantities: Record<string, number>;
+  /** Grams (cost / diff). */
   total: number;
-  pu: number;
-  pt: number;
+  pu: number | null;
+  pt: number | null;
+}
+
+export interface RecipeSummaryTechnicalSheetLaborRow {
+  row_key: string;
+  labor_role: string;
+  minutes: number;
+  hourly_wage: number | null;
+  cost: number | null;
 }
 
 export interface RecipeSummaryTechnicalSheet {
@@ -349,7 +361,107 @@ export interface RecipeSummaryTechnicalSheet {
   };
   steps: RecipeSummaryTechnicalSheetStep[];
   ingredient_rows: RecipeSummaryTechnicalSheetIngredientRow[];
-  total_ingredient_cost: number;
+  total_ingredient_cost: number | null;
+  labor_rows?: RecipeSummaryTechnicalSheetLaborRow[];
+  total_labor_cost?: number | null;
+}
+
+export interface StandardBaseRecipeRow {
+  source_item_id: string;
+  name: string | null;
+  is_menu_item: boolean;
+  latest_version_id: string | null;
+  latest_version_number: number | null;
+  has_standard_sheet: boolean;
+}
+
+export interface StandardTechnicalSheetVersionMeta {
+  id: string;
+  version_number: number;
+  is_latest: boolean;
+  created_at: string;
+  created_by: string;
+}
+
+export interface StandardTechnicalSheetSnapshot {
+  sheet: {
+    ingredient_rows: RecipeSummaryTechnicalSheetIngredientRow[];
+    total_ingredient_cost: number | null;
+    labor_rows?: RecipeSummaryTechnicalSheetLaborRow[];
+    total_labor_cost?: number | null;
+  };
+}
+
+export interface StandardTechnicalSheetDetail {
+  id: string;
+  tenant_id: string;
+  source_item_id: string;
+  version_number: number;
+  is_latest: boolean;
+  created_at: string;
+  created_by: string;
+  description: string | null;
+  procedure: string | null;
+  sheet: Omit<RecipeSummaryTechnicalSheet, "summary_id" | "summary_name">;
+  snapshot?: StandardTechnicalSheetSnapshot;
+  has_recipe_diff: boolean;
+  has_unpriced_lines?: boolean;
+}
+
+export type StandardTechnicalSheetPriceMode = "latest" | "snapshot" | "both";
+
+export interface StandardRecipeDiffLine {
+  type: "added" | "removed" | "changed";
+  row_key: string;
+  child_item_id: string;
+  name: string;
+  saved_grams: number | null;
+  live_grams: number | null;
+  saved_quantity: number | null;
+  live_quantity: number | null;
+  saved_unit: string | null;
+  live_unit: string | null;
+  saved_specific_child: string | null;
+  live_specific_child: string | null;
+  saved_vendor_label: string | null;
+  live_vendor_label: string | null;
+}
+
+export interface StandardRecipeSnapshotDisplayLine {
+  row_key: string;
+  child_item_id: string;
+  name: string;
+  grams: number;
+  quantity: number;
+  unit: string;
+  specific_child: string | null;
+  vendor_label: string;
+}
+
+export interface StandardLaborDiffLine {
+  type: "added" | "removed" | "changed";
+  row_key: string;
+  saved_labor_role: string | null;
+  live_labor_role: string | null;
+  saved_minutes: number | null;
+  live_minutes: number | null;
+}
+
+export interface StandardLaborSnapshotDisplayLine {
+  row_key: string;
+  labor_role: string;
+  minutes: number;
+}
+
+export interface StandardRecipeDiff {
+  has_diff: boolean;
+  lines: StandardRecipeDiffLine[];
+  saved: StandardRecipeSnapshotDisplayLine[];
+  live: StandardRecipeSnapshotDisplayLine[];
+  labor_has_diff?: boolean;
+  labor_lines?: StandardLaborDiffLine[];
+  labor_saved?: StandardLaborSnapshotDisplayLine[];
+  labor_live?: StandardLaborSnapshotDisplayLine[];
 }
 
 /**
@@ -1058,4 +1170,75 @@ export const recipeSummariesAPI = {
     }),
   getTechnicalSheet: (id: string) =>
     fetchAPI<RecipeSummaryTechnicalSheet>(`/recipe-summaries/${id}/technical-sheet`),
+};
+
+export const standardTechnicalSheetsAPI = {
+  listBaseRecipes: () =>
+    fetchAPI<StandardBaseRecipeRow[]>("/standard-technical-sheets/base-recipes"),
+  listVersions: (sourceItemId: string) =>
+    fetchAPI<{
+      source_item_id: string;
+      versions: StandardTechnicalSheetVersionMeta[];
+    }>(`/standard-technical-sheets/items/${sourceItemId}/versions`),
+  getById: (id: string, options?: { price_mode?: StandardTechnicalSheetPriceMode }) => {
+    const params = new URLSearchParams();
+    if (options?.price_mode) {
+      const apiMode =
+        options.price_mode === "both" ? "latest" : options.price_mode;
+      params.set("price_mode", apiMode);
+    }
+    const q = params.toString();
+    return fetchAPI<StandardTechnicalSheetDetail>(
+      `/standard-technical-sheets/${id}${q ? `?${q}` : ""}`,
+    );
+  },
+  getRecipeDiff: (id: string) =>
+    fetchAPI<StandardRecipeDiff>(`/standard-technical-sheets/${id}/recipe-diff`),
+  saveEdits: (
+    id: string,
+    payload: {
+      ingredient_rows: Array<{
+        item_id: string;
+        total_grams: number;
+        specific_child?: string | null;
+        step_quantities?: Record<string, number>;
+      }>;
+      labor_rows?: Array<{
+        row_key?: string | null;
+        labor_role: string;
+        minutes: number;
+      }>;
+      description?: string | null;
+      procedure?: string | null;
+    },
+  ) =>
+    fetchAPI<{ id: string; version_number: number; is_latest: boolean }>(
+      `/standard-technical-sheets/${id}/save-edits`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  previewFromLatestRecipe: (sourceItemId: string) =>
+    fetchAPI<Omit<RecipeSummaryTechnicalSheet, "summary_id" | "summary_name">>(
+      `/standard-technical-sheets/items/${sourceItemId}/preview-from-latest-recipe`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  createFromLatestRecipe: (
+    sourceItemId: string,
+    body?: { description?: string | null; procedure?: string | null },
+  ) =>
+    fetchAPI<{ id: string; version_number: number; is_latest: boolean }>(
+      `/standard-technical-sheets/items/${sourceItemId}/from-latest-recipe`,
+      { method: "POST", body: JSON.stringify(body ?? {}) },
+    ),
+  ensureV0: (sourceItemIds: string[]) =>
+    fetchAPI<{
+      created: Array<{
+        source_item_id: string;
+        id: string;
+        version_number: number;
+      }>;
+      errors: Array<{ source_item_id: string; error: string }>;
+    }>("/standard-technical-sheets/ensure-v0", {
+      method: "POST",
+      body: JSON.stringify({ source_item_ids: sourceItemIds }),
+    }),
 };

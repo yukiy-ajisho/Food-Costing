@@ -160,8 +160,14 @@ export default function VendorsPage() {
       name: "",
       isNew: true,
     };
-    setVendorsUI((prev) => [...prev, newVendor]);
+    setVendorsUI((prev) => [newVendor, ...prev]);
   };
+
+  const displayVendorsUI = (() => {
+    const draftRows = vendorsUI.filter((v) => v.isNew);
+    const existingRows = vendorsUI.filter((v) => !v.isNew);
+    return [...draftRows, ...existingRows];
+  })();
 
   if (tenantLoading) {
     return (
@@ -357,7 +363,45 @@ export default function VendorsPage() {
                       isDark ? "divide-slate-700" : "divide-gray-200"
                     }`}
                   >
-                    {vendorsUI.map((vendor) => (
+                    {isEditModeVendors && (
+                      <tr
+                        style={{
+                          height: "52px",
+                          minHeight: "52px",
+                          maxHeight: "52px",
+                        }}
+                      >
+                        <td
+                          colSpan={2}
+                          className="px-4 whitespace-nowrap"
+                          style={{
+                            paddingTop: "16px",
+                            paddingBottom: "16px",
+                            boxSizing: "border-box",
+                          }}
+                        >
+                          <div
+                            style={{
+                              height: "20px",
+                              minHeight: "20px",
+                              maxHeight: "20px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={handleAddClickVendors}
+                              className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 rounded-md transition-colors"
+                            >
+                              <Plus className="w-4 h-4 shrink-0" />
+                              <span>Add new vendor</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    {displayVendorsUI.map((vendor) => (
                       <tr
                         key={vendor.id}
                         className={`transition-colors ${
@@ -405,20 +449,6 @@ export default function VendorsPage() {
                         )}
                       </tr>
                     ))}
-                    {isEditModeVendors && (
-                      <tr>
-                        <td colSpan={2} className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={handleAddClickVendors}
-                            className="flex items-center gap-2 px-4 py-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
-                          >
-                            <Plus className="w-5 h-5" />
-                            <span>Add new vendor</span>
-                          </button>
-                        </td>
-                      </tr>
-                    )}
                   </tbody>
                 </table>
               )}

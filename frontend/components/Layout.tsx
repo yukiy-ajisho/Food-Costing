@@ -25,6 +25,7 @@ import { useState, useEffect, useMemo } from "react";
 import { apiRequest } from "@/lib/api";
 import { documentInboxAPI } from "@/lib/api/document-inbox";
 import { useCompany } from "@/contexts/CompanyContext";
+import { canAccessRecipeCostReport } from "@/lib/recipeCostReportAccess";
 import { useTenant } from "@/contexts/TenantContext";
 import { userRequirementsAPI } from "@/lib/api/reminder/user-requirements";
 import { mappingUserRequirementsAPI } from "@/lib/api/reminder/mapping-user-requirements";
@@ -84,6 +85,7 @@ function addYears(dateYmd: string, years: number): string {
 function isFoodCostingPath(pathname: string): boolean {
   return (
     pathname.startsWith("/cost") ||
+    pathname.startsWith("/recipe-cost-report") ||
     pathname.startsWith("/items") ||
     pathname.startsWith("/history") ||
     pathname.startsWith("/labor") ||
@@ -103,8 +105,27 @@ const foodCostingSubItems = [
   { id: "history", label: "History", href: "/history" },
   { id: "vendors", label: "Vendors", href: "/vendors" },
   { id: "labor", label: "Labor", href: "/labor" },
+  {
+    id: "recipe-cost-report",
+    label: "Recipe Cost Report",
+    href: "/cost/recipe-cost-report",
+  },
   { id: "settings", label: "Settings", href: "/food-costing/settings" },
 ];
+
+function isRecipeCostReportPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/cost/recipe-cost-report") ||
+    pathname.startsWith("/recipe-cost-report")
+  );
+}
+
+function isFoodCostingSubItemActive(href: string, pathname: string): boolean {
+  if (pathname === href) return true;
+  if (!pathname.startsWith(`${href}/`)) return false;
+  if (href === "/cost") return pathname === "/cost";
+  return true;
+}
 
 function isTeamPath(pathname: string): boolean {
   return (
@@ -154,12 +175,22 @@ const licenseSubItems = [
 export function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { companies, selectedCompanyId, loading: companyLoading } = useCompany();
-  const { selectedTenantId } = useTenant();
+  const { selectedTenantId, tenants } = useTenant();
   const canAccessDocumentBox = useMemo(() => {
     if (!selectedCompanyId) return false;
     const role = companies.find((c) => c.id === selectedCompanyId)?.role;
     return role === "company_admin" || role === "company_director";
   }, [companies, selectedCompanyId]);
+  const canAccessRecipeCostReportNav = useMemo(
+    () =>
+      canAccessRecipeCostReport(
+        selectedCompanyId,
+        selectedTenantId,
+        companies,
+        tenants,
+      ),
+    [selectedCompanyId, selectedTenantId, companies, tenants],
+  );
   const { theme, toggleTheme } = useTheme();
   const [sidebarMode, setSidebarMode] = useState<"compact" | "full">("compact");
   const [isHovered, setIsHovered] = useState(false);
@@ -583,8 +614,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/document-box")) return "Uploaded Document Box";
     if (pathname.startsWith("/dashboard")) return "Dashboard";
     if (pathname.startsWith("/settings")) return "Settings";
-    const foodItem = foodCostingSubItems.find(
-      (item) => pathname === item.href || pathname.startsWith(item.href + "/"),
+    if (pathname.startsWith("/cost/recipe-cost-report")) return "Recipe Cost Report";
+    const foodItem = foodCostingSubItems.find((item) =>
+      isFoodCostingSubItemActive(item.href, pathname),
     );
     if (foodItem) return foodItem.label;
     const teamItem = teamSubItems.find(
@@ -877,9 +909,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   {isSidebarExpanded &&
                     foodCostingExpanded &&
                     foodCostingSubItems.map((sub) => {
-                      const isActive =
-                        pathname === sub.href ||
-                        pathname.startsWith(sub.href + "/");
+                      if (
+                        sub.id === "recipe-cost-report" &&
+                        !canAccessRecipeCostReportNav
+                      ) {
+                        return null;
+                      }
+                      const isActive = isFoodCostingSubItemActive(
+                        sub.href,
+                        pathname,
+                      );
                       return (
                         <Link
                           key={sub.id}
@@ -1406,10 +1445,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <div className="flex-1 flex flex-col transition-all duration-300 ease-in-out overflow-hidden">
           {/* メインコンテンツ */}
           <main
-            className={`flex-1 overflow-y-auto transition-colors ${
-              isDark ? "bg-slate-900" : "bg-gray-50"
-            }`}
-            style={{ scrollbarGutter: "stable" }}
+            className={`flex-1 min-h-0 transition-colors ${
+              isRecipeCostReportPath(pathname)
+                ? "flex flex-col overflow-hidden"
+                : "overflow-y-auto"
+            } ${isDark ? "bg-slate-900" : "bg-gray-50"}`}
+            style={
+              isRecipeCostReportPath(pathname)
+                ? undefined
+                : { scrollbarGutter: "stable" }
+            }
           >
             {children}
           </main>

@@ -134,6 +134,20 @@
           "principalTypes": ["Principal"]
         }
       },
+      "company::read_recipe_cost_report": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "company::manage_recipe_cost_report": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
       "tenant::TenantRead": {
         "memberOf": [],
         "appliesTo": {
@@ -285,6 +299,20 @@
       },
       "tenant::manage_members": {
         "memberOf": [{ "id": "tenant::TenantWrite", "type": "Action" }],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::read_recipe_cost_report": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::manage_recipe_cost_report": {
+        "memberOf": [],
         "appliesTo": {
           "resourceTypes": ["Tenant"],
           "principalTypes": ["Principal"]

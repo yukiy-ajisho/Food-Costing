@@ -108,6 +108,8 @@ export interface SearchableSelectProps {
    * when the menu would extend past the visual viewport bottom.
    */
   useFloatingPortal?: boolean;
+  /** Vendor Items グリッド矢印移動用（トリガー button に付与） */
+  gridCell?: { row: number; col: string };
 }
 
 type SearchableSelectInnerProps = Omit<
@@ -132,6 +134,7 @@ function SearchableSelectClassic({
   placeholder = "Search and select...",
   disabled = false,
   showSubLabel = true,
+  gridCell,
 }: SearchableSelectInnerProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -220,6 +223,12 @@ function SearchableSelectClassic({
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
           title={selectedItem?.hoverLabel}
+          {...(gridCell
+            ? {
+                "data-vi-row": gridCell.row,
+                "data-vi-col": gridCell.col,
+              }
+            : {})}
           className={`w-full text-left border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between transition-colors ${
             disabled
               ? isDark
@@ -296,6 +305,7 @@ function SearchableSelectClassic({
       {isOpen && (
         <div
           ref={menuRef}
+          data-searchable-select-dropdown
           className={`fixed z-50 border rounded-md shadow-lg transition-colors ${
             isDark
               ? "bg-slate-800 border-slate-600"
@@ -331,6 +341,7 @@ function SearchableSelectFloating({
   placeholder = "Search and select...",
   disabled = false,
   showSubLabel = true,
+  gridCell,
 }: SearchableSelectInnerProps) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
@@ -425,6 +436,7 @@ function SearchableSelectFloating({
     isOpen && mounted ? (
       <div
         ref={refs.setFloating}
+        data-searchable-select-dropdown
         className={`z-[100] border rounded-md shadow-lg transition-colors ${
           isDark
             ? "bg-slate-800 border-slate-600"
@@ -458,6 +470,12 @@ function SearchableSelectFloating({
           onClick={() => !disabled && setIsOpen(!isOpen)}
           disabled={disabled}
           title={selectedItem?.hoverLabel}
+          {...(gridCell
+            ? {
+                "data-vi-row": gridCell.row,
+                "data-vi-col": gridCell.col,
+              }
+            : {})}
           className={`w-full text-left border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 flex items-center justify-between transition-colors ${
             disabled
               ? isDark

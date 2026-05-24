@@ -30,6 +30,19 @@ function principalEntity(tenantRole: TenantRole) {
   };
 }
 
+function companyPrincipalEntity(
+  companyRole: "company_admin" | "company_director",
+) {
+  return {
+    uid: principalUid(),
+    attrs: {
+      id: USER_ID,
+      company_role: companyRole,
+    },
+    parents: [],
+  };
+}
+
 function tenantResource() {
   return {
     uid: { type: "Tenant", id: TENANT_ID },
@@ -59,12 +72,12 @@ function costResourceItem(itemKind: "raw" | "prepped") {
 }
 
 function decide(args: {
-  tenantRole: TenantRole;
+  principal: ReturnType<typeof principalEntity> | ReturnType<typeof companyPrincipalEntity>;
   action: string;
   resource: ReturnType<typeof tenantResource> | ReturnType<typeof costResourceItem>;
   context?: Record<string, unknown>;
 }): { decision: string; errors?: string[] } {
-  const principal = principalEntity(args.tenantRole);
+  const principal = args.principal;
   const context = args.context ?? {};
 
   const call = {
@@ -97,6 +110,10 @@ const actions = {
   manageSettings: "tenant::manage_settings",
   manageTenant: "tenant::manage_tenant",
   manageMembers: "tenant::manage_members",
+  readRecipeCostReport: "tenant::read_recipe_cost_report",
+  manageRecipeCostReport: "tenant::manage_recipe_cost_report",
+  companyReadRecipeCostReport: "company::read_recipe_cost_report",
+  companyManageRecipeCostReport: "company::manage_recipe_cost_report",
 } as const;
 
 function run() {
@@ -135,6 +152,9 @@ function run() {
     { label: "raw item update (manager allow)", action: actions.updateItem, resource: rawItem, context: contexts.none },
 
     { label: "prepped item delete (manager none)", action: actions.deleteItem, resource: preppedItem, context: contexts.none },
+
+    { label: "read recipe cost report", action: actions.readRecipeCostReport, resource: tenantRes },
+    { label: "manage recipe cost report", action: actions.manageRecipeCostReport, resource: tenantRes },
   ];
 
   const out: Record<string, any> = {};
@@ -142,8 +162,30 @@ function run() {
   for (const role of roles) {
     out[role] = {};
     for (const c of cases) {
-      const r = decide({ tenantRole: role, action: c.action, resource: c.resource as any, context: c.context });
+      const r = decide({
+        principal: principalEntity(role),
+        action: c.action,
+        resource: c.resource as any,
+        context: c.context,
+      });
       out[role][c.label] = { decision: r.decision, errors: r.errors };
+    }
+  }
+
+  const companyRoles = ["company_admin", "company_director"] as const;
+  out.company_officers = {};
+  for (const cr of companyRoles) {
+    out.company_officers[cr] = {};
+    for (const action of [
+      actions.companyReadRecipeCostReport,
+      actions.companyManageRecipeCostReport,
+    ]) {
+      const r = decide({
+        principal: companyPrincipalEntity(cr),
+        action,
+        resource: tenantRes,
+      });
+      out.company_officers[cr][action] = { decision: r.decision, errors: r.errors };
     }
   }
 

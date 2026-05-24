@@ -1,0 +1,578 @@
+================================================================================
+  RECIPE COST REPORT — 設計・要件書
+  対象: food_costing プロジェクト
+  作成日: 2026-05-20
+  ステータス: 要件整理（実装前）
+================================================================================
+
+本書は、Recipe Cost Report（レシピ原価レポート）の目的・画面構成・
+直営 / フランチャイズのワークフロー・既存 Costing との関係をまとめたものである。
+
+関連ドキュメント:
+- docs/cross_tenant_access_control_design.txt … 同一 company 内 cross-tenant
+- docs/cross_tenant_cost_breakdown_plan.txt … breakdown と共有 prepped
+- docs/recipe-summary-plan.txt … Recipe Summary（別機能）
+
+DB/API/UI の詳細は実装フェーズで確定する。
+既存 RPC calculate_item_costs_with_breakdown_scoped は改造しない。
+
+
+================================================================================
+1. 背景と目的
+================================================================================
+
+1-1. 課題（現状の Costing 画面）
+- Cost ページ（/cost）では prepped / menu ごとに COG・LABOR・Cost・
+  WHOLESALE・RETAIL と COG% / LCOG% / LABOR% が出る。
+- ただし **1アイテム1行の大きな表** で、items.wholesale / items.retail は
+  **テナント内のグローバルな1値**。
+- 「Cupertino 向け卸値」「直営店A向けメニュー原価一覧」など、
+  **名前付きリストで一覧だけ見たい** ニーズに弱い。
+
+1-2. Recipe Cost Report の目的
+- **一覧として、すぐに cost と原価率が見える** こと。
+- 直営: 従来 Costing と同じ cost を元に、リスト上で retail（売価）を決め、
+  原価率を確認する。
+- フランチャイズ: WL で卸値を決め、MCL でその卸値ベースに cost を再計算し、
+  retail を決め、原価率を確認する。
+
+1-3. 機能名とナビゲーション
+- 親機能名: **Recipe Cost Report**
+- サブメニュー（2つ）:
+  A) **Wholesale List**（略称 WL）
+  B) **Menu Cost List**（略称 MCL）
+
+
+================================================================================
+2. 用語・原価率の定義
+================================================================================
+
+2-1. 原価率（本機能で採用する定義）
+- ユーザーが言う「原価率」は、現 Cost 画面の **LCOG%** に相当する。
+- 式: (食材原価 + 労務原価) ÷ 売価（retail）× 100
+- 現 Cost の calculatePercentages 参照:
+  - COG%  = food_cost_per_gram / pricePerGram × 100（食材のみ）
+  - LCOG% = (food + labor) / pricePerGram × 100  ← **本機能の原価率**
+  - LABOR% = labor / pricePerGram × 100
+
+2-2. cost（本機能）
+- **直営 MCL**: 既存 Costing と同じ breakdown 由来の total cost
+  （calculate_item_costs_with_breakdown_scoped 相当の food + labor、yield 按分込み）。
+- **フランチャイズ MCL**: WL で登録した **卸値（wholesale）** を、
+  レシピ展開時の該当 prepped / 材料の **$ / 単位** として使い再計算した cost。
+  （通常の vendor 仕入原価ではない。）
+
+2-3. retail（売価）
+- MCL リスト上で **行ごとに入力** する（リスト専用。items.retail とは別管理を想定）。
+- 原価率 = 再計算または breakdown された cost ÷ 当該行の retail。
+
+2-4. WL の卸値と現 items.wholesale の違い
+- items.wholesale / items.retail は Cost ページ用の **アイテム単位1値**。
+- WL は **リスト名（例: Cupertino）ごと** に、選んだ prepped / menu へ
+  **卸値を複数セット** できるマスタ。
+- フランチャイズ MCL は **どの WL を参照するか** を選んで cost を決める。
+
+
+================================================================================
+3. 対象アイテム
+================================================================================
+
+3-1. WL・MCL で選択できる品目
+- **base item は対象外**。
+- **prepped** と **menu**（is_menu_item の prepped）をチェックボックスで選択。
+
+3-2. cross-tenant
+- 製品上の cross-tenant は **同一 company 内** のみ（cross_tenant_item_shares）。
+- **Wholesale List / フランチャイズ MCL**: 候補は自テナントの prepped / menu のみ。
+- **直営 MCL（company_owned）**: read 共有されている他テナントの prepped / menu も候補に含める。
+  原価は Costing と同じ calculate_item_costs_with_breakdown_scoped（共有ルール込み）。
+
+
+================================================================================
+4. Wholesale List（WL）
+================================================================================
+
+4-1. 目的
+- フランチャイズ店（または卸先）ごとに、「何をいくらで卸すか」を一覧管理する。
+- 例: リスト名 "Cupertino" → 自社 prepped / menu を選び、卸値を入力。
+
+4-2. UI フロー
+1. **Create list**（モーダル）: リスト名 + prepped/menu をチェックで一括選択。
+2. 作成後は左一覧 + 右パネル。卸値は右パネルで入力（インライン）。
+3. 品目追加: **+ Add item** プルダウン。
+4. リスト名・品目・卸値の変更: **Edit**（インライン、モーダルなし）。Rename は使わない。
+
+4-3. WL 右パネル列（確定）
+- **Item name** / **Type**（prepped | menu）
+- **Internal cost** … scoped で算出した社内原価（読み取り専用。Costing と同じ basis）
+- **Wholesale** … 入力（Save でレジャー INSERT）
+- 卸値と社内 cost を並べて見られるが、**別機能の items.wholesale とは無関係**。
+
+4-4. データ
+- §11 データベース最終案を参照。
+
+
+================================================================================
+5. Menu Cost List（MCL）
+================================================================================
+
+5-1. 目的
+- メニュー（および選んだ品目）について、**cost・retail・原価率（LCOG%）**
+  を **リスト単位の表** ですぐ見る。
+- 直営とフランチャイズで cost の出所が異なる。
+
+5-2. UI フロー（共通）
+1. **Create list**（モーダル）: リスト名 + 直営/FC ラジオ + FC 時 WL 選択 + 品目チェック。
+2. 以降は WL と同型（左一覧 + 右パネル）。**Edit はインライン**（モーダルなし）。
+3. **+ Add item** プルダウンで品目追加。
+4. 右パネルで cost（算出）、retail（入力）、原価率（自動）。
+
+5-3. 直営モード
+- WL は **使わない**（WL プルダウン非表示）。
+- **cost**: 従来 Costing と **同じ値**（breakdown scoped ベースの total cost）。
+  ユーザーは cost を手入力しない（読み取り専用表示が基本）。
+- **retail**: MCL 上で入力・編集。
+- **原価率**: cost ÷ retail（LCOG% 相当）。
+
+5-4. フランチャイズモード
+- ラジオでフランチャイズ選択時、**既存 WL のプルダウン** が表示される。
+- **WL を1つ選択**（必須）。
+- **cost**: 選んだ WL の卸値をレシピ計算の入力として **再計算**。
+  - メニューの子 prepped が WL に載っていれば、その行の $/g（または $/each）は
+    WL 卸値を使う。
+  - WL に無い材料は通常 scoped 展開（§6-3）。
+- **retail**: MCL 上で入力・編集。
+- **原価率**: 再計算 cost ÷ retail。
+
+5-5. ワークフロー図（概念）
+
+  【直営】
+  Costing（既存）── breakdown cost ──► MCL リスト ── retail 入力 ──► 原価率
+
+  【フランチャイズ】
+  WL リスト ── 卸値 ──► MCL（WL 参照）── cost 再計算 ── retail 入力 ──► 原価率
+
+
+================================================================================
+6. 技術方針（コスト計算）
+================================================================================
+
+6-1. 既存 RPC を壊さない
+- **calculate_item_costs_with_breakdown_scoped は改造しない。**
+- cross-tenant・grandfather・scoped seed など既存挙動を維持するため。
+
+6-2. 計算 RPC の使い分け（3 本）
+
+  (A) calculate_item_costs_with_breakdown_scoped … **既存・改造しない**
+      - WL 画面: 各行の **社内 cost**（比較用）
+      - MCL **直営**: メニュー行の cost（Costing 同等）
+
+  (B) 新 RPC（scoped 派生・フランチャイズ MCL 専用）… **新規作成**
+      - 引数: tenant_id, seed item ids, **wholesale_list_id**
+      - 参照 WL の各 item について **wholesale_list_lines の最新行**（created_at 最大）
+        の wholesale_price を使用（下記 6-3・§11-9）
+      - WL に載った品目の **卸値はリーフとして扱う**（下記 6-3）
+
+  (C) フロント即時 … retail → LCOG% のみ（Save 不要）
+
+6-3. 新 RPC のコスト展開ルール（フランチャイズ MCL）— 重要
+
+  【WL で卸値が決まっている品目 = 子をたどらない】
+  - 例: WL で「カレー」prepped の wholesale = $X/kg を登録している。
+  - MCL で「豚カツカレー」を計算するとき、材料にカレーが含まれる場合:
+    - **カレーの recipe_lines（子の子…）は展開しない**
+    - **その WL 行の wholesale をそのままカレー1g（または serving）あたりの
+      food cost として使う**（リーフ打ち切り / short-circuit）
+  - 豚カツカレー全体は、カレー以外の材料は通常計算 + カレーは wholesale 1本、
+    で再帰的に親の cost を上げる（親の親はたどる。止まるのは WL 品目の「内側」）。
+
+  【卸値が空 = 通常 breakdown】
+  - WL メンバーだが **価格レジャーに数値行が無い**、または **最新行の
+    wholesale_price が NULL** → 通常 scoped（子をたどる）。
+  - Create 直後（品目だけ選び Save、まだ list_lines 無し）もこの扱い。
+
+  【WL に載っていない品目】
+  - 通常の scoped 展開（材料の材料をたどる）。
+
+  まとめ:
+    最新レジャーに wholesale 数値あり → その item は wholesale のみ（子非展開）
+    レジャー無し / 最新が NULL → 通常 scoped 展開
+
+6-4. WL 画面を開いたとき
+- Costing 同様、表示に必要な **社内 cost** は scoped で一括取得（対象 item ids）。
+- 卸値・派生 % はフロント即時（§10-6）。Save でレジャー INSERT。
+
+6-5. MCL で WL 参照が変わったとき
+- フランチャイズ MCL: **MCL 側で cost 再計算**（新 RPC）。WL プルダウン変更、
+  または他ウィンドウで WL Save 後の再フェッチで実行。
+
+6-6. バックエンド / フロント（実装時）
+- 新ルート例: /recipe-cost-report/wholesale-lists, /menu-cost-lists
+- テナントスコープ: 選択中 tenant_id に紐づくリスト。
+- 認可: 既存 tenant / company ロールに合わせる。
+
+6-7. 関連既存コード（参照）
+- frontend/app/cost/page.tsx … COG%, LCOG%, wholesale, retail
+- backend/src/routes/cost.ts … breakdown scoped RPC 呼び出し
+- supabase: calculate_item_costs_with_breakdown_scoped
+- items.wholesale, items.retail カラム（Cost 用。MCL/WL は別テーブル想定）
+
+
+================================================================================
+7. MCL 一覧で出す列（案・確定前）
+================================================================================
+
+最低限:
+- 品名（prepped / menu）
+- cost（$ / serving または $ / kg — Cost 画面と単位整合）
+- retail（入力）
+- 原価率（LCOG%、自動計算）
+
+任意:
+- food / labor 内訳
+- 直営 vs フランチャイズバッジ
+- 参照 WL 名（フランチャイズのみ）
+
+
+================================================================================
+8. スコープの境界（確定）
+================================================================================
+
+8-1. 本機能に含めないもの
+- Technical Sheet との連携。
+- PDF / CSV エクスポート。
+- リストの「版」管理（ヘッダー名以外のスナップショット履歴）。
+- Cost 画面の **items.retail / items.wholesale** との同期・インポート（完全に別データ）。
+
+8-2. テナント・company
+- WL / MCL は **選択中テナントごと** に保持（tenant_id）。
+- **company 横断で同じ WL を共有する必要はない**（v1）。
+
+8-3. リストから品目を外す・再追加（v1・確定）
+
+  【削除】
+  - WL / MCL とも、行の **🗑** で **members からだけ削除**。
+  - **list_lines（卸値・売価レジャー）は削除しない**（履歴として残す）。
+  - retail も wholesale も **レジャーで記録**（INSERT のみ。§11）。
+
+  【再追加】
+  - 同じ item を再度 + Add / Create で載せる → **members に再 INSERT**。
+  - 表示・計算は **過去の list_lines と繋がる**: 当該 (list_id, item_id) の
+    **created_at 最新** の wholesale / retail があれば、それを「現在値」として使う
+    （再入力不要。新たに Save すれば新しいレジャー行が増える）。
+
+  【MCL（FC）の WL 参照 — 重要】
+  - 新 RPC の卸値 map は **wholesale_list_members にいる item_id だけ** 対象。
+  - members に無い item は、**list_lines に過去行があっても MCL 計算では使わない**
+    （リストから外した＝その WL では卸値オーバーライド無効）。
+  - members にあり、最新レジャーに数値あり → リーフ打ち切り（§6-3）。
+  - members にあり、レジャー無し or 最新 NULL → 通常 scoped。
+
+  【MCL 行の retail】
+  - 表示・LCOG% は **menu_cost_list_members にいる行のみ**。
+  - 最新 retail は menu_cost_list_lines の最新行（members 外の履歴は無視）。
+
+8-4. その他（確定済み）
+- WL/MCL とも選択品目: prepped + menu（base 除外）。
+- WL 卸値あり（最新レジャー）→ 子非展開。卸値空 / レジャー無し → 通常 scoped。
+- 原価率 = LCOG%。DB は §11。Save ルールは §12。
+
+
+================================================================================
+9. 実装フェーズ案（参考）
+================================================================================
+
+Phase 1: DB マイグレーション（§11 の 6 テーブル）+ CRUD API
+
+Phase 2: WL UI（Create list、品目選択、卸値入力、一覧）
+
+Phase 3: MCL 直営（breakdown cost 表示、retail 入力、原価率）
+
+Phase 4: 新 breakdown RPC（WL オーバーライド）+ MCL フランチャイズ
+
+Phase 5: ナビ・権限・仕上げ
+
+
+================================================================================
+10. UI ワイヤー（合意・2026-05-20）
+================================================================================
+
+共通レイアウト（WL / MCL 同型）:
+- 左上: [ + Create list ] … **モーダルのみ**（名前 + チェックボックスで品目一括選択）
+- 左列: リスト名一覧（~220px）。クリックで選択。右パネルが差し替わる（ページ遷移なし）
+- 右パネル: 選択中リストの作業場。**Edit はモーダルにしない**（インライン編集）
+- 品目の追加（Create 以降）: [ + Add item ▼ ] プルダウン（既存行は除外）
+- 狭い画面: 左一覧 → WL/MCL 名のプルダウンに縮小、下に表
+
+10-1. WL — 通常画面（Edit = インライン）
+
+  [ + Create list ]
+
+  ┌─ WL 一覧 ─────┬─ 右パネル ─────────────────────────────────────┐
+  │ ● Cupertino   │  List name: [ Cupertino________ ]  [ Edit* ]   │
+  │   San Jose    │  [ + Add item ▼ ]                                  │
+  │               │  Item / Type / Wholesale ($/kg)                  │
+  │               │  （卸値はセル直接編集可）              [ Save ]      │
+  └───────────────┴──────────────────────────────────────────────────┘
+
+  * Edit ボタン: 「編集モード」に入る／名前フィールド・Add item・卸値をまとめて触る入口。
+    モーダルは開かない。Rename というラベルは使わない。
+
+10-2. WL — Create（モーダル）
+
+  - List name 入力
+  - prepped & menu を検索 + チェックボックスで複数選択
+  - [ Create ] → 左にリスト追加、右に行（卸値は空。右パネルで入力）
+
+10-3. WL — + Add item（プルダウン、Create 以降）
+
+  - 右パネル上部。未追加の品目のみ表示
+
+10-4. MCL — 通常画面（Edit = インライン、WL と同型）
+
+  - 右パネル追加: Mode（直営 / フランチャイズ）ラジオ、FC 時のみ WL プルダウン
+  - 列: Item / Type / Cost（算出）/ Retail（入力）/ LCOG%
+  - Create モーダル: 名前 + Mode + WL（FC 時）+ チェックで品目選択
+  - Edit: モーダルなし。名前・Mode・WL・Retail・品目追加は右パネル
+
+10-5. モーダルを使う場面
+
+  - WL / MCL とも **Create list のみ**
+  - Edit・日常の卸値/売価入力・+ Add item は **すべて右パネル（インライン）**
+
+10-6. リアルタイム計算（Save 不要）
+
+  - **卸値（WL）・売価（MCL retail）を入力した瞬間**、フロントエンドで派生値を再計算する。
+  - **[ Save ] 押下前でも** 表に反映する（楽観的 UI。Save は DB 永続化のみ）。
+  - WL 行: 卸値変更 → 必要なら社内 cost との比較・% 等（列定義に応じて）。
+  - MCL 行: retail 変更 → **LCOG% = cost ÷ retail** を即時更新。
+  - MCL フランチャイズ: WL 行の卸値が変わると cost 再計算の入力も変わる → LCOG% も連動。
+  - 永続化: Save / Create / Edit 確定時に API。未 Save の離脱時は confirm（実装時）。
+
+10-7. 2 ウィンドウ（WL と MCL は別画面・単一データ源）
+
+  - **WL 用ウィンドウ（画面）** と **MCL 用ウィンドウ（画面）** を分ける。
+    同一ブラウザで 2 タブ、またはサイドバーで Wholesale List | Menu Cost List と分離。
+  - **卸値の正（source of truth）は DB の WL のみ**。MCL に卸値をコピーして持たない。
+  - WL で卸値 Save → **wholesale_list_lines に INSERT** → MCL が追随（リロード不要）。
+
+10-8. WL 変更の MCL 追随 — **Supabase Realtime**（確定）
+
+  - **BroadcastChannel は使わない**（v1）。
+  - MCL 画面（フランチャイズ・参照 WL あり）で **wholesale_list_lines** の INSERT を購読。
+    同一 tenant / 参照 wholesale_list_id に関係する行が増えたら **cost API（新 RPC）を再実行**し、
+    表示中の retail から **LCOG% をフロントで出し直す**。
+  - Realtime は **DB の変更通知**（WL タブが Save した結果が DB に入ったことを検知）。
+  - **やらないこと**: menu_cost_list_lines に cost を保存する、DB トリガーで cost 列を
+    更新する、など **保存 cost の自動同期** は行わない（cost は都度 RPC 計算のみ）。
+  - publication / RLS は実装時に wholesale_list_lines（必要なら members）を有効化。
+
+
+================================================================================
+11. データベース最終案（確定・2026-05-20）
+================================================================================
+
+11-1. テーブル数: **6 個**
+
+  ヘッダー 2 + リスト所属（メンバー）2 + 価格レジャー 2。
+  （Create 直後は list_lines にレコードを作らない合意のため、所属用テーブルが必要。）
+
+  ┌─ WL ─────────────────────────────────────────────────────────┐
+  │  wholesale_lists                                              │
+  │  wholesale_list_members   … どの item がリストに載るか          │
+  │  wholesale_list_lines     … 卸値の履歴（INSERT のみ）          │
+  └──────────────────────────────────────────────────────────────┘
+  ┌─ MCL ────────────────────────────────────────────────────────┐
+  │  menu_cost_lists                                              │
+  │  menu_cost_list_members … どの item がリストに載るか          │
+  │  menu_cost_list_lines     … 売価の履歴（INSERT のみ）          │
+  └──────────────────────────────────────────────────────────────┘
+
+  **保存しないもの**: cost, LCOG%（RPC + フロントで算出）。
+  **sort_order**: なし。
+
+11-2. wholesale_lists
+
+  | カラム           | 型        | 備考                          |
+  |------------------|-----------|-------------------------------|
+  | id               | uuid PK   |                               |
+  | tenant_id        | uuid FK   | → tenants                     |
+  | name             | text      | NOT NULL                      |
+  | created_at       | timestamptz |                             |
+  | created_by       | uuid FK   | → users（推奨）               |
+
+  - UNIQUE (tenant_id, name)
+
+11-3. wholesale_list_members（所属・Create 時に作成）
+
+  | カラム              | 型        | 備考                          |
+  |---------------------|-----------|-------------------------------|
+  | id                  | uuid PK   |                               |
+  | wholesale_list_id   | uuid FK   | ON DELETE CASCADE             |
+  | item_id             | uuid FK   | → items（prepped/menu）       |
+  | created_at          | timestamptz | Create モーダル Save 時     |
+  | created_by          | uuid FK   | 推奨                          |
+
+  - UNIQUE (wholesale_list_id, item_id)
+  - Create でチェックした品目 → **members のみ INSERT**（lines はまだ無し）
+
+11-4. wholesale_list_lines（卸値レジャー）
+
+  【FK 案 — 実装前に §11-10 で確定】
+
+  案 A（現行）: wholesale_list_id + item_id
+  案 B（提案）: wholesale_list_member_id のみ
+  案 C（推奨）: wholesale_list_member_id + item_id（冗長だが再追加・RPC・Realtime が単純）
+
+  | カラム                    | 型        | 備考                          |
+  |---------------------------|-----------|-------------------------------|
+  | id                        | uuid PK   |                               |
+  | wholesale_list_member_id  | uuid FK   | → wholesale_list_members      |
+  | item_id                   | uuid FK   | 案 C のみ。再追加・map 用に推奨 |
+  | wholesale_price           | numeric   | NULL 可                       |
+  | created_at                | timestamptz | **必須。updated_at なし**   |
+  | created_by                | uuid FK   | 推奨                          |
+
+  - **UPDATE しない**。価格変更は常に **新規 INSERT**。
+  - **現在の卸値（表示・MCL）** = **members に在籍中**の item について、
+    案 A/C: (list_id, item_id) ごと created_at 最大 /
+    案 B のみ: member_id ごと created_at 最大（§11-10 参照）。
+  - menu_cost_list_lines も同型（menu_cost_list_member_id + 任意 item_id）に揃え可。
+
+11-5. menu_cost_lists
+
+  | カラム              | 型        | 備考                          |
+  |---------------------|-----------|-------------------------------|
+  | id                  | uuid PK   |                               |
+  | tenant_id           | uuid FK   |                               |
+  | name                | text      | NOT NULL                      |
+  | mode                | text      | 'company_owned' | 'franchise'   |
+  | wholesale_list_id   | uuid FK   | NULL。franchise 時 NOT NULL   |
+  | created_at          | timestamptz |                             |
+  | created_by          | uuid FK   | 推奨                          |
+
+  - UNIQUE (tenant_id, name)
+  - CHECK: mode = 'company_owned' → wholesale_list_id IS NULL
+  - CHECK: mode = 'franchise' → wholesale_list_id IS NOT NULL
+
+11-6. menu_cost_list_members
+
+  | カラム              | 型        | 備考                          |
+  |---------------------|-----------|-------------------------------|
+  | id                  | uuid PK   |                               |
+  | menu_cost_list_id   | uuid FK   | ON DELETE CASCADE             |
+  | item_id             | uuid FK   |                               |
+  | created_at          | timestamptz |                             |
+  | created_by          | uuid FK   | 推奨                          |
+
+  - UNIQUE (menu_cost_list_id, item_id)
+
+11-7. menu_cost_list_lines（売価レジャー）
+
+  | カラム              | 型        | 備考                          |
+  |---------------------|-----------|-------------------------------|
+  | id                  | uuid PK   |                               |
+  | menu_cost_list_id   | uuid FK   | ON DELETE CASCADE             |
+  | item_id             | uuid FK   |                               |
+  | retail_price        | numeric   | NULL 可                       |
+  | created_at          | timestamptz | **必須。updated_at なし**   |
+  | created_by          | uuid FK   | 推奨                          |
+
+  - **UPDATE しない**。売価変更は常に **新規 INSERT**。
+  - **現在の売価** = 当該 (menu_cost_list_id, item_id) で **created_at 最大** の行。
+
+11-8. 関係図
+
+  tenants
+     │
+     ├── wholesale_lists ──┬──< wholesale_list_members >── items
+     │                     └──< wholesale_list_lines >────── items
+     │
+     └── menu_cost_lists ──┬── (FK) wholesale_lists  [franchise のみ]
+                           ├──< menu_cost_list_members >── items
+                           └──< menu_cost_list_lines >──────── items
+
+11-10. wholesale_list_member_id だけでよいか（設計メモ）
+
+  - **member_id の利点**: 「どの在籍に対する価格か」が明確。lines が member に従属。
+  - **問題（members を物理 DELETE する場合）**:
+    - 削除後も lines は残す → 行の member_id は削除済み行を指す。
+    - 再追加で **新しい member_id** → 古い lines と **自動では繋がらない**。
+    - MCL の map も「在籍 member の最新 line」だけでは、再追加後に過去卸値を復元できない。
+  - **対応策（いずれか）**:
+    1) **推奨・案 C**: lines に **member_id + item_id** を持つ（item_id で履歴・再追加を接続）。
+    2) members は **論理削除**（removed_at）。再追加は同一 member 行を復活 → member_id だけで接続可。
+    3) 案 B のみ + 再追加時に lines を item_id で検索して表示（実質 item_id が必要）。
+
+  - **意見**: wholesale_list_member_id **のみ**は、**論理削除 members** とセットなら良い。
+    **物理 DELETE + 履歴保持 + 再追加で繋ぐ**なら、lines に **item_id（または list_id+item_id）も持つ案 C** が安全。
+
+11-9. MCL 計算と WL レジャーの読み方
+
+  - フランチャイズ MCL が参照する wholesale_list_id について:
+    1) **wholesale_list_members** の item_id 集合を得る（ここに無い ID は対象外）。
+    2) その ID に限り **wholesale_list_lines** から created_at 最新の wholesale_price を map 化。
+    3) 新 RPC に wholesale_list_id（または map）を渡し §6-3 を適用。
+  - **members 外の list_lines は map に含めない**（削除後も履歴は残るが計算に使わない）。
+  - 再追加で members に戻った item は、履歴の最新行があれば再び map に入る。
+  - WL 画面の社内 cost: members の item_id に対して scoped を呼ぶ。
+
+
+================================================================================
+12. Save バリデーション・Create 例外（確定・2026-05-20）
+================================================================================
+
+12-1. 原則
+
+  - wholesale / retail は **レジャー INSERT** で永続化（§11）。
+  - 入力中の派生値（LCOG% 等）は **Save 前でもフロント計算**（§10-6）。
+
+12-2. Save を **許可しない** 場合
+
+  - **+ Add item** で品目だけ追加し、**wholesale（WL）または retail（MCL）が未入力**
+    のまま Save しようとした場合 → Save **無効**（ボタン disabled 等）。
+
+12-3. 例外: **Create list** の初回 Save
+
+  - Create モーダルで品目をチェックして **[ Create ]** したとき:
+    - **members のみ** 作成（wholesale_list_members / menu_cost_list_members）。
+    - **list_lines にはまだレコードを作らない**（卸値・売価レジャー無し）。
+    - UI: 品目行は表示するが **wholesale / retail は空欄** → **Save 可能**（この段階では
+      リスト作成自体が Save。価格レジャー不要）。
+  - 作成直後に + Add item した場合は §12-2 が適用（価格必須）。
+
+12-4. Create 直後と MCL cost
+
+  - WL メンバーはいるが **wholesale_list_lines が無い**（または最新が NULL）品目:
+    - WL UI: 卸値空欄。
+    - MCL（FC・当該 WL 参照）: **通常 scoped** で cost（§6-3）。
+  - ユーザーが卸値を入力して Save → lines に INSERT → 以降 MCL は **最新レジャー** を参照。
+
+12-5. 価格変更の Save
+
+  - 既存行の wholesale / retail を変更して Save → **UPDATE せず新行 INSERT**
+    （created_at が新しい行が「現在」になる）。
+
+
+================================================================================
+13. 合意サマリ（プロダクト）
+================================================================================
+
+- Recipe Cost Report = **一覧で cost と原価率（LCOG%）をすぐ見る**。
+- **直営**: MCL のみ。cost = 従来 Costing 同等。retail を決めて原価率。
+- **フランチャイズ**: WL で卸値 → MCL で WL 参照し cost 再計算 → retail → 原価率。
+- 原価率 = LCOG%（食材 + 労務 ÷ 売価）。
+- scoped breakdown は改変せず、新 RPC（最新 WL レジャー参照）を追加。
+- 卸値・売価は **レジャー（INSERT のみ、created_at で現在値）**。sort_order なし。
+- DB **6 テーブル**（§11）。Create は members のみ・lines 無し可（§12）。
+- 卸値・売価入力は **フロントで即時計算**（Save 前でも表示更新）。
+- **WL / MCL は別画面（2 window）**；WL Save → 最新レジャー → MCL cost 再計算。
+- + Add のみ（価格空）では Save 不可。Create 初回は例外。
+- 品目削除は members のみ。lines 履歴は保持。再追加で最新レジャーと接続。
+- MCL(FC) の WL map は **members 上の item のみ**（lines だけでは効かない）。
+- WL→MCL 追随は **Supabase Realtime**（wholesale_list_lines INSERT）。保存 cost 同期はしない。
+- lines の FK は §11-10（member_id のみ vs member_id+item_id vs 論理削除）。
+
+================================================================================
+  END
+================================================================================

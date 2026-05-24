@@ -110,3 +110,49 @@ export function convertToGrams(
   // Prepped Itemの場合、非質量単位は使用できない
   throw new Error(`Prepped item ${itemId} cannot use non-mass unit ${unit}`);
 }
+
+/**
+ * Convert a gram amount back into the given recipe-line unit (inverse of convertToGrams where possible).
+ */
+export function quantityFromGrams(
+  grams: number,
+  unit: string,
+  itemId: string,
+  itemsMap: Map<string, Item>,
+  baseItemsMap: Map<string, BaseItem>,
+): number {
+  if (!Number.isFinite(grams) || grams <= 0) return 0;
+
+  if (isMassUnit(unit)) {
+    const multiplier = MASS_UNIT_CONVERSIONS[unit];
+    if (!multiplier) throw new Error(`Invalid mass unit: ${unit}`);
+    return grams / multiplier;
+  }
+
+  const item = itemsMap.get(itemId);
+  if (!item) throw new Error(`Item ${itemId} not found`);
+
+  if (unit === "each") {
+    if (!item.each_grams || item.each_grams <= 0) {
+      throw new Error(`Item ${itemId} uses 'each' but has no each_grams`);
+    }
+    return grams / item.each_grams;
+  }
+
+  if (!isNonMassUnit(unit)) {
+    throw new Error(`Invalid unit: ${unit}`);
+  }
+
+  if (item.item_kind === "raw" && item.base_item_id) {
+    const baseItem = baseItemsMap.get(item.base_item_id);
+    if (!baseItem?.specific_weight) {
+      throw new Error(`Cannot convert grams to ${unit} for item ${itemId}`);
+    }
+    const litersPerUnit = VOLUME_UNIT_TO_LITERS[unit];
+    if (!litersPerUnit) throw new Error(`Invalid non-mass unit: ${unit}`);
+    const gramsPerSourceUnit = baseItem.specific_weight * 1000 * litersPerUnit;
+    return grams / gramsPerSourceUnit;
+  }
+
+  throw new Error(`Cannot convert grams to ${unit} for item ${itemId}`);
+}

@@ -37,6 +37,11 @@ html {
   }
 }
 
+/* Modals portaled to document.body: cancel body zoom so vh/vw match visible size */
+.food-costing-modal-root {
+  zoom: calc(1 / var(--ui-scale, 1));
+}
+
 body {
   height: 100%; /* htmlの高さに合わせる */
   zoom: var(--ui-scale); /* bodyにzoomを適用してスケーリング */
