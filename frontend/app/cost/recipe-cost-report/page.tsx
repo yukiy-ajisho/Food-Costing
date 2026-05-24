@@ -56,9 +56,9 @@ function RecipeCostReportPageContent() {
     return (
       <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
         <div className="mx-auto max-w-lg rounded-lg border border-red-200 bg-red-50 p-6 text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
-          <h1 className="mb-2 text-lg font-semibold">Recipe Cost Report</h1>
+          <h1 className="mb-2 text-lg font-semibold">Pricing</h1>
           <p className="text-sm">
-            Recipe Cost Report is available to company administrators and directors,
+            Pricing is available to company administrators and directors,
             or tenant administrators and directors only.
           </p>
         </div>
@@ -99,8 +99,8 @@ function RecipeCostReportPageContent() {
             }`}
           >
             <nav className="flex space-x-8">
-              {tabBtn("wholesale", "Wholesale List")}
-              {tabBtn("menu", "Menu Cost List")}
+              {tabBtn("wholesale", "Wholesale price")}
+              {tabBtn("menu", "Retail price")}
             </nav>
           </div>
           <RecipeCostReportListPage

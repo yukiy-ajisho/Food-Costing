@@ -3,16 +3,21 @@ import { supabase } from "../config/supabase";
 import { authorizeRecipeCostReportAccess } from "../authz/unified/authorize";
 import { withTenantFilter } from "../middleware/tenant-filter";
 import {
-  computeFranchiseMenuCosts,
+  computeMenuCostListCosts,
   computeScopedBreakdownCosts,
 } from "../services/franchise-menu-cost";
 import {
+  type CostBasis,
+  defaultCostBasisForMenuMember,
+  fetchLatestWholesalePrices,
   fetchRecipeCostReportItemCandidates,
   getMenuCostListMode,
   loadListMemberRows,
   purgeDirectDeprecatedMembers,
   validatePreppedMenuItemIds,
+  wholesaleCostBasisSelectableFlag,
 } from "../services/recipe-cost-report-data";
+import { computeWholesaleRecipeImpactByItem } from "../services/wholesale-recipe-impact";
 
 const router = Router();
 
@@ -54,6 +59,70 @@ function tenantId(req: Request): string {
 function userId(req: Request): string {
   if (!req.user?.id) throw new Error("Unauthorized");
   return req.user.id;
+}
+
+function parseMemberCostBasisBody(
+  body: unknown,
+): Record<string, CostBasis> | undefined {
+  const raw = (body as { member_cost_basis?: unknown })?.member_cost_basis;
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, CostBasis> = {};
+  for (const [itemId, basis] of Object.entries(raw as Record<string, unknown>)) {
+    if (basis === "wholesale") out[itemId] = "wholesale";
+    else if (basis === "corporate") out[itemId] = "corporate";
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+async function resolveInsertCostBasis(
+  tenantId: string,
+  mode: "company_owned" | "franchise",
+  wholesaleListId: string | null,
+  itemIds: string[],
+  requested?: Record<string, CostBasis>,
+): Promise<Map<string, CostBasis>> {
+  const map = new Map<string, CostBasis>();
+  if (mode === "company_owned" || !wholesaleListId) {
+    for (const id of itemIds) map.set(id, "corporate");
+    return map;
+  }
+
+  const { data: wlMem } = await supabase
+    .from("wholesale_list_members")
+    .select("item_id")
+    .eq("wholesale_list_id", wholesaleListId)
+    .in("item_id", itemIds);
+  const onWl = new Set((wlMem ?? []).map((r) => r.item_id));
+  const wlPrices = await fetchLatestWholesalePrices(wholesaleListId, itemIds);
+  const wlImpact = await computeWholesaleRecipeImpactByItem(
+    tenantId,
+    wholesaleListId,
+    itemIds,
+  );
+
+  for (const itemId of itemIds) {
+    const onLinked = onWl.has(itemId);
+    const linkedPrice = onLinked ? (wlPrices.get(itemId) ?? null) : null;
+    const selectable = wlImpact.has(itemId);
+    const requestedBasis = requested?.[itemId];
+    if (
+      requestedBasis === "wholesale" &&
+      wholesaleCostBasisSelectableFlag(selectable)
+    ) {
+      map.set(itemId, "wholesale");
+    } else {
+      map.set(
+        itemId,
+        defaultCostBasisForMenuMember(
+          mode,
+          selectable,
+          onLinked,
+          linkedPrice,
+        ),
+      );
+    }
+  }
+  return map;
 }
 
 // =============================================================================
@@ -174,10 +243,120 @@ router.patch("/wholesale-lists/:listId", async (req, res) => {
   }
 });
 
+router.get("/wholesale-lists/:listId/delete-impact", async (req, res) => {
+  try {
+    const { listId } = req.params;
+
+    const { data: list, error: listErr } = await withTenantFilter(
+      supabase
+        .from("wholesale_lists")
+        .select("id, name")
+        .eq("id", listId)
+        .maybeSingle(),
+      req,
+    );
+    if (listErr) return res.status(500).json({ error: listErr.message });
+    if (!list) return res.status(404).json({ error: "List not found" });
+
+    const { data: linked, error: linkedErr } = await withTenantFilter(
+      supabase
+        .from("menu_cost_lists")
+        .select("id, name")
+        .eq("wholesale_list_id", listId)
+        .eq("mode", "franchise")
+        .order("name"),
+      req,
+    );
+    if (linkedErr) return res.status(500).json({ error: linkedErr.message });
+
+    res.json({
+      list,
+      linked_retail_lists: linked ?? [],
+    });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.post("/wholesale-lists/:listId/wholesale-recipe-impact", async (req, res) => {
+  try {
+    const tid = tenantId(req);
+    const { listId } = req.params;
+    const raw = req.body?.item_ids;
+    if (!Array.isArray(raw)) {
+      return res.status(400).json({ error: "item_ids must be an array" });
+    }
+    const itemIds = raw
+      .map((id) => String(id ?? "").trim())
+      .filter((id) => id.length > 0);
+    if (itemIds.length === 0) {
+      return res.json({ item_ids: [] as string[] });
+    }
+
+    const { data: list, error: listErr } = await withTenantFilter(
+      supabase.from("wholesale_lists").select("id").eq("id", listId).maybeSingle(),
+      req,
+    );
+    if (listErr) return res.status(500).json({ error: listErr.message });
+    if (!list) return res.status(404).json({ error: "List not found" });
+
+    const impacted = await computeWholesaleRecipeImpactByItem(
+      tid,
+      listId,
+      itemIds,
+    );
+    res.json({ item_ids: [...impacted] });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 router.delete("/wholesale-lists/:listId", async (req, res) => {
   try {
+    const { listId } = req.params;
+    const deleteLinkedRetail =
+      req.body?.delete_linked_retail_lists === true ||
+      String(req.query.delete_linked_retail_lists ?? "").toLowerCase() === "true";
+
+    const { data: list, error: listErr } = await withTenantFilter(
+      supabase
+        .from("wholesale_lists")
+        .select("id, name")
+        .eq("id", listId)
+        .maybeSingle(),
+      req,
+    );
+    if (listErr) return res.status(500).json({ error: listErr.message });
+    if (!list) return res.status(404).json({ error: "List not found" });
+
+    const { data: linked, error: linkedErr } = await withTenantFilter(
+      supabase
+        .from("menu_cost_lists")
+        .select("id, name")
+        .eq("wholesale_list_id", listId)
+        .order("name"),
+      req,
+    );
+    if (linkedErr) return res.status(500).json({ error: linkedErr.message });
+
+    const linkedRetail = linked ?? [];
+    if (linkedRetail.length > 0 && !deleteLinkedRetail) {
+      return res.status(409).json({
+        error: "Wholesale list is used by retail price lists",
+        linked_retail_lists: linkedRetail,
+      });
+    }
+
+    if (linkedRetail.length > 0 && deleteLinkedRetail) {
+      const { error: mclDelErr } = await withTenantFilter(
+        supabase.from("menu_cost_lists").delete().eq("wholesale_list_id", listId),
+        req,
+      );
+      if (mclDelErr) return res.status(500).json({ error: mclDelErr.message });
+    }
+
     const { error } = await withTenantFilter(
-      supabase.from("wholesale_lists").delete().eq("id", req.params.listId),
+      supabase.from("wholesale_lists").delete().eq("id", listId),
       req,
     );
     if (error) return res.status(500).json({ error: error.message });
@@ -383,17 +562,33 @@ router.post("/menu-cost-lists", async (req, res) => {
       .single();
     if (listErr) return res.status(500).json({ error: listErr.message });
 
+    const memberCostBasis = parseMemberCostBasisBody(req.body);
+    const costBasisByItem = await resolveInsertCostBasis(
+      tid,
+      mode,
+      mode === "franchise" ? wholesaleListId : null,
+      validIds,
+      memberCostBasis,
+    );
+
     if (validIds.length > 0) {
-      await supabase.from("menu_cost_list_members").insert(
-        validIds.map((item_id) => ({
-          menu_cost_list_id: list.id,
-          item_id,
-          created_by: uid,
-        })),
-      );
+      const { error: memInsErr } = await supabase
+        .from("menu_cost_list_members")
+        .insert(
+          validIds.map((item_id) => ({
+            menu_cost_list_id: list.id,
+            item_id,
+            cost_basis: costBasisByItem.get(item_id) ?? "corporate",
+            created_by: uid,
+          })),
+        );
+      if (memInsErr) return res.status(500).json({ error: memInsErr.message });
     }
 
-    const members = await loadListMemberRows(tid, "menu", list.id, validIds);
+    const members = await loadListMemberRows(tid, "menu", list.id, validIds, {
+      mode: list.mode,
+      wholesale_list_id: list.wholesale_list_id,
+    });
 
     res.status(201).json({ list, members });
   } catch (e: unknown) {
@@ -422,7 +617,10 @@ router.get("/menu-cost-lists/:listId", async (req, res) => {
       .select("item_id")
       .eq("menu_cost_list_id", listId);
     const itemIds = (memRows ?? []).map((m) => m.item_id);
-    const members = await loadListMemberRows(tid, "menu", listId, itemIds);
+    const members = await loadListMemberRows(tid, "menu", listId, itemIds, {
+      mode: list.mode,
+      wholesale_list_id: list.wholesale_list_id,
+    });
 
     res.json({ list, members });
   } catch (e: unknown) {
@@ -538,6 +736,73 @@ router.delete("/menu-cost-lists/:listId/members/:itemId", async (req, res) => {
   }
 });
 
+router.patch(
+  "/menu-cost-lists/:listId/members/:itemId/cost-basis",
+  async (req, res) => {
+    try {
+      const { listId, itemId } = req.params;
+      const rawBasis = req.body?.cost_basis;
+      if (rawBasis !== "corporate" && rawBasis !== "wholesale") {
+        return res.status(400).json({ error: "cost_basis must be corporate or wholesale" });
+      }
+
+      const { data: list, error: listErr } = await withTenantFilter(
+        supabase
+          .from("menu_cost_lists")
+          .select("id, mode, wholesale_list_id")
+          .eq("id", listId)
+          .maybeSingle(),
+        req,
+      );
+      if (listErr || !list) {
+        return res.status(404).json({ error: "List not found" });
+      }
+
+      const { data: member } = await supabase
+        .from("menu_cost_list_members")
+        .select("item_id")
+        .eq("menu_cost_list_id", listId)
+        .eq("item_id", itemId)
+        .maybeSingle();
+      if (!member) {
+        return res.status(404).json({ error: "Member not found" });
+      }
+
+      let cost_basis: CostBasis = rawBasis;
+      if (list.mode === "company_owned") {
+        cost_basis = "corporate";
+      } else if (rawBasis === "wholesale" && list.wholesale_list_id) {
+        const tid = tenantId(req);
+        const impact = await computeWholesaleRecipeImpactByItem(
+          tid,
+          list.wholesale_list_id,
+          [itemId],
+        );
+        if (!wholesaleCostBasisSelectableFlag(impact.has(itemId))) {
+          return res.status(400).json({
+            error: "Wholesale cost basis not available for this item",
+          });
+        }
+      } else if (rawBasis === "wholesale") {
+        return res.status(400).json({
+          error: "Wholesale cost basis requires a linked wholesale list",
+        });
+      }
+
+      const { error } = await supabase
+        .from("menu_cost_list_members")
+        .update({ cost_basis })
+        .eq("menu_cost_list_id", listId)
+        .eq("item_id", itemId);
+      if (error) return res.status(500).json({ error: error.message });
+
+      res.json({ ok: true, cost_basis });
+    } catch (e: unknown) {
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+);
+
 router.post("/menu-cost-lists/:listId/retail-prices", async (req, res) => {
   try {
     const uid = userId(req);
@@ -598,11 +863,22 @@ router.post("/menu-cost-lists/:listId/costs", async (req, res) => {
 
     const { data: memRows } = await supabase
       .from("menu_cost_list_members")
-      .select("item_id")
+      .select("item_id, cost_basis")
       .eq("menu_cost_list_id", listId);
     const bodyIds = Array.isArray(req.body?.item_ids)
       ? (req.body.item_ids as string[]).filter(Boolean)
       : [];
+    const bodyMembers = Array.isArray(req.body?.members)
+      ? (req.body.members as Array<{ item_id?: string; cost_basis?: string }>)
+      : [];
+    const bodyBasisByItem = new Map<string, CostBasis>();
+    for (const m of bodyMembers) {
+      if (!m.item_id) continue;
+      bodyBasisByItem.set(
+        m.item_id,
+        m.cost_basis === "wholesale" ? "wholesale" : "corporate",
+      );
+    }
 
     let itemIds = await purgeDirectDeprecatedMembers(
       "menu",
@@ -620,16 +896,28 @@ router.post("/menu-cost-lists/:listId/costs", async (req, res) => {
       return res.json({ costs: {} });
     }
 
-    let costs: Record<string, unknown>;
-    if (list.mode === "franchise" && list.wholesale_list_id) {
-      costs = await computeFranchiseMenuCosts(
-        tid,
-        itemIds,
-        list.wholesale_list_id,
+    const storedBasis = new Map<string, CostBasis>();
+    for (const row of memRows ?? []) {
+      storedBasis.set(
+        row.item_id,
+        row.cost_basis === "wholesale" ? "wholesale" : "corporate",
       );
-    } else {
-      costs = await computeScopedBreakdownCosts(tid, itemIds);
     }
+
+    const costMembers = itemIds.map((item_id) => ({
+      item_id,
+      cost_basis:
+        bodyBasisByItem.get(item_id) ??
+        storedBasis.get(item_id) ??
+        ("corporate" as CostBasis),
+    }));
+
+    const costs = await computeMenuCostListCosts(
+      tid,
+      costMembers,
+      list.mode,
+      list.wholesale_list_id,
+    );
 
     res.json({ costs });
   } catch (e: unknown) {

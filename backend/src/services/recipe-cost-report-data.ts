@@ -1,4 +1,5 @@
 import { supabase } from "../config/supabase";
+import { computeWholesaleRecipeImpactByItem } from "./wholesale-recipe-impact";
 
 export type ItemCandidateRow = {
   id: string;
@@ -216,6 +217,8 @@ export async function getMenuCostListMode(
   return data.mode === "franchise" ? "franchise" : "company_owned";
 }
 
+export type CostBasis = "corporate" | "wholesale";
+
 export type ListMemberRow = {
   item_id: string;
   name: string;
@@ -226,9 +229,43 @@ export type ListMemberRow = {
   each_grams: number | null;
   latest_wholesale_price: number | null;
   latest_retail_price: number | null;
+  /** Retail list only: how cost column is calculated. */
+  cost_basis?: CostBasis;
+  /** Retail franchise: item is on the linked wholesale price list. */
+  on_linked_wholesale_list?: boolean;
+  /** Latest wholesale price on linked WL (for corporate/wholesale UI). */
+  linked_wholesale_price?: number | null;
+  /** Franchise: item or any recipe ingredient is on WL with price → wholesale selectable. */
+  wholesale_cost_basis_selectable?: boolean;
   /** Set when item is indirectly deprecated (affected by ingredient); direct members are removed. */
   deprecation_reason?: "indirect" | null;
 };
+
+export function defaultCostBasisForMenuMember(
+  listMode: "company_owned" | "franchise",
+  wholesaleCostBasisSelectable: boolean,
+  onLinkedWl: boolean,
+  linkedWholesalePrice: number | null,
+): CostBasis {
+  if (listMode !== "franchise" || !wholesaleCostBasisSelectable) {
+    return "corporate";
+  }
+  if (
+    onLinkedWl &&
+    linkedWholesalePrice != null &&
+    linkedWholesalePrice > 0 &&
+    Number.isFinite(linkedWholesalePrice)
+  ) {
+    return "wholesale";
+  }
+  return "corporate";
+}
+
+export function wholesaleCostBasisSelectableFlag(
+  hasWlRecipeImpact: boolean,
+): boolean {
+  return hasWlRecipeImpact;
+}
 
 export async function fetchLatestWholesalePrices(
   wholesaleListId: string,
@@ -406,12 +443,107 @@ export async function purgeDirectDeprecatedMembers(
   return itemIds.filter((id) => !directSet.has(id));
 }
 
+export async function loadMenuListMemberRows(
+  tenantId: string,
+  menuCostListId: string,
+  itemIds: string[],
+  listMode: "company_owned" | "franchise",
+  linkedWholesaleListId: string | null,
+): Promise<ListMemberRow[]> {
+  const activeIds = await purgeDirectDeprecatedMembers(
+    "menu",
+    menuCostListId,
+    itemIds,
+    tenantId,
+  );
+  if (activeIds.length === 0) return [];
+
+  const { data: memberRows, error: memErr } = await supabase
+    .from("menu_cost_list_members")
+    .select("item_id, cost_basis")
+    .eq("menu_cost_list_id", menuCostListId)
+    .in("item_id", activeIds);
+  if (memErr) throw new Error(memErr.message);
+
+  const costBasisByItem = new Map<string, CostBasis>();
+  for (const row of memberRows ?? []) {
+    const basis =
+      row.cost_basis === "wholesale" ? "wholesale" : "corporate";
+    costBasisByItem.set(row.item_id, basis);
+  }
+
+  const retailLatest = await fetchLatestRetailPrices(menuCostListId, activeIds);
+
+  let wlMemberIds = new Set<string>();
+  let wlPrices = new Map<string, number | null>();
+  let wlRecipeImpact = new Set<string>();
+  if (listMode === "franchise" && linkedWholesaleListId) {
+    const { data: wlMem } = await supabase
+      .from("wholesale_list_members")
+      .select("item_id")
+      .eq("wholesale_list_id", linkedWholesaleListId)
+      .in("item_id", activeIds);
+    wlMemberIds = new Set((wlMem ?? []).map((r) => r.item_id));
+    wlPrices = await fetchLatestWholesalePrices(
+      linkedWholesaleListId,
+      activeIds,
+    );
+    wlRecipeImpact = await computeWholesaleRecipeImpactByItem(
+      tenantId,
+      linkedWholesaleListId,
+      activeIds,
+    );
+  }
+
+  const latestRetail = retailLatest;
+  const rows = await enrichMemberRows(
+    tenantId,
+    activeIds,
+    latestRetail,
+    "retail",
+  );
+
+  return rows.map((row) => {
+    const onWl = wlMemberIds.has(row.item_id);
+    const linkedPrice = onWl ? (wlPrices.get(row.item_id) ?? null) : null;
+    const selectable = wlRecipeImpact.has(row.item_id);
+    const storedBasis = costBasisByItem.get(row.item_id);
+    let cost_basis =
+      storedBasis ??
+      defaultCostBasisForMenuMember(listMode, selectable, onWl, linkedPrice);
+    if (cost_basis === "wholesale" && !selectable) {
+      cost_basis = "corporate";
+    }
+    return {
+      ...row,
+      cost_basis,
+      on_linked_wholesale_list: onWl,
+      linked_wholesale_price: linkedPrice,
+      wholesale_cost_basis_selectable: selectable,
+    };
+  });
+}
+
 export async function loadListMemberRows(
   tenantId: string,
   listKind: MemberListKind,
   listId: string,
   itemIds: string[],
+  menuListMeta?: {
+    mode: "company_owned" | "franchise";
+    wholesale_list_id: string | null;
+  },
 ): Promise<ListMemberRow[]> {
+  if (listKind === "menu" && menuListMeta) {
+    return loadMenuListMemberRows(
+      tenantId,
+      listId,
+      itemIds,
+      menuListMeta.mode,
+      menuListMeta.wholesale_list_id,
+    );
+  }
+
   const activeIds = await purgeDirectDeprecatedMembers(
     listKind,
     listId,

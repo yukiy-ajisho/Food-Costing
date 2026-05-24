@@ -61,3 +61,44 @@ export async function computeScopedBreakdownCosts(
   }
   return result;
 }
+
+/** Retail list: per-member corporate vs wholesale (WL override) cost. */
+export async function computeMenuCostListCosts(
+  tenantId: string,
+  members: Array<{ item_id: string; cost_basis: "corporate" | "wholesale" }>,
+  listMode: "company_owned" | "franchise",
+  wholesaleListId: string | null,
+): Promise<Record<string, CostBreakdownRow>> {
+  if (members.length === 0) return {};
+
+  const corporateIds = members
+    .filter((m) => m.cost_basis === "corporate" || listMode === "company_owned")
+    .map((m) => m.item_id);
+  const wholesaleIds =
+    listMode === "franchise" && wholesaleListId
+      ? members
+          .filter((m) => m.cost_basis === "wholesale")
+          .map((m) => m.item_id)
+      : [];
+
+  const result: Record<string, CostBreakdownRow> = {};
+
+  if (corporateIds.length > 0) {
+    Object.assign(
+      result,
+      await computeScopedBreakdownCosts(tenantId, corporateIds),
+    );
+  }
+  if (wholesaleIds.length > 0 && wholesaleListId) {
+    Object.assign(
+      result,
+      await computeFranchiseMenuCosts(
+        tenantId,
+        wholesaleIds,
+        wholesaleListId,
+      ),
+    );
+  }
+
+  return result;
+}

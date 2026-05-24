@@ -1,8 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { X } from "lucide-react";
-import type { ItemCandidate } from "@/lib/recipeCostReport";
+import { useEffect, useMemo, useState } from "react";
+import { Loader2, X } from "lucide-react";
+import {
+  recipeCostReportAPI,
+  type CostBasis,
+  type ItemCandidate,
+  type ListMemberRow,
+} from "@/lib/recipeCostReport";
+import {
+  defaultCostBasisForMenuMember,
+  wholesaleCostBasisSelectable,
+} from "@/lib/recipeCostReportCostBasis";
+import { CostBasisRadios } from "./CostBasisRadios";
+import { ItemKindBadge } from "./ItemKindBadge";
 
 type Props = {
   pageMode: "wholesale" | "menu";
@@ -16,6 +27,7 @@ type Props = {
     item_ids: string[];
     mode?: "company_owned" | "franchise";
     wholesale_list_id?: string | null;
+    member_cost_basis?: Record<string, CostBasis>;
   }) => void;
 };
 
@@ -33,30 +45,124 @@ export function CreateListModal({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<"company_owned" | "franchise">("company_owned");
   const [wlId, setWlId] = useState("");
+  const [showMenu, setShowMenu] = useState(true);
+  const [showPrepped, setShowPrepped] = useState(true);
+  const [costBasisByItem, setCostBasisByItem] = useState<Map<string, CostBasis>>(
+    new Map(),
+  );
+  const [wlMemberByItem, setWlMemberByItem] = useState<
+    Map<string, Pick<ListMemberRow, "on_linked_wholesale_list" | "linked_wholesale_price">>
+  >(new Map());
+  const [wlRecipeImpact, setWlRecipeImpact] = useState<Set<string>>(new Set());
+  const [wlMembersLoading, setWlMembersLoading] = useState(false);
+
+  const impactCandidateIds = useMemo(
+    () => candidatesTenantOnly.map((c) => c.id),
+    [candidatesTenantOnly],
+  );
 
   const activeCandidates =
     pageMode === "menu" && mode === "company_owned"
       ? candidatesCompanyOwned
       : candidatesTenantOnly;
 
+  const showCostBasis =
+    pageMode === "menu" && mode === "franchise" && wlId.length > 0;
+
+  useEffect(() => {
+    if (!showCostBasis) {
+      setWlMemberByItem(new Map());
+      setWlRecipeImpact(new Set());
+      setWlMembersLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setWlMembersLoading(true);
+    void Promise.all([
+      recipeCostReportAPI.getWholesaleList(wlId),
+      recipeCostReportAPI.getWholesaleRecipeImpact(wlId, impactCandidateIds),
+    ])
+      .then(([{ members }, { item_ids: impactedIds }]) => {
+        if (cancelled) return;
+        const map = new Map<
+          string,
+          Pick<ListMemberRow, "on_linked_wholesale_list" | "linked_wholesale_price">
+        >();
+        for (const m of members) {
+          map.set(m.item_id, {
+            on_linked_wholesale_list: true,
+            linked_wholesale_price: m.latest_wholesale_price,
+          });
+        }
+        setWlMemberByItem(map);
+        setWlRecipeImpact(new Set(impactedIds));
+      })
+      .finally(() => {
+        if (!cancelled) setWlMembersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showCostBasis, wlId, impactCandidateIds]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return activeCandidates;
-    return activeCandidates.filter((c) => c.name.toLowerCase().includes(q));
-  }, [activeCandidates, search]);
+    return activeCandidates.filter((c) => {
+      if (c.is_menu_item && !showMenu) return false;
+      if (!c.is_menu_item && !showPrepped) return false;
+      if (!q) return true;
+      return c.name.toLowerCase().includes(q);
+    });
+  }, [activeCandidates, search, showMenu, showPrepped]);
 
   const toggle = (id: string) => {
     setSelected((prev) => {
       const n = new Set(prev);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
+      if (n.has(id)) {
+        n.delete(id);
+        setCostBasisByItem((basis) => {
+          const next = new Map(basis);
+          next.delete(id);
+          return next;
+        });
+      } else {
+        n.add(id);
+        if (pageMode === "menu" && mode === "franchise" && wlId) {
+          const wl = wlMemberByItem.get(id);
+          const onWl = !!wl?.on_linked_wholesale_list;
+          const price = wl?.linked_wholesale_price ?? null;
+          const selectable = wlRecipeImpact.has(id);
+          setCostBasisByItem((basis) => {
+            const next = new Map(basis);
+            next.set(
+              id,
+              defaultCostBasisForMenuMember("franchise", selectable, onWl, price),
+            );
+            return next;
+          });
+        }
+      }
       return n;
     });
   };
 
+  const setItemCostBasis = (itemId: string, basis: CostBasis) => {
+    setCostBasisByItem((prev) => {
+      const next = new Map(prev);
+      next.set(itemId, basis);
+      return next;
+    });
+  };
+
+  const title =
+    pageMode === "wholesale"
+      ? "Create wholesale price list"
+      : "Create retail price list";
+
   const canCreate =
     name.trim().length > 0 &&
-    (pageMode !== "menu" || mode !== "franchise" || wlId.length > 0);
+    (pageMode !== "menu" || mode !== "franchise" || wlId.length > 0) &&
+    (!showCostBasis || !wlMembersLoading);
 
   const border = isDark ? "border-slate-700" : "border-gray-200";
   const muted = isDark ? "text-slate-400" : "text-gray-500";
@@ -82,7 +188,7 @@ export function CreateListModal({
       aria-labelledby="create-list-title"
     >
       <div
-        className={`flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border shadow-xl ${
+        className={`flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border shadow-xl ${
           isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white"
         }`}
         onClick={(e) => e.stopPropagation()}
@@ -91,7 +197,7 @@ export function CreateListModal({
           className={`flex shrink-0 items-center justify-between border-b px-6 py-4 ${border}`}
         >
           <h2 id="create-list-title" className={`text-lg font-semibold ${textMain}`}>
-            Create list
+            {title}
           </h2>
           <button
             type="button"
@@ -107,12 +213,17 @@ export function CreateListModal({
 
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
           <div>
+            <label
+              htmlFor="create-list-name"
+              className={`mb-1.5 block text-xs font-medium uppercase tracking-wide ${muted}`}
+            >
+              Name
+            </label>
             <input
               id="create-list-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              aria-label="Name"
               className={inputCls}
               placeholder="e.g. Cupertino"
             />
@@ -151,7 +262,7 @@ export function CreateListModal({
                     htmlFor="create-wl"
                     className={`mb-1.5 block text-xs font-medium uppercase tracking-wide ${muted}`}
                   >
-                    Wholesale list
+                    Wholesale price list
                   </label>
                   <select
                     id="create-wl"
@@ -159,7 +270,7 @@ export function CreateListModal({
                     onChange={(e) => setWlId(e.target.value)}
                     className={inputCls}
                   >
-                    <option value="">Select wholesale list…</option>
+                    <option value="">Select wholesale price list…</option>
                     {wlOptions.map((w) => (
                       <option key={w.id} value={w.id}>
                         {w.name}
@@ -170,6 +281,27 @@ export function CreateListModal({
               )}
             </div>
           )}
+
+          <div className="flex flex-wrap items-center gap-4">
+            <label className={`flex cursor-pointer items-center gap-2 text-sm ${textMain}`}>
+              <input
+                type="checkbox"
+                checked={showMenu}
+                onChange={(e) => setShowMenu(e.target.checked)}
+                className="h-4 w-4 rounded"
+              />
+              Menu
+            </label>
+            <label className={`flex cursor-pointer items-center gap-2 text-sm ${textMain}`}>
+              <input
+                type="checkbox"
+                checked={showPrepped}
+                onChange={(e) => setShowPrepped(e.target.checked)}
+                className="h-4 w-4 rounded"
+              />
+              Prepped
+            </label>
+          </div>
 
           <div>
             <label
@@ -189,56 +321,88 @@ export function CreateListModal({
           </div>
 
           <ul
-            className={`max-h-52 overflow-y-auto rounded-lg border divide-y ${
+            className={`max-h-64 overflow-y-auto rounded-lg border divide-y ${
               isDark ? "divide-slate-700 border-slate-700" : "divide-gray-200 border-gray-200"
             }`}
           >
             {filtered.length === 0 ? (
               <li className={`px-4 py-6 text-center text-sm ${muted}`}>No items match</li>
             ) : (
-              filtered.map((c) => (
-                <li key={c.id}>
-                  <label
-                    className={`flex cursor-pointer items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-                      isDark ? "hover:bg-slate-700/50" : "hover:bg-gray-50"
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected.has(c.id)}
-                      onChange={() => toggle(c.id)}
-                      className="h-4 w-4 rounded border-gray-300"
-                    />
-                    <span className={`flex-1 font-medium ${textMain}`}>{c.name}</span>
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      {c.is_cross_tenant ? (
-                        <span
-                          className={`rounded px-2 py-0.5 text-xs ${
-                            isDark
-                              ? "bg-amber-900/40 text-amber-200"
-                              : "bg-amber-100 text-amber-900"
-                          }`}
-                        >
-                          Shared
+              filtered.map((c) => {
+                const wl = wlMemberByItem.get(c.id);
+                const onWl = !!wl?.on_linked_wholesale_list;
+                const linkedPrice = wl?.linked_wholesale_price ?? null;
+                const selectable = wlRecipeImpact.has(c.id);
+                const wholesaleSelectable = wholesaleCostBasisSelectable(selectable);
+                const basis =
+                  costBasisByItem.get(c.id) ??
+                  defaultCostBasisForMenuMember(
+                    mode === "franchise" ? "franchise" : "company_owned",
+                    selectable,
+                    onWl,
+                    linkedPrice,
+                  );
+                const isSelected = selected.has(c.id);
+
+                return (
+                  <li key={c.id}>
+                    <div
+                      className={`flex items-center gap-3 px-4 py-2.5 text-sm ${
+                        isDark ? "hover:bg-slate-700/50" : "hover:bg-gray-50"
+                      }`}
+                    >
+                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggle(c.id)}
+                          className="h-4 w-4 shrink-0 rounded border-gray-300"
+                        />
+                        <span className={`min-w-0 font-medium ${textMain}`}>
+                          {c.name}
                         </span>
-                      ) : null}
-                      <span
-                        className={`rounded px-2 py-0.5 text-xs ${
-                          c.is_menu_item
-                            ? isDark
-                              ? "bg-violet-900/40 text-violet-200"
-                              : "bg-violet-100 text-violet-800"
-                            : isDark
-                              ? "bg-slate-700 text-slate-300"
-                              : "bg-gray-100 text-gray-600"
-                        }`}
-                      >
-                        {c.is_menu_item ? "Menu" : "Prepped"}
-                      </span>
-                    </span>
-                  </label>
-                </li>
-              ))
+                      </label>
+                      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                        {c.is_cross_tenant ? (
+                          <span
+                            className={`rounded px-2 py-0.5 text-xs ${
+                              isDark
+                                ? "bg-amber-900/40 text-amber-200"
+                                : "bg-amber-100 text-amber-900"
+                            }`}
+                          >
+                            Shared
+                          </span>
+                        ) : null}
+                        <ItemKindBadge isMenuItem={c.is_menu_item} isDark={isDark} />
+                        {showCostBasis ? (
+                          wlMembersLoading ? (
+                            <Loader2
+                              className={`h-4 w-4 shrink-0 animate-spin -translate-y-px ${
+                                isDark ? "text-slate-400" : "text-gray-400"
+                              }`}
+                              aria-label="Loading cost basis"
+                            />
+                          ) : (
+                            <CostBasisRadios
+                              groupName={`create-basis-${c.id}`}
+                              basis={basis}
+                              wholesaleSelectable={wholesaleSelectable}
+                              textMain={textMain}
+                              onCorporate={() =>
+                                setItemCostBasis(c.id, "corporate")
+                              }
+                              onWholesale={() =>
+                                setItemCostBasis(c.id, "wholesale")
+                              }
+                            />
+                          )
+                        ) : null}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })
             )}
           </ul>
         </div>
@@ -252,15 +416,35 @@ export function CreateListModal({
           <button
             type="button"
             disabled={!canCreate}
-            onClick={() =>
+            onClick={() => {
+              const item_ids = [...selected];
+              const member_cost_basis: Record<string, CostBasis> = {};
+              for (const id of item_ids) {
+                if (showCostBasis) {
+                  const wl = wlMemberByItem.get(id);
+                  const selectable = wlRecipeImpact.has(id);
+                  member_cost_basis[id] =
+                    costBasisByItem.get(id) ??
+                    defaultCostBasisForMenuMember(
+                      "franchise",
+                      selectable,
+                      !!wl?.on_linked_wholesale_list,
+                      wl?.linked_wholesale_price ?? null,
+                    );
+                } else {
+                  member_cost_basis[id] = "corporate";
+                }
+              }
               onCreate({
                 name: name.trim(),
-                item_ids: [...selected],
+                item_ids,
                 mode: pageMode === "menu" ? mode : undefined,
                 wholesale_list_id:
                   pageMode === "menu" && mode === "franchise" ? wlId || null : null,
-              })
-            }
+                member_cost_basis:
+                  pageMode === "menu" ? member_cost_basis : undefined,
+              });
+            }}
             className={btnPrimary}
           >
             Create
