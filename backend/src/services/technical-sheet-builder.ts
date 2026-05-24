@@ -536,7 +536,7 @@ export async function buildTechnicalSheet(
 
 export async function buildRecipeSnapshotLines(
   sourceItemId: string,
-  tenantIds: string[],
+  _tenantIds: string[],
 ): Promise<IngredientSnapshotLine[]> {
   const itemMap = new Map<string, Item>();
   const baseItemMap = new Map<string, BaseItem>();

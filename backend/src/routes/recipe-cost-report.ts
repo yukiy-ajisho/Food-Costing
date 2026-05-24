@@ -7,8 +7,6 @@ import {
   computeScopedBreakdownCosts,
 } from "../services/franchise-menu-cost";
 import {
-  fetchLatestRetailPrices,
-  fetchLatestWholesalePrices,
   fetchRecipeCostReportItemCandidates,
   getMenuCostListMode,
   loadListMemberRows,
@@ -64,7 +62,6 @@ function userId(req: Request): string {
 
 router.get("/wholesale-lists", async (req, res) => {
   try {
-    const tid = tenantId(req);
     const { data, error } = await withTenantFilter(
       supabase.from("wholesale_lists").select("id, name, created_at").order("name"),
       req,

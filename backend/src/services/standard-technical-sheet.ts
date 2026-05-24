@@ -543,7 +543,7 @@ export async function applySheetEditsToRecipe(
 
     let quantity = grams;
     let unit = "g";
-    let specificChild = resolveSpecificChild(edit, existingLine, childItem);
+    const specificChild = resolveSpecificChild(edit, existingLine, childItem);
 
     if (existingLine?.unit) {
       unit = existingLine.unit;

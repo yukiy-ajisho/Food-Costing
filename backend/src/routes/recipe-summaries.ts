@@ -2,7 +2,6 @@ import { Router } from "express";
 import { supabase } from "../config/supabase";
 import { withTenantFilter } from "../middleware/tenant-filter";
 import { buildTechnicalSheet } from "../services/technical-sheet-builder";
-import type { BaseItem, Item, RecipeLine } from "../types/database";
 
 const router = Router();
 

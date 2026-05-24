@@ -331,7 +331,6 @@ router.post("/:id/save-edits", async (req, res) => {
 /** Get one version (display payload + flags) */
 router.get("/:id", async (req, res) => {
   try {
-    const tenantId = selectedTenantId(req);
     const id = String(req.params.id ?? "").trim();
     if (!id) return res.status(400).json({ error: "id is required" });
 
