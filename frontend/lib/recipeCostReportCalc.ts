@@ -64,6 +64,20 @@ export function listPriceInputDisplay(
   return String(storedPerKg);
 }
 
+/** Read-only price cell — respects each toggle like edit inputs. */
+export function formatListPriceDisplay(
+  storedPerKg: number | null | undefined,
+  row: ListMemberRow,
+  eachMode: boolean,
+): string {
+  if (storedPerKg == null || !Number.isFinite(storedPerKg)) return "—";
+  if (eachMode && isEachPriceRow(row)) {
+    const perEach = (storedPerKg / 1000) * row.each_grams!;
+    return `$${perEach.toFixed(2)}/each`;
+  }
+  return `$${storedPerKg.toFixed(2)}/kg`;
+}
+
 /** Parse edited input back to stored $/kg for save + LCOG%. */
 export function listPriceInputToStoredPerKg(
   raw: string,

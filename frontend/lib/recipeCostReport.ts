@@ -6,6 +6,8 @@ export type CostBreakdown = {
   total_cost_per_gram: number;
 };
 
+export type CostBasis = "corporate" | "wholesale";
+
 export type ListMemberRow = {
   item_id: string;
   name: string;
@@ -16,6 +18,10 @@ export type ListMemberRow = {
   each_grams: number | null;
   latest_wholesale_price: number | null;
   latest_retail_price: number | null;
+  cost_basis?: CostBasis;
+  on_linked_wholesale_list?: boolean;
+  linked_wholesale_price?: number | null;
+  wholesale_cost_basis_selectable?: boolean;
   deprecation_reason?: "indirect" | null;
 };
 
@@ -56,9 +62,26 @@ export const recipeCostReportAPI = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
-  deleteWholesaleList: (listId: string) =>
+  getWholesaleRecipeImpact: (listId: string, item_ids: string[]) =>
+    apiRequest<{ item_ids: string[] }>(
+      `/recipe-cost-report/wholesale-lists/${listId}/wholesale-recipe-impact`,
+      {
+        method: "POST",
+        body: JSON.stringify({ item_ids }),
+      },
+    ),
+  getWholesaleListDeleteImpact: (listId: string) =>
+    apiRequest<{
+      list: { id: string; name: string };
+      linked_retail_lists: { id: string; name: string }[];
+    }>(`/recipe-cost-report/wholesale-lists/${listId}/delete-impact`),
+  deleteWholesaleList: (
+    listId: string,
+    options?: { delete_linked_retail_lists?: boolean },
+  ) =>
     apiRequest(`/recipe-cost-report/wholesale-lists/${listId}`, {
       method: "DELETE",
+      body: options ? JSON.stringify(options) : undefined,
     }),
   addWholesaleMember: (listId: string, item_id: string) =>
     apiRequest(`/recipe-cost-report/wholesale-lists/${listId}/members`, {
@@ -109,6 +132,7 @@ export const recipeCostReportAPI = {
     mode: "company_owned" | "franchise";
     wholesale_list_id?: string | null;
     item_ids: string[];
+    member_cost_basis?: Record<string, CostBasis>;
   }) =>
     apiRequest(`/recipe-cost-report/menu-cost-lists`, {
       method: "POST",
@@ -144,9 +168,24 @@ export const recipeCostReportAPI = {
       method: "POST",
       body: JSON.stringify({ item_id, retail_price }),
     }),
-  menuCostListCosts: (listId: string, item_ids: string[] = []) =>
+  menuCostListCosts: (
+    listId: string,
+    body: {
+      item_ids?: string[];
+      members?: Array<{ item_id: string; cost_basis: CostBasis }>;
+    } = {},
+  ) =>
     apiRequest<{ costs: Record<string, CostBreakdown> }>(
       `/recipe-cost-report/menu-cost-lists/${listId}/costs`,
-      { method: "POST", body: JSON.stringify({ item_ids }) },
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  updateMenuMemberCostBasis: (
+    listId: string,
+    itemId: string,
+    cost_basis: CostBasis,
+  ) =>
+    apiRequest<{ ok: true; cost_basis: CostBasis }>(
+      `/recipe-cost-report/menu-cost-lists/${listId}/members/${itemId}/cost-basis`,
+      { method: "PATCH", body: JSON.stringify({ cost_basis }) },
     ),
 };

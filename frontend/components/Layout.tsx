@@ -107,7 +107,7 @@ const foodCostingSubItems = [
   { id: "labor", label: "Labor", href: "/labor" },
   {
     id: "recipe-cost-report",
-    label: "Recipe Cost Report",
+    label: "Pricing",
     href: "/cost/recipe-cost-report",
   },
   { id: "settings", label: "Settings", href: "/food-costing/settings" },
@@ -614,7 +614,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/document-box")) return "Uploaded Document Box";
     if (pathname.startsWith("/dashboard")) return "Dashboard";
     if (pathname.startsWith("/settings")) return "Settings";
-    if (pathname.startsWith("/cost/recipe-cost-report")) return "Recipe Cost Report";
+    if (pathname.startsWith("/cost/recipe-cost-report")) return "Pricing";
     const foodItem = foodCostingSubItems.find((item) =>
       isFoodCostingSubItemActive(item.href, pathname),
     );

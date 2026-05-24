@@ -6,18 +6,31 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
 import {
   recipeCostReportAPI,
+  type CostBasis,
   type CostBreakdown,
   type ItemCandidate,
   type ListMemberRow,
 } from "@/lib/recipeCostReport";
 import {
   formatCostDisplay,
+  formatListPriceDisplay,
   listPriceInputDisplay,
   listPriceInputToStoredPerKg,
   lcogPercent,
 } from "@/lib/recipeCostReportCalc";
+import {
+  defaultCostBasisForMenuMember,
+  effectiveCostBasis,
+  wholesaleCostBasisSelectable,
+} from "@/lib/recipeCostReportCostBasis";
 import { subscribeWholesaleListLines } from "@/lib/recipeCostReportRealtime";
+import { CostBasisBadge } from "./CostBasisBadge";
+import { CostBasisControlSlot } from "./CostBasisControlSlot";
+import { CostBasisRadios } from "./CostBasisRadios";
 import { CreateListModal } from "./CreateListModal";
+import { DeleteListConfirmModal } from "./DeleteListConfirmModal";
+import { ItemKindBadge } from "./ItemKindBadge";
+import { PricingListPickerRow } from "./PricingListPickerRow";
 
 type PageMode = "wholesale" | "menu";
 
@@ -28,15 +41,11 @@ type MenuListMeta = {
   wholesale_list_id: string | null;
 };
 
-const PAGE_TITLES: Record<PageMode, string> = {
-  wholesale: "Wholesale List",
-  menu: "Menu Cost List",
-};
-
 type PendingMemberRow = {
   localId: string;
   item_id: string;
   price: string;
+  cost_basis?: CostBasis;
 };
 
 function newPendingLocalId(): string {
@@ -70,7 +79,6 @@ export function RecipeCostReportListPage({
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const { selectedTenantId } = useTenant();
-  const pageTitle = PAGE_TITLES[pageMode];
 
   const [lists, setLists] = useState<ListSummary[]>([]);
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
@@ -98,13 +106,27 @@ export function RecipeCostReportListPage({
   >([]);
   const [wlOptions, setWlOptions] = useState<{ id: string; name: string }[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [openListMenuId, setOpenListMenuId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    listId: string;
+    listName: string;
+    linkedRetailLists: { id: string; name: string }[];
+  } | null>(null);
+  const [deletingList, setDeletingList] = useState(false);
   const [pendingNewRows, setPendingNewRows] = useState<PendingMemberRow[]>([]);
   /** Removed in edit UI; persisted on Save, restored on Cancel via loadDetail. */
   const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(
     () => new Set(),
   );
   const [loading, setLoading] = useState(false);
+  const [costsLoading, setCostsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [linkedWlByItem, setLinkedWlByItem] = useState<
+    Map<string, number | null>
+  >(new Map());
+  const [wlRecipeImpactByItem, setWlRecipeImpactByItem] = useState<Set<string>>(
+    new Set(),
+  );
   const [isEditMode, setIsEditMode] = useState(false);
   const [costUnit, setCostUnit] = useState<"g" | "kg">("kg");
   const [eachMode, setEachMode] = useState(false);
@@ -149,27 +171,66 @@ export function RecipeCostReportListPage({
   }, [pageMode, selectedTenantId, selectedListId]);
 
   const loadCosts = useCallback(
-    async (listId: string, itemIds: string[], meta?: MenuListMeta) => {
+    async (
+      listId: string,
+      itemIds: string[],
+      meta?: MenuListMeta,
+      memberRows?: ListMemberRow[],
+      pendingRows?: PendingMemberRow[],
+    ) => {
       if (itemIds.length === 0) {
         setCosts({});
         return;
       }
-      if (pageMode === "wholesale") {
-        const { costs: c } = await recipeCostReportAPI.wholesaleListCosts(
-          listId,
-          itemIds,
-        );
-        setCosts(c);
-      } else {
-        const { costs: c } = await recipeCostReportAPI.menuCostListCosts(
-          listId,
-          itemIds,
-        );
-        setCosts(c);
-        void meta;
+      setCostsLoading(true);
+      try {
+        if (pageMode === "wholesale") {
+          const { costs: c } = await recipeCostReportAPI.wholesaleListCosts(
+            listId,
+            itemIds,
+          );
+          setCosts(c);
+        } else {
+          const listMode = meta?.mode ?? "company_owned";
+          const membersPayload = itemIds.map((item_id) => {
+            const row = memberRows?.find((m) => m.item_id === item_id);
+            if (row) {
+              return {
+                item_id,
+                cost_basis: effectiveCostBasis(row, listMode),
+              };
+            }
+            const pending = pendingRows?.find((p) => p.item_id === item_id);
+            if (pending?.cost_basis) {
+              return { item_id, cost_basis: pending.cost_basis };
+            }
+            const onWl = linkedWlByItem.has(item_id);
+            const linkedPrice = linkedWlByItem.get(item_id) ?? null;
+            const memberRow = memberRows?.find((m) => m.item_id === item_id);
+            const selectable =
+              memberRow?.wholesale_cost_basis_selectable ??
+              wlRecipeImpactByItem.has(item_id);
+            return {
+              item_id,
+              cost_basis: defaultCostBasisForMenuMember(
+                listMode,
+                selectable,
+                onWl,
+                linkedPrice,
+              ),
+            };
+          });
+          const { costs: c } = await recipeCostReportAPI.menuCostListCosts(
+            listId,
+            { item_ids: itemIds, members: membersPayload },
+          );
+          setCosts(c);
+        }
+      } finally {
+        setCostsLoading(false);
       }
     },
-    [pageMode],
+    [pageMode, linkedWlByItem, wlRecipeImpactByItem],
   );
 
   const costItemIds = useMemo(() => {
@@ -179,6 +240,17 @@ export function RecipeCostReportListPage({
     }
     return [...ids];
   }, [members, pendingNewRows]);
+
+  /** Pending row price edits must not retrigger cost API (e.g. each display toggle). */
+  const pendingCostBasisKey = useMemo(
+    () =>
+      pendingNewRows
+        .filter((p) => p.item_id)
+        .map((p) => `${p.item_id}:${p.cost_basis ?? "corporate"}`)
+        .sort()
+        .join("|"),
+    [pendingNewRows],
+  );
 
   const loadDetail = useCallback(
     async (listId: string) => {
@@ -247,9 +319,59 @@ export function RecipeCostReportListPage({
     void loadDetail(selectedListId);
   }, [selectedListId, loadDetail]);
 
+  const menuCostBasisKey = useMemo(
+    () =>
+      members
+        .map((m) => `${m.item_id}:${effectiveCostBasis(m, menuMeta.mode)}`)
+        .join("|"),
+    [members, menuMeta.mode],
+  );
+
+  useEffect(() => {
+    if (pageMode !== "menu" || menuMeta.mode !== "franchise") {
+      setLinkedWlByItem(new Map());
+      setWlRecipeImpactByItem(new Set());
+      return;
+    }
+    if (!menuMeta.wholesale_list_id) {
+      setLinkedWlByItem(new Map());
+      setWlRecipeImpactByItem(new Set());
+      return;
+    }
+    const wlId = menuMeta.wholesale_list_id;
+    const impactIds = candidatesTenantOnly.map((c) => c.id);
+    let cancelled = false;
+    void Promise.all([
+      recipeCostReportAPI.getWholesaleList(wlId),
+      recipeCostReportAPI.getWholesaleRecipeImpact(wlId, impactIds),
+    ]).then(([{ members: wlMembers }, { item_ids: impactedIds }]) => {
+      if (cancelled) return;
+      const map = new Map<string, number | null>();
+      for (const m of wlMembers) {
+        map.set(m.item_id, m.latest_wholesale_price);
+      }
+      setLinkedWlByItem(map);
+      setWlRecipeImpactByItem(new Set(impactedIds));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    pageMode,
+    menuMeta.mode,
+    menuMeta.wholesale_list_id,
+    candidatesTenantOnly,
+  ]);
+
   useEffect(() => {
     if (!selectedListId || loading) return;
-    void loadCosts(selectedListId, costItemIds, menuMeta);
+    void loadCosts(
+      selectedListId,
+      costItemIds,
+      menuMeta,
+      members,
+      pendingNewRows,
+    );
   }, [
     selectedListId,
     loading,
@@ -257,13 +379,21 @@ export function RecipeCostReportListPage({
     loadCosts,
     menuMeta.mode,
     menuMeta.wholesale_list_id,
+    menuCostBasisKey,
+    pendingCostBasisKey,
   ]);
 
   useEffect(() => {
     if (pageMode !== "menu" || menuMeta.mode !== "franchise") return;
     if (!menuMeta.wholesale_list_id || !selectedListId) return;
     return subscribeWholesaleListLines(menuMeta.wholesale_list_id, () => {
-      void loadCosts(selectedListId, costItemIds, menuMeta);
+      void loadCosts(
+        selectedListId,
+        costItemIds,
+        menuMetaRef.current,
+        membersRef.current,
+        pendingNewRowsRef.current,
+      );
     });
   }, [
     pageMode,
@@ -272,6 +402,8 @@ export function RecipeCostReportListPage({
     selectedListId,
     costItemIds,
     loadCosts,
+    menuCostBasisKey,
+    pendingCostBasisKey,
   ]);
 
   const memberIds = useMemo(() => new Set(members.map((m) => m.item_id)), [members]);
@@ -280,6 +412,13 @@ export function RecipeCostReportListPage({
     () => new Map(pickerCandidates.map((c) => [c.id, c])),
     [pickerCandidates],
   );
+
+  const membersRef = useRef(members);
+  membersRef.current = members;
+  const pendingNewRowsRef = useRef(pendingNewRows);
+  pendingNewRowsRef.current = pendingNewRows;
+  const menuMetaRef = useRef(menuMeta);
+  menuMetaRef.current = menuMeta;
 
   const prevEachModeRef = useRef(eachMode);
   useEffect(() => {
@@ -290,26 +429,35 @@ export function RecipeCostReportListPage({
     setDraftWholesale(new Map());
     setDraftRetail(new Map());
 
-    setPendingNewRows((rows) =>
-      rows.map((p) => {
+    setPendingNewRows((rows) => {
+      if (rows.length === 0) return rows;
+      let changed = false;
+      const next = rows.map((p) => {
         if (!p.price.trim() || !p.item_id) return p;
         const c = candidateById.get(p.item_id);
         if (!c) return p;
         const row = memberRowFromCandidate(p.item_id, c);
         const n = parseFloat(p.price);
         if (!Number.isFinite(n)) return p;
-        if (row.proceed_yield_unit !== "each" || !row.each_grams || row.each_grams <= 0) {
+        if (
+          row.proceed_yield_unit !== "each" ||
+          !row.each_grams ||
+          row.each_grams <= 0
+        ) {
           return p;
         }
         if (prev && !eachMode) {
+          changed = true;
           return { ...p, price: String((n / row.each_grams) * 1000) };
         }
         if (!prev && eachMode) {
+          changed = true;
           return { ...p, price: String((n / 1000) * row.each_grams) };
         }
         return p;
-      }),
-    );
+      });
+      return changed ? next : rows;
+    });
   }, [eachMode, candidateById]);
 
   const hasDraftPrices = useMemo(() => {
@@ -410,7 +558,161 @@ export function RecipeCostReportListPage({
       return;
     }
     setPendingNewRows((prev) =>
-      prev.map((p) => (p.localId === localId ? { ...p, item_id: itemId } : p)),
+      prev.map((p) => {
+        if (p.localId !== localId) return p;
+        if (!itemId) return { ...p, item_id: itemId, cost_basis: undefined };
+        if (pageMode !== "menu" || menuMeta.mode !== "franchise") {
+          return { ...p, item_id: itemId, cost_basis: "corporate" as const };
+        }
+        const onWl = linkedWlByItem.has(itemId);
+        const linkedPrice = linkedWlByItem.get(itemId) ?? null;
+        const selectable = wlRecipeImpactByItem.has(itemId);
+        return {
+          ...p,
+          item_id: itemId,
+          cost_basis: defaultCostBasisForMenuMember(
+            "franchise",
+            selectable,
+            onWl,
+            linkedPrice,
+          ),
+        };
+      }),
+    );
+  };
+
+  const handleCostBasisChange = async (itemId: string, basis: CostBasis) => {
+    if (!selectedListId || pageMode !== "menu") return;
+    const prevMembers = members;
+    const nextMembers = prevMembers.map((m) =>
+      m.item_id === itemId ? { ...m, cost_basis: basis } : m,
+    );
+    setMembers(nextMembers);
+    setCostsLoading(true);
+    try {
+      await recipeCostReportAPI.updateMenuMemberCostBasis(
+        selectedListId,
+        itemId,
+        basis,
+      );
+      const { costs: c } = await recipeCostReportAPI.menuCostListCosts(
+        selectedListId,
+        {
+          item_ids: costItemIds,
+          members: costItemIds.map((id) => {
+            const row = nextMembers.find((m) => m.item_id === id);
+            const pending = pendingNewRows.find((p) => p.item_id === id);
+            if (row) {
+              return {
+                item_id: id,
+                cost_basis: effectiveCostBasis(row, menuMeta.mode),
+              };
+            }
+            if (pending?.cost_basis) {
+              return { item_id: id, cost_basis: pending.cost_basis };
+            }
+            return { item_id: id, cost_basis: "corporate" as const };
+          }),
+        },
+      );
+      setCosts((prev) => ({ ...prev, ...c }));
+    } catch (e) {
+      setMembers(prevMembers);
+      alert(e instanceof Error ? e.message : "Failed to update cost basis");
+    } finally {
+      setCostsLoading(false);
+    }
+  };
+
+  const updatePendingCostBasis = (localId: string, basis: CostBasis) => {
+    setPendingNewRows((prev) =>
+      prev.map((p) => (p.localId === localId ? { ...p, cost_basis: basis } : p)),
+    );
+    const row = pendingNewRows.find((p) => p.localId === localId);
+    if (row?.item_id && selectedListId) {
+      void loadCosts(
+        selectedListId,
+        costItemIds,
+        menuMeta,
+        members,
+        pendingNewRows.map((p) =>
+          p.localId === localId ? { ...p, cost_basis: basis } : p,
+        ),
+      );
+    }
+  };
+
+  const showMenuCostBasis =
+    pageMode === "menu" &&
+    menuMeta.mode === "franchise" &&
+    !!menuMeta.wholesale_list_id;
+
+  const renderCostBasisControl = (
+    itemId: string,
+    row: ListMemberRow | null,
+    pendingLocalId?: string,
+    pendingBasis?: CostBasis,
+  ) => {
+    if (!showMenuCostBasis || !itemId) return null;
+    const onWl =
+      row?.on_linked_wholesale_list ?? linkedWlByItem.has(itemId);
+    const linkedPrice =
+      row?.linked_wholesale_price ?? linkedWlByItem.get(itemId) ?? null;
+    const wholesaleSelectable = wholesaleCostBasisSelectable(
+      row?.wholesale_cost_basis_selectable ??
+        wlRecipeImpactByItem.has(itemId),
+    );
+    const basis =
+      pendingBasis ??
+      (row ? effectiveCostBasis(row, menuMeta.mode) : "corporate");
+    const name = `cost-basis-${pendingLocalId ?? itemId}`;
+
+    return (
+      <CostBasisRadios
+        groupName={name}
+        basis={basis}
+        wholesaleSelectable={wholesaleSelectable}
+        textMain={textMain}
+        onCorporate={() => {
+          if (pendingLocalId) {
+            updatePendingCostBasis(pendingLocalId, "corporate");
+          } else {
+            void handleCostBasisChange(itemId, "corporate");
+          }
+        }}
+        onWholesale={() => {
+          if (pendingLocalId) {
+            updatePendingCostBasis(pendingLocalId, "wholesale");
+          } else {
+            void handleCostBasisChange(itemId, "wholesale");
+          }
+        }}
+      />
+    );
+  };
+
+  const renderCostBasisBadge = (row: ListMemberRow) => {
+    if (!showMenuCostBasis) return null;
+    return (
+      <CostBasisBadge
+        basis={effectiveCostBasis(row, menuMeta.mode)}
+        isDark={isDark}
+      />
+    );
+  };
+
+  const renderCostBasisSlot = (
+    itemId: string,
+    row: ListMemberRow | null,
+    pendingLocalId?: string,
+    pendingBasis?: CostBasis,
+    loading = false,
+  ) => {
+    if (!showMenuCostBasis) return null;
+    return (
+      <CostBasisControlSlot loading={loading} isDark={isDark}>
+        {itemId ? renderCostBasisControl(itemId, row, pendingLocalId, pendingBasis) : null}
+      </CostBasisControlSlot>
     );
   };
 
@@ -429,16 +731,12 @@ export function RecipeCostReportListPage({
         : "text-red-600 hover:bg-red-50"
     } ${visible ? "" : "invisible pointer-events-none"}`;
 
-  const formatPricePerKg = (value: number | null | undefined) => {
-    if (value == null || !Number.isFinite(value)) return "—";
-    return `$${value.toFixed(2)}/kg`;
-  };
-
   const handleCreate = async (payload: {
     name: string;
     item_ids: string[];
     mode?: "company_owned" | "franchise";
     wholesale_list_id?: string | null;
+    member_cost_basis?: Record<string, CostBasis>;
   }) => {
     if (pageMode === "wholesale") {
       const res = await recipeCostReportAPI.createWholesaleList({
@@ -457,6 +755,7 @@ export function RecipeCostReportListPage({
         mode: payload.mode ?? "company_owned",
         wholesale_list_id: payload.wholesale_list_id ?? null,
         item_ids: payload.item_ids,
+        member_cost_basis: payload.member_cost_basis,
       })) as {
         list: {
           id: string;
@@ -481,6 +780,7 @@ export function RecipeCostReportListPage({
         res.list.id,
         res.members.map((m) => m.item_id),
         meta,
+        res.members,
       );
     }
     setShowCreate(false);
@@ -573,6 +873,16 @@ export function RecipeCostReportListPage({
         }
         for (const row of pendingNewRows) {
           await recipeCostReportAPI.addMenuCostMember(selectedListId, row.item_id);
+          if (
+            row.cost_basis === "wholesale" &&
+            menuMeta.mode === "franchise"
+          ) {
+            await recipeCostReportAPI.updateMenuMemberCostBasis(
+              selectedListId,
+              row.item_id,
+              "wholesale",
+            );
+          }
           const c = candidateById.get(row.item_id)!;
           const n = listPriceInputToStoredPerKg(
             row.price,
@@ -613,48 +923,136 @@ export function RecipeCostReportListPage({
   }`;
   const cardShell = `flex min-h-0 flex-col overflow-hidden rounded-lg border shadow-sm ${card} ${border}`;
 
+  const listSectionLabel =
+    pageMode === "wholesale" ? "Wholesale price name" : "Retail price name";
+  const createButtonLabel =
+    pageMode === "wholesale" ? "Wholesale price list" : "Retail price list";
+
+  const applyListSelectionAfterDelete = useCallback(
+    (deletedId: string, remaining: ListSummary[]) => {
+      if (selectedListId !== deletedId) return;
+      if (remaining.length === 0) {
+        setSelectedListId(null);
+        setMembers([]);
+        setCosts({});
+        return;
+      }
+      setSelectedListId(remaining[0].id);
+    },
+    [selectedListId],
+  );
+
+  const beginDeleteList = useCallback(
+    async (list: ListSummary) => {
+      setOpenListMenuId(null);
+      if (isEditMode) {
+        const ok = window.confirm(
+          "You have unsaved edits. Discard them and delete this list?",
+        );
+        if (!ok) return;
+        setIsEditMode(false);
+        setPendingNewRows([]);
+        setPendingRemovals(new Set());
+      }
+
+      if (pageMode === "menu") {
+        setDeleteConfirm({
+          listId: list.id,
+          listName: list.name,
+          linkedRetailLists: [],
+        });
+        return;
+      }
+
+      try {
+        const impact = await recipeCostReportAPI.getWholesaleListDeleteImpact(
+          list.id,
+        );
+        setDeleteConfirm({
+          listId: list.id,
+          listName: impact.list.name,
+          linkedRetailLists: impact.linked_retail_lists,
+        });
+      } catch (e) {
+        alert(e instanceof Error ? e.message : "Failed to load delete details");
+      }
+    },
+    [pageMode, isEditMode],
+  );
+
+  const confirmDeleteList = useCallback(async () => {
+    if (!deleteConfirm) return;
+    setDeletingList(true);
+    try {
+      if (pageMode === "wholesale") {
+        await recipeCostReportAPI.deleteWholesaleList(deleteConfirm.listId, {
+          delete_linked_retail_lists:
+            deleteConfirm.linkedRetailLists.length > 0,
+        });
+      } else {
+        await recipeCostReportAPI.deleteMenuCostList(deleteConfirm.listId);
+      }
+
+      const remaining = lists.filter((l) => l.id !== deleteConfirm.listId);
+      setLists(remaining);
+      applyListSelectionAfterDelete(deleteConfirm.listId, remaining);
+      setDeleteConfirm(null);
+
+      if (pageMode === "menu") {
+        void recipeCostReportAPI.wholesaleListOptions().then((r) => {
+          setWlOptions(r.lists);
+        });
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeletingList(false);
+    }
+  }, [
+    deleteConfirm,
+    pageMode,
+    lists,
+    applyListSelectionAfterDelete,
+  ]);
+
   const listPickerCard = (
     <div className={`${cardShell} h-full min-h-0 w-[240px] shrink-0`}>
       <div className={`shrink-0 border-b px-4 py-4 ${border}`}>
-        <p className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
-          Lists
-        </p>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
           disabled={!selectedTenantId}
-          className={`${btnPrimary} mt-3 w-full`}
+          className={`${btnPrimary} w-full`}
         >
           <Plus className="h-4 w-4 shrink-0" />
-          Create list
+          {createButtonLabel}
         </button>
+        <p className={`mt-4 text-xs font-medium uppercase tracking-wide ${muted}`}>
+          {listSectionLabel}
+        </p>
       </div>
       <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
         {lists.length === 0 ? (
           <li className={`px-3 py-8 text-center text-sm ${muted}`}>No lists yet</li>
         ) : (
-          lists.map((l) => {
-            const active = selectedListId === l.id;
-            return (
-              <li key={l.id}>
-                <button
-                  type="button"
-                  onClick={() => setSelectedListId(l.id)}
-                  className={`w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
-                    active
-                      ? isDark
-                        ? "bg-blue-600/20 text-blue-300 ring-1 ring-blue-500/50"
-                        : "bg-blue-50 text-blue-800 ring-1 ring-blue-200"
-                      : isDark
-                        ? "text-slate-300 hover:bg-slate-700/80"
-                        : "text-gray-700 hover:bg-gray-100"
-                  }`}
-                >
-                  <span className="line-clamp-2">{l.name}</span>
-                </button>
-              </li>
-            );
-          })
+          lists.map((l) => (
+            <PricingListPickerRow
+              key={l.id}
+              name={l.name}
+              active={selectedListId === l.id}
+              isDark={isDark}
+              menuOpen={openListMenuId === l.id}
+              onSelect={() => {
+                setOpenListMenuId(null);
+                setSelectedListId(l.id);
+              }}
+              onToggleMenu={() =>
+                setOpenListMenuId((prev) => (prev === l.id ? null : l.id))
+              }
+              onCloseMenu={() => setOpenListMenuId(null)}
+              onDelete={() => void beginDeleteList(l)}
+            />
+          ))
         )}
       </ul>
     </div>
@@ -741,7 +1139,7 @@ export function RecipeCostReportListPage({
                           htmlFor="rcr-wl-select"
                           className={`mb-1.5 block text-xs font-medium uppercase tracking-wide ${muted}`}
                         >
-                          Wholesale list
+                          Wholesale price list
                         </label>
                         <select
                           id="rcr-wl-select"
@@ -880,9 +1278,7 @@ export function RecipeCostReportListPage({
                           </div>
                         </th>
                         <th className={`${thCls} text-left w-40`}>
-                          {pageMode === "wholesale"
-                            ? "Wholesale ($/kg)"
-                            : "Retail ($/kg)"}
+                          {pageMode === "wholesale" ? "Wholesale" : "Retail"}
                         </th>
                         <th className={`${thCls} text-left w-24`}>LCOG%</th>
                         <th
@@ -944,62 +1340,72 @@ export function RecipeCostReportListPage({
                             style={{ height: 52 }}
                           >
                             <td className="px-4 py-2">
-                              <select
-                                value={pending.item_id}
-                                onChange={(e) =>
-                                  updatePendingItemId(
-                                    pending.localId,
-                                    e.target.value,
-                                  )
-                                }
-                                className={inputCls}
-                                aria-label="Item to add"
-                              >
-                                <option value="">Choose an item…</option>
-                                {pending.item_id &&
-                                  c &&
-                                  !rowOptions.some((o) => o.id === c.id) && (
-                                    <option value={c.id}>
-                                      {c.name} (
-                                      {c.is_menu_item ? "menu" : "prepped"})
+                              <div className="flex min-w-0 items-center gap-2">
+                                <select
+                                  value={pending.item_id}
+                                  onChange={(e) =>
+                                    updatePendingItemId(
+                                      pending.localId,
+                                      e.target.value,
+                                    )
+                                  }
+                                  className={`${inputCls} min-w-0 flex-1 ${
+                                    showMenuCostBasis && isEditMode
+                                      ? "max-w-[calc(100%-12rem)]"
+                                      : ""
+                                  }`}
+                                  aria-label="Item to add"
+                                >
+                                  <option value="">Choose an item…</option>
+                                  {pending.item_id &&
+                                    c &&
+                                    !rowOptions.some((o) => o.id === c.id) && (
+                                      <option value={c.id}>
+                                        {c.name} (
+                                        {c.is_menu_item ? "menu" : "prepped"})
+                                      </option>
+                                    )}
+                                  {rowOptions.map((opt) => (
+                                    <option key={opt.id} value={opt.id}>
+                                      {opt.name}
+                                      {opt.is_cross_tenant ? " · shared" : ""} (
+                                      {opt.is_menu_item ? "menu" : "prepped"})
                                     </option>
+                                  ))}
+                                </select>
+                                {isEditMode &&
+                                  renderCostBasisSlot(
+                                    pending.item_id,
+                                    pendingRow,
+                                    pending.localId,
+                                    pending.cost_basis,
                                   )}
-                                {rowOptions.map((opt) => (
-                                  <option key={opt.id} value={opt.id}>
-                                    {opt.name}
-                                    {opt.is_cross_tenant ? " · shared" : ""} (
-                                    {opt.is_menu_item ? "menu" : "prepped"})
-                                  </option>
-                                ))}
-                              </select>
+                              </div>
                             </td>
                             <td className={`px-4 py-2 ${muted}`}>
                               {c ? (
-                                <span
-                                  className={`inline-flex rounded-md px-2 py-0.5 text-xs font-medium ${
-                                    c.is_menu_item
-                                      ? isDark
-                                        ? "bg-violet-900/40 text-violet-200"
-                                        : "bg-violet-100 text-violet-800"
-                                      : isDark
-                                        ? "bg-slate-700 text-slate-300"
-                                        : "bg-gray-100 text-gray-600"
-                                  }`}
-                                >
-                                  {c.is_menu_item ? "Menu" : "Prepped"}
-                                </span>
+                                <ItemKindBadge
+                                  isMenuItem={c.is_menu_item}
+                                  isDark={isDark}
+                                />
                               ) : (
                                 "—"
                               )}
                             </td>
                             <td className={`px-4 py-2 text-left tabular-nums ${muted}`}>
-                              {pendingRow
-                                ? formatCostDisplay(
-                                    pendingRow,
-                                    pendingBd,
-                                    costDisplayOptions,
-                                  )
-                                : "—"}
+                              {costsLoading &&
+                              pending.item_id &&
+                              pendingBd === undefined ? (
+                                <span className={muted}>…</span>
+                              ) : pendingRow ? (
+                                formatCostDisplay(
+                                  pendingRow,
+                                  pendingBd,
+                                  costDisplayOptions,
+                                )
+                              ) : (
+                                "—"
+                              )}
                             </td>
                             <td className="px-4 py-2 text-left tabular-nums">
                               <input
@@ -1078,8 +1484,11 @@ export function RecipeCostReportListPage({
                             style={{ height: 52 }}
                           >
                             <td className={`px-4 py-2 font-medium ${textMain}`}>
-                              <div className="flex flex-wrap items-center gap-2">
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
                                 <span>{row.name}</span>
+                                {!isEditMode && renderCostBasisBadge(row)}
+                                {isEditMode &&
+                                  renderCostBasisSlot(row.item_id, row)}
                                 {row.deprecation_reason === "indirect" && (
                                   <span
                                     className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${
@@ -1095,22 +1504,17 @@ export function RecipeCostReportListPage({
                               </div>
                             </td>
                             <td className={`px-4 py-2 ${muted}`}>
-                              <span
-                                className={`inline-flex rounded-md px-2 py-0.5 text-xs font-medium ${
-                                  row.is_menu_item
-                                    ? isDark
-                                      ? "bg-violet-900/40 text-violet-200"
-                                      : "bg-violet-100 text-violet-800"
-                                    : isDark
-                                      ? "bg-slate-700 text-slate-300"
-                                      : "bg-gray-100 text-gray-600"
-                                }`}
-                              >
-                                {row.is_menu_item ? "Menu" : "Prepped"}
-                              </span>
+                              <ItemKindBadge
+                                isMenuItem={row.is_menu_item}
+                                isDark={isDark}
+                              />
                             </td>
                             <td className={`px-4 py-2 text-left tabular-nums ${muted}`}>
-                              {formatCostDisplay(row, bd, costDisplayOptions)}
+                              {costsLoading && bd === undefined ? (
+                                <span className={muted}>…</span>
+                              ) : (
+                                formatCostDisplay(row, bd, costDisplayOptions)
+                              )}
                             </td>
                             <td className="px-4 py-2 text-left tabular-nums">
                               {isEditMode ? (
@@ -1143,8 +1547,16 @@ export function RecipeCostReportListPage({
                               ) : (
                                 <span className={textMain}>
                                   {pageMode === "wholesale"
-                                    ? formatPricePerKg(row.latest_wholesale_price)
-                                    : formatPricePerKg(row.latest_retail_price)}
+                                    ? formatListPriceDisplay(
+                                        row.latest_wholesale_price,
+                                        row,
+                                        eachMode,
+                                      )
+                                    : formatListPriceDisplay(
+                                        row.latest_retail_price,
+                                        row,
+                                        eachMode,
+                                      )}
                                 </span>
                               )}
                             </td>
@@ -1197,7 +1609,7 @@ export function RecipeCostReportListPage({
         {showPageHeading && (
           <header className="shrink-0">
             <h1 className={`text-2xl font-semibold tracking-tight ${textMain}`}>
-              {pageTitle}
+              Pricing
             </h1>
           </header>
         )}
@@ -1221,6 +1633,20 @@ export function RecipeCostReportListPage({
           wlOptions={wlOptions}
           onClose={() => setShowCreate(false)}
           onCreate={(p) => void handleCreate(p)}
+        />
+      )}
+
+      {deleteConfirm && (
+        <DeleteListConfirmModal
+          isDark={isDark}
+          pageMode={pageMode}
+          listName={deleteConfirm.listName}
+          linkedRetailLists={deleteConfirm.linkedRetailLists}
+          deleting={deletingList}
+          onCancel={() => {
+            if (!deletingList) setDeleteConfirm(null);
+          }}
+          onConfirm={() => void confirmDeleteList()}
         />
       )}
     </div>
