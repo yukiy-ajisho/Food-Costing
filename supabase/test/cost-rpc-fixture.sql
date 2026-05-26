@@ -1,0 +1,14 @@
+-- COST RPC integration test fixtures (load order)
+--
+-- 1. Schema (empty DB):
+--    psql -f supabase/test/schema-baseline-20260520_pre_cost_breakdown_rpc_tests.sql
+--
+-- 2. Base data (§A–§F, WL scenario A = no members/lines):
+--    psql -f supabase/test/cost-rpc-fixture-base.sql
+--
+-- 3. Optional wholesale scenario (replaces WL members/lines on wl_test_list):
+--    psql -f supabase/test/cost-rpc-fixture-wl-C01B.sql
+--    psql -f supabase/test/cost-rpc-fixture-wl-C02B.sql
+--    … see cost-rpc-fixture-wl-*.sql in this directory
+--
+-- Plan: docs/cost-rpc-integration-test-plan.txt

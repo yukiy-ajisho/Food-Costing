@@ -174,7 +174,11 @@ const licenseSubItems = [
 // レイアウトコンテンツコンポーネント
 export function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { companies, selectedCompanyId, loading: companyLoading } = useCompany();
+  const {
+    companies,
+    selectedCompanyId,
+    loading: companyLoading,
+  } = useCompany();
   const { selectedTenantId, tenants } = useTenant();
   const canAccessDocumentBox = useMemo(() => {
     if (!selectedCompanyId) return false;
@@ -711,7 +715,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
               sidebarMode === "compact" ? "Expand sidebar" : "Collapse sidebar"
             }
           >
-            {sidebarMode === "full" && <ChevronLeft className="h-4 w-4 -mr-1" />}
+            {sidebarMode === "full" && (
+              <ChevronLeft className="h-4 w-4 -mr-1" />
+            )}
             {sidebarMode === "compact" ? (
               <svg
                 viewBox="0 0 24 24"
