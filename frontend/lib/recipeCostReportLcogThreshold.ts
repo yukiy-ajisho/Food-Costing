@@ -77,9 +77,9 @@ export function getEffectiveLcogThresholds(
   const cautionParsed = parsePositiveThreshold(cautionRaw);
   const overParsed = parsePositiveThreshold(overRaw);
 
-  let cautionInvalid = cautionParsed === "invalid";
+  const cautionInvalid = cautionParsed === "invalid";
   let overInvalid = overParsed === "invalid";
-  let caution: number | null =
+  const caution: number | null =
     cautionParsed === "invalid" || cautionParsed === null ? null : cautionParsed;
   let over: number | null =
     overParsed === "invalid" || overParsed === null ? null : overParsed;
