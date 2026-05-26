@@ -12,6 +12,7 @@ import {
   defaultCostBasisForMenuMember,
   wholesaleCostBasisSelectable,
 } from "@/lib/recipeCostReportCostBasis";
+import { validateLcogThresholdsForCreate } from "@/lib/recipeCostReportLcogThreshold";
 import { CostBasisRadios } from "./CostBasisRadios";
 import { ItemKindBadge } from "./ItemKindBadge";
 
@@ -28,6 +29,8 @@ type Props = {
     mode?: "company_owned" | "franchise";
     wholesale_list_id?: string | null;
     member_cost_basis?: Record<string, CostBasis>;
+    caution?: number | null;
+    over?: number | null;
   }) => void;
 };
 
@@ -41,6 +44,8 @@ export function CreateListModal({
   onCreate,
 }: Props) {
   const [name, setName] = useState("");
+  const [cautionRaw, setCautionRaw] = useState("");
+  const [overRaw, setOverRaw] = useState("");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<"company_owned" | "franchise">("company_owned");
@@ -180,6 +185,45 @@ export function CreateListModal({
       : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
   }`;
 
+  const thresholdFields = (
+    <div className="grid grid-cols-2 gap-4">
+      <div>
+        <label
+          htmlFor="create-caution"
+          className={`mb-1.5 block text-xs font-medium uppercase tracking-wide ${muted}`}
+        >
+          Caution (%)
+        </label>
+        <input
+          id="create-caution"
+          type="text"
+          inputMode="decimal"
+          value={cautionRaw}
+          onChange={(e) => setCautionRaw(e.target.value)}
+          className={inputCls}
+          placeholder="Optional"
+        />
+      </div>
+      <div>
+        <label
+          htmlFor="create-over"
+          className={`mb-1.5 block text-xs font-medium uppercase tracking-wide ${muted}`}
+        >
+          Over (%)
+        </label>
+        <input
+          id="create-over"
+          type="text"
+          inputMode="decimal"
+          value={overRaw}
+          onChange={(e) => setOverRaw(e.target.value)}
+          className={inputCls}
+          placeholder="Optional"
+        />
+      </div>
+    </div>
+  );
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -188,7 +232,7 @@ export function CreateListModal({
       aria-labelledby="create-list-title"
     >
       <div
-        className={`flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border shadow-xl ${
+        className={`flex min-h-[90vh] max-h-[999vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border shadow-xl ${
           isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-white"
         }`}
         onClick={(e) => e.stopPropagation()}
@@ -229,6 +273,8 @@ export function CreateListModal({
             />
           </div>
 
+          {pageMode === "wholesale" ? thresholdFields : null}
+
           {pageMode === "menu" && (
             <div className="space-y-3">
               <fieldset className="flex flex-wrap gap-4">
@@ -242,7 +288,7 @@ export function CreateListModal({
                     onChange={() => setMode("company_owned")}
                     className="h-4 w-4"
                   />
-                  Company-owned
+                  Direct
                 </label>
                 <label
                   className={`flex h-10 cursor-pointer items-center gap-2 text-sm ${textMain}`}
@@ -405,6 +451,8 @@ export function CreateListModal({
               })
             )}
           </ul>
+
+          {pageMode === "menu" ? thresholdFields : null}
         </div>
 
         <div
@@ -435,6 +483,14 @@ export function CreateListModal({
                   member_cost_basis[id] = "corporate";
                 }
               }
+              const thresholdValidation = validateLcogThresholdsForCreate(
+                cautionRaw,
+                overRaw,
+              );
+              if (!thresholdValidation.ok) {
+                alert(thresholdValidation.message);
+                return;
+              }
               onCreate({
                 name: name.trim(),
                 item_ids,
@@ -443,6 +499,8 @@ export function CreateListModal({
                   pageMode === "menu" && mode === "franchise" ? wlId || null : null,
                 member_cost_basis:
                   pageMode === "menu" ? member_cost_basis : undefined,
+                caution: thresholdValidation.caution,
+                over: thresholdValidation.over,
               });
             }}
             className={btnPrimary}

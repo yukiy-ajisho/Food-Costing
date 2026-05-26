@@ -61,6 +61,36 @@ function userId(req: Request): string {
   return req.user.id;
 }
 
+function parseLcogThresholdField(
+  value: unknown,
+  fieldName: string,
+): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`${fieldName} must be a number greater than 0`);
+  }
+  const rounded = Math.round(n * 100) / 100;
+  if (Math.abs(n - rounded) > 1e-9) {
+    throw new Error(`${fieldName} allows at most 2 decimal places`);
+  }
+  return rounded;
+}
+
+function parseLcogThresholdPair(
+  body: unknown,
+): { caution: number | null; over: number | null } {
+  const raw = body as { caution?: unknown; over?: unknown };
+  const caution = parseLcogThresholdField(raw.caution, "caution");
+  const over = parseLcogThresholdField(raw.over, "over");
+  if (caution != null && over != null && caution >= over) {
+    throw new Error("caution must be less than over when both are set");
+  }
+  return { caution, over };
+}
+
 function parseMemberCostBasisBody(
   body: unknown,
 ): Record<string, CostBasis> | undefined {
@@ -132,7 +162,10 @@ async function resolveInsertCostBasis(
 router.get("/wholesale-lists", async (req, res) => {
   try {
     const { data, error } = await withTenantFilter(
-      supabase.from("wholesale_lists").select("id, name, created_at").order("name"),
+      supabase
+        .from("wholesale_lists")
+        .select("id, name, caution, over, created_at")
+        .order("name"),
       req,
     );
     if (error) return res.status(500).json({ error: error.message });
@@ -152,12 +185,27 @@ router.post("/wholesale-lists", async (req, res) => {
       : [];
     if (!name) return res.status(400).json({ error: "name is required" });
 
+    let thresholds: { caution: number | null; over: number | null };
+    try {
+      thresholds = parseLcogThresholdPair(req.body);
+    } catch (e: unknown) {
+      return res
+        .status(400)
+        .json({ error: e instanceof Error ? e.message : String(e) });
+    }
+
     const validIds = await validatePreppedMenuItemIds(tid, itemIds);
 
     const { data: list, error: listErr } = await supabase
       .from("wholesale_lists")
-      .insert({ tenant_id: tid, name, created_by: uid })
-      .select("id, name, created_at")
+      .insert({
+        tenant_id: tid,
+        name,
+        created_by: uid,
+        caution: thresholds.caution,
+        over: thresholds.over,
+      })
+      .select("id, name, caution, over, created_at")
       .single();
     if (listErr) return res.status(500).json({ error: listErr.message });
 
@@ -193,7 +241,7 @@ router.get("/wholesale-lists/:listId", async (req, res) => {
     const { data: list, error: listErr } = await withTenantFilter(
       supabase
         .from("wholesale_lists")
-        .select("id, name, created_at")
+        .select("id, name, caution, over, created_at")
         .eq("id", listId)
         .maybeSingle(),
       req,
@@ -223,15 +271,30 @@ router.patch("/wholesale-lists/:listId", async (req, res) => {
     if (name !== undefined && !name) {
       return res.status(400).json({ error: "name cannot be empty" });
     }
-    const updates: Record<string, string> = {};
+    const updates: Record<string, unknown> = {};
     if (name !== undefined) updates.name = name;
+    if (req.body?.caution !== undefined || req.body?.over !== undefined) {
+      try {
+        const thresholds = parseLcogThresholdPair({
+          caution:
+            req.body?.caution !== undefined ? req.body.caution : null,
+          over: req.body?.over !== undefined ? req.body.over : null,
+        });
+        updates.caution = thresholds.caution;
+        updates.over = thresholds.over;
+      } catch (e: unknown) {
+        return res
+          .status(400)
+          .json({ error: e instanceof Error ? e.message : String(e) });
+      }
+    }
 
     const { data, error } = await withTenantFilter(
       supabase
         .from("wholesale_lists")
         .update(updates)
         .eq("id", req.params.listId)
-        .select("id, name, created_at")
+        .select("id, name, caution, over, created_at")
         .maybeSingle(),
       req,
     );
@@ -490,7 +553,7 @@ router.get("/menu-cost-lists", async (req, res) => {
     const { data, error } = await withTenantFilter(
       supabase
         .from("menu_cost_lists")
-        .select("id, name, mode, wholesale_list_id, created_at")
+        .select("id, name, mode, wholesale_list_id, caution, over, created_at")
         .order("name"),
       req,
     );
@@ -533,6 +596,15 @@ router.post("/menu-cost-lists", async (req, res) => {
       return res.status(400).json({ error: "wholesale_list_id required for franchise" });
     }
 
+    let thresholds: { caution: number | null; over: number | null };
+    try {
+      thresholds = parseLcogThresholdPair(req.body);
+    } catch (e: unknown) {
+      return res
+        .status(400)
+        .json({ error: e instanceof Error ? e.message : String(e) });
+    }
+
     if (mode === "franchise" && wholesaleListId) {
       const { data: wl } = await withTenantFilter(
         supabase
@@ -557,8 +629,10 @@ router.post("/menu-cost-lists", async (req, res) => {
         mode,
         wholesale_list_id: mode === "franchise" ? wholesaleListId : null,
         created_by: uid,
+        caution: thresholds.caution,
+        over: thresholds.over,
       })
-      .select("id, name, mode, wholesale_list_id, created_at")
+      .select("id, name, mode, wholesale_list_id, caution, over, created_at")
       .single();
     if (listErr) return res.status(500).json({ error: listErr.message });
 
@@ -604,7 +678,7 @@ router.get("/menu-cost-lists/:listId", async (req, res) => {
     const { data: list, error: listErr } = await withTenantFilter(
       supabase
         .from("menu_cost_lists")
-        .select("id, name, mode, wholesale_list_id, created_at")
+        .select("id, name, mode, wholesale_list_id, caution, over, created_at")
         .eq("id", listId)
         .maybeSingle(),
       req,
@@ -661,13 +735,28 @@ router.patch("/menu-cost-lists/:listId", async (req, res) => {
     if (wholesaleListId !== undefined && (mode === "franchise" || mode === undefined)) {
       if (mode !== "company_owned") updates.wholesale_list_id = wholesaleListId;
     }
+    if (req.body?.caution !== undefined || req.body?.over !== undefined) {
+      try {
+        const thresholds = parseLcogThresholdPair({
+          caution:
+            req.body?.caution !== undefined ? req.body.caution : null,
+          over: req.body?.over !== undefined ? req.body.over : null,
+        });
+        updates.caution = thresholds.caution;
+        updates.over = thresholds.over;
+      } catch (e: unknown) {
+        return res
+          .status(400)
+          .json({ error: e instanceof Error ? e.message : String(e) });
+      }
+    }
 
     const { data, error } = await withTenantFilter(
       supabase
         .from("menu_cost_lists")
         .update(updates)
         .eq("id", req.params.listId)
-        .select("id, name, mode, wholesale_list_id, created_at")
+        .select("id, name, mode, wholesale_list_id, caution, over, created_at")
         .maybeSingle(),
       req,
     );
@@ -920,6 +1009,135 @@ router.post("/menu-cost-lists/:listId/costs", async (req, res) => {
     );
 
     res.json({ costs });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+function parsePrintPresetColumns(raw: unknown): {
+  item: boolean;
+  type: boolean;
+  cost: boolean;
+  price: boolean;
+  lcog: boolean;
+} {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("columns object is required");
+  }
+  const c = raw as Record<string, unknown>;
+  const cols = {
+    item: c.item === true,
+    type: c.type === true,
+    cost: c.cost === true,
+    price: c.price === true,
+    lcog: c.lcog === true,
+  };
+  if (!Object.values(cols).some(Boolean)) {
+    throw new Error("Select at least one column");
+  }
+  return cols;
+}
+
+router.get("/print-presets", async (req, res) => {
+  try {
+    tenantId(req);
+    const reportType = String(req.query.report_type ?? "").toLowerCase();
+    if (reportType !== "wholesale" && reportType !== "retail") {
+      return res
+        .status(400)
+        .json({ error: "report_type must be wholesale or retail" });
+    }
+    const { data, error } = await withTenantFilter(
+      supabase
+        .from("recipe_cost_report_print_presets")
+        .select(
+          "preset_slot, name, col_item, col_type, col_cost, col_price, col_lcog",
+        )
+        .eq("report_type", reportType)
+        .order("preset_slot"),
+      req,
+    );
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({
+      presets: (data ?? []).map((row) => ({
+        preset_slot: row.preset_slot,
+        name: row.name,
+        columns: {
+          item: row.col_item,
+          type: row.col_type,
+          cost: row.col_cost,
+          price: row.col_price,
+          lcog: row.col_lcog,
+        },
+      })),
+    });
+  } catch (e: unknown) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+router.put("/print-presets/:slot", async (req, res) => {
+  try {
+    const tid = tenantId(req);
+    const slot = parseInt(String(req.params.slot), 10);
+    if (!Number.isFinite(slot) || slot < 1 || slot > 4) {
+      return res.status(400).json({ error: "preset slot must be 1–4" });
+    }
+    const reportType = String(req.body?.report_type ?? "").toLowerCase();
+    if (reportType !== "wholesale" && reportType !== "retail") {
+      return res
+        .status(400)
+        .json({ error: "report_type must be wholesale or retail" });
+    }
+    const name = String(req.body?.name ?? "").trim();
+    if (!name) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    let columns;
+    try {
+      columns = parsePrintPresetColumns(req.body?.columns);
+    } catch (e: unknown) {
+      return res
+        .status(400)
+        .json({ error: e instanceof Error ? e.message : String(e) });
+    }
+
+    const row = {
+      tenant_id: tid,
+      report_type: reportType,
+      preset_slot: slot,
+      name,
+      col_item: columns.item,
+      col_type: columns.type,
+      col_cost: columns.cost,
+      col_price: columns.price,
+      col_lcog: columns.lcog,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from("recipe_cost_report_print_presets")
+      .upsert(row, { onConflict: "tenant_id,report_type,preset_slot" })
+      .select(
+        "preset_slot, name, col_item, col_type, col_cost, col_price, col_lcog",
+      )
+      .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    res.json({
+      preset: {
+        preset_slot: data.preset_slot,
+        name: data.name,
+        columns: {
+          item: data.col_item,
+          type: data.col_type,
+          cost: data.col_cost,
+          price: data.col_price,
+          lcog: data.col_lcog,
+        },
+      },
+    });
   } catch (e: unknown) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }

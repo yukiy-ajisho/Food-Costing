@@ -5,6 +5,7 @@ export type ItemCandidateRow = {
   id: string;
   name: string;
   is_menu_item: boolean;
+  proceed_yield_amount: number;
   proceed_yield_unit: string | null;
   each_grams: number | null;
   is_cross_tenant?: boolean;
@@ -57,6 +58,7 @@ async function mapItemsToCandidateRows(
     id: string;
     name: string | null;
     is_menu_item: boolean | null;
+    proceed_yield_amount: number | null;
     proceed_yield_unit: string | null;
     each_grams: number | null;
     base_item_id: string | null;
@@ -89,6 +91,7 @@ async function mapItemsToCandidateRows(
         ? baseNameMap.get(item.base_item_id) ?? item.name ?? "(Unnamed)"
         : item.name ?? "(Unnamed)",
     is_menu_item: Boolean(item.is_menu_item),
+    proceed_yield_amount: Number(item.proceed_yield_amount) || 0,
     proceed_yield_unit: item.proceed_yield_unit,
     each_grams: item.each_grams != null ? Number(item.each_grams) : null,
     ...(options?.is_cross_tenant ? { is_cross_tenant: true } : {}),
@@ -101,7 +104,7 @@ export async function fetchOwnTenantItemCandidates(
   const { data, error } = await supabase
     .from("items")
     .select(
-      "id, name, item_kind, is_menu_item, proceed_yield_unit, each_grams, base_item_id",
+      "id, name, item_kind, is_menu_item, proceed_yield_amount, proceed_yield_unit, each_grams, base_item_id",
     )
     .eq("tenant_id", tenantId)
     .eq("item_kind", "prepped")
@@ -120,7 +123,7 @@ export async function fetchCrossTenantItemCandidates(
   const { data: shares, error } = await supabase
     .from("cross_tenant_item_shares")
     .select(
-      "owner_tenant_id, items(id, name, tenant_id, item_kind, is_menu_item, proceed_yield_unit, each_grams, base_item_id, deprecated)",
+      "owner_tenant_id, items(id, name, tenant_id, item_kind, is_menu_item, proceed_yield_amount, proceed_yield_unit, each_grams, base_item_id, deprecated)",
     )
     .eq("company_id", companyId)
     .neq("owner_tenant_id", viewerTenantId)
@@ -138,6 +141,7 @@ export async function fetchCrossTenantItemCandidates(
       tenant_id: string;
       item_kind: string;
       is_menu_item: boolean | null;
+      proceed_yield_amount: number | null;
       proceed_yield_unit: string | null;
       each_grams: number | null;
       base_item_id: string | null;
@@ -151,6 +155,7 @@ export async function fetchCrossTenantItemCandidates(
           tenant_id: string;
           item_kind: string;
           is_menu_item: boolean | null;
+          proceed_yield_amount: number | null;
           proceed_yield_unit: string | null;
           each_grams: number | null;
           base_item_id: string | null;
@@ -162,6 +167,7 @@ export async function fetchCrossTenantItemCandidates(
           tenant_id: string;
           item_kind: string;
           is_menu_item: boolean | null;
+          proceed_yield_amount: number | null;
           proceed_yield_unit: string | null;
           each_grams: number | null;
           base_item_id: string | null;
@@ -341,6 +347,7 @@ export async function enrichMemberRows(
       id: item.id,
       name: item.name,
       is_menu_item: item.is_menu_item,
+      proceed_yield_amount: item.proceed_yield_amount,
       proceed_yield_unit: item.proceed_yield_unit,
       each_grams: item.each_grams,
       base_item_id: item.base_item_id,

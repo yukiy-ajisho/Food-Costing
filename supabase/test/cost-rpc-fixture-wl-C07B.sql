@@ -1,0 +1,11 @@
+-- C07: P312 WL $13.20/kg
+-- Apply after cost-rpc-fixture-base.sql
+BEGIN;
+DELETE FROM wholesale_list_lines WHERE wholesale_list_id = '44444444-4444-4444-4444-444444444401';
+DELETE FROM wholesale_list_members WHERE wholesale_list_id = '44444444-4444-4444-4444-444444444401';
+INSERT INTO wholesale_list_members (id, wholesale_list_id, item_id, created_by) VALUES
+  ('e1000001-1111-4111-8111-000000000702', '44444444-4444-4444-4444-444444444401', '66666666-6666-6666-6666-666666660312', '22222222-2222-2222-2222-222222222201');
+INSERT INTO wholesale_list_lines (id, wholesale_list_id, item_id, wholesale_price, created_by) VALUES
+  ('e1000001-1111-4111-8111-000000000752', '44444444-4444-4444-4444-444444444401', '66666666-6666-6666-6666-666666660312', 13.20, '22222222-2222-2222-2222-222222222201');
+COMMIT;
+

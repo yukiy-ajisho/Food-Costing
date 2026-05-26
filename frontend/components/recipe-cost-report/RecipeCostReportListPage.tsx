@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Edit, Plus, Save, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Edit, Plus, Printer, Save, Trash2, X } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
 import {
@@ -12,29 +12,55 @@ import {
   type ListMemberRow,
 } from "@/lib/recipeCostReport";
 import {
+  convertListPriceInputOnEachToggle,
+  convertPriceDraftMapOnEachToggle,
   formatCostDisplay,
   formatListPriceDisplay,
   listPriceInputDisplay,
   listPriceInputToStoredPerKg,
   lcogPercent,
+  lcogPercentValue,
 } from "@/lib/recipeCostReportCalc";
 import {
   defaultCostBasisForMenuMember,
   effectiveCostBasis,
   wholesaleCostBasisSelectable,
 } from "@/lib/recipeCostReportCostBasis";
+import { filterMembersByItemSearch } from "@/lib/recipeCostReportItemSearch";
+import { pageModeToPrintReportType } from "@/lib/recipeCostReportPrint";
+import {
+  getEffectiveLcogThresholds,
+  normalizeThresholdFromApi,
+  readLcogThresholdColumnVisible,
+  thresholdToDraftString,
+  thresholdsEqual,
+  validateLcogThresholdsForSave,
+  writeLcogThresholdColumnVisible,
+} from "@/lib/recipeCostReportLcogThreshold";
 import { subscribeWholesaleListLines } from "@/lib/recipeCostReportRealtime";
 import { CostBasisBadge } from "./CostBasisBadge";
 import { CostBasisControlSlot } from "./CostBasisControlSlot";
 import { CostBasisRadios } from "./CostBasisRadios";
 import { CreateListModal } from "./CreateListModal";
 import { DeleteListConfirmModal } from "./DeleteListConfirmModal";
+import { HeaderHoverHint } from "./HeaderHoverHint";
 import { ItemKindBadge } from "./ItemKindBadge";
+import {
+  LcogThresholdColumnToggle,
+  LcogThresholdDataCell,
+  LcogThresholdHeaderCell,
+} from "./LcogThresholdColumn";
+import { MenuListPickerSections } from "./MenuListPickerSections";
 import { PricingListPickerRow } from "./PricingListPickerRow";
+import { PrintModal } from "./PrintModal";
 
 type PageMode = "wholesale" | "menu";
 
-type ListSummary = { id: string; name: string };
+type ListSummary = {
+  id: string;
+  name: string;
+  mode?: "company_owned" | "franchise";
+};
 
 type MenuListMeta = {
   mode: "company_owned" | "franchise";
@@ -47,6 +73,20 @@ type PendingMemberRow = {
   price: string;
   cost_basis?: CostBasis;
 };
+
+type ListSortKey = "item" | "lcog";
+
+type ListSortState = {
+  key: ListSortKey;
+  ascending: boolean;
+};
+
+const DEFAULT_LIST_SORT: ListSortState = { key: "item", ascending: true };
+
+const LCOG_HEADER_TOOLTIP = "Labor and cost of goods";
+const RETAIL_HEADER_TOOLTIP = "Price sold to the customer";
+const LCOG_THRESHOLD_HEADER_TOOLTIP =
+  "LCOG% caution and over thresholds. Yellow triangle at or above caution; red at or above over. Use Edit to change.";
 
 function newPendingLocalId(): string {
   return `pending-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -61,7 +101,7 @@ function memberRowFromCandidate(
     name: c.name,
     item_kind: "prepped",
     is_menu_item: c.is_menu_item,
-    proceed_yield_amount: 0,
+    proceed_yield_amount: c.proceed_yield_amount ?? 0,
     proceed_yield_unit: c.proceed_yield_unit ?? "g",
     each_grams: c.each_grams ?? null,
     latest_wholesale_price: null,
@@ -98,6 +138,13 @@ export function RecipeCostReportListPage({
     new Map(),
   );
   const [draftRetail, setDraftRetail] = useState<Map<string, string>>(new Map());
+  /** Edit-mode drafts for corporate/wholesale; persisted on Save (not on radio change). */
+  const [draftCostBasis, setDraftCostBasis] = useState<Map<string, CostBasis>>(
+    new Map(),
+  );
+  const [savedCostBasisByItem, setSavedCostBasisByItem] = useState<
+    Map<string, CostBasis>
+  >(new Map());
   const [candidatesTenantOnly, setCandidatesTenantOnly] = useState<
     ItemCandidate[]
   >([]);
@@ -106,6 +153,7 @@ export function RecipeCostReportListPage({
   >([]);
   const [wlOptions, setWlOptions] = useState<{ id: string; name: string }[]>([]);
   const [showCreate, setShowCreate] = useState(false);
+  const [showPrint, setShowPrint] = useState(false);
   const [openListMenuId, setOpenListMenuId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{
     listId: string;
@@ -130,10 +178,21 @@ export function RecipeCostReportListPage({
   const [isEditMode, setIsEditMode] = useState(false);
   const [costUnit, setCostUnit] = useState<"g" | "kg">("kg");
   const [eachMode, setEachMode] = useState(false);
+  const [listSort, setListSort] = useState<ListSortState>(DEFAULT_LIST_SORT);
+  const [itemSearchQuery, setItemSearchQuery] = useState("");
+  const [savedCaution, setSavedCaution] = useState<number | null>(null);
+  const [savedOver, setSavedOver] = useState<number | null>(null);
+  const [draftCaution, setDraftCaution] = useState("");
+  const [draftOver, setDraftOver] = useState("");
+  const [thresholdColumnVisible, setThresholdColumnVisible] = useState(() =>
+    readLcogThresholdColumnVisible(pageMode),
+  );
+
+  const menuPricingEach = pageMode === "menu";
 
   const costDisplayOptions = useMemo(
-    () => ({ costUnit, eachMode }),
-    [costUnit, eachMode],
+    () => ({ costUnit, eachMode, menuPricingEach }),
+    [costUnit, eachMode, menuPricingEach],
   );
 
   const card = isDark
@@ -163,7 +222,20 @@ export function RecipeCostReportListPage({
       pageMode === "wholesale"
         ? await recipeCostReportAPI.listWholesaleLists()
         : await recipeCostReportAPI.listMenuCostLists();
-    const rows = res.lists.map((l) => ({ id: l.id, name: l.name }));
+    const rows: ListSummary[] =
+      pageMode === "menu"
+        ? (
+            res.lists as {
+              id: string;
+              name: string;
+              mode: "company_owned" | "franchise";
+            }[]
+          ).map((l) => ({
+            id: l.id,
+            name: l.name,
+            mode: l.mode,
+          }))
+        : res.lists.map((l) => ({ id: l.id, name: l.name }));
     setLists(rows);
     if (rows.length > 0 && !selectedListId) {
       setSelectedListId(rows[0].id);
@@ -252,6 +324,18 @@ export function RecipeCostReportListPage({
     [pendingNewRows],
   );
 
+  const applyListThresholds = useCallback(
+    (caution: unknown, over: unknown) => {
+      const c = normalizeThresholdFromApi(caution);
+      const o = normalizeThresholdFromApi(over);
+      setSavedCaution(c);
+      setSavedOver(o);
+      setDraftCaution(thresholdToDraftString(c));
+      setDraftOver(thresholdToDraftString(o));
+    },
+    [],
+  );
+
   const loadDetail = useCallback(
     async (listId: string) => {
       setLoading(true);
@@ -262,6 +346,7 @@ export function RecipeCostReportListPage({
           setListName(list.name);
           setSavedListName(list.name);
           setMembers(m);
+          applyListThresholds(list.caution, list.over);
         } else {
           const { list, members: m } =
             await recipeCostReportAPI.getMenuCostList(listId);
@@ -274,14 +359,24 @@ export function RecipeCostReportListPage({
           setMenuMeta(meta);
           setSavedMenuMeta(meta);
           setMembers(m);
+          applyListThresholds(list.caution, list.over);
+          const basisMap = new Map<string, CostBasis>();
+          for (const row of m) {
+            basisMap.set(
+              row.item_id,
+              row.cost_basis === "wholesale" ? "wholesale" : "corporate",
+            );
+          }
+          setSavedCostBasisByItem(basisMap);
         }
         setDraftWholesale(new Map());
         setDraftRetail(new Map());
+        setDraftCostBasis(new Map());
       } finally {
         setLoading(false);
       }
     },
-    [pageMode],
+    [pageMode, applyListThresholds],
   );
 
   const pickerCandidates = useMemo(() => {
@@ -311,9 +406,15 @@ export function RecipeCostReportListPage({
     setIsEditMode(false);
     setPendingNewRows([]);
     setPendingRemovals(new Set());
+    setListSort(DEFAULT_LIST_SORT);
+    setItemSearchQuery("");
     if (!selectedListId) {
       setMembers([]);
       setCosts({});
+      setSavedCaution(null);
+      setSavedOver(null);
+      setDraftCaution("");
+      setDraftOver("");
       return;
     }
     void loadDetail(selectedListId);
@@ -408,6 +509,121 @@ export function RecipeCostReportListPage({
 
   const memberIds = useMemo(() => new Set(members.map((m) => m.item_id)), [members]);
 
+  const handleListSortHeaderClick = useCallback((column: ListSortKey) => {
+    setListSort((prev) =>
+      prev.key !== column
+        ? { key: column, ascending: true }
+        : { key: column, ascending: !prev.ascending },
+    );
+  }, []);
+
+  const filteredMembers = useMemo(
+    () => filterMembersByItemSearch(members, itemSearchQuery),
+    [members, itemSearchQuery],
+  );
+
+  const sortedMembers = useMemo(() => {
+    const { key, ascending } = listSort;
+    const dir = ascending ? 1 : -1;
+
+    const pricePerKgForLcog = (row: ListMemberRow): number | null => {
+      if (pageMode === "wholesale") {
+        const ws = draftWholesale.has(row.item_id)
+          ? draftWholesale.get(row.item_id)!
+          : listPriceInputDisplay(
+              row.latest_wholesale_price,
+              row,
+              eachMode,
+              menuPricingEach,
+            );
+        return listPriceInputToStoredPerKg(ws, row, eachMode, menuPricingEach);
+      }
+      const rt = draftRetail.has(row.item_id)
+        ? draftRetail.get(row.item_id)!
+        : listPriceInputDisplay(
+            row.latest_retail_price,
+            row,
+            eachMode,
+            menuPricingEach,
+          );
+      return listPriceInputToStoredPerKg(rt, row, eachMode, menuPricingEach);
+    };
+
+    return [...filteredMembers].sort((a, b) => {
+      if (key === "item") {
+        const cmp = a.name
+          .trim()
+          .localeCompare(b.name.trim(), undefined, { sensitivity: "base" });
+        if (cmp !== 0) return dir * cmp;
+        return a.item_id.localeCompare(b.item_id);
+      }
+      const aVal = lcogPercentValue(costs[a.item_id], pricePerKgForLcog(a));
+      const bVal = lcogPercentValue(costs[b.item_id], pricePerKgForLcog(b));
+      if (aVal === null && bVal === null) {
+        return a.name
+          .trim()
+          .localeCompare(b.name.trim(), undefined, { sensitivity: "base" });
+      }
+      if (aVal === null) return 1;
+      if (bVal === null) return -1;
+      const cmp = aVal - bVal;
+      if (cmp !== 0) return dir * cmp;
+      return a.name
+        .trim()
+        .localeCompare(b.name.trim(), undefined, { sensitivity: "base" });
+    });
+  }, [
+    filteredMembers,
+    listSort,
+    costs,
+    pageMode,
+    draftWholesale,
+    draftRetail,
+    eachMode,
+    menuPricingEach,
+  ]);
+
+  const printSortedMembers = useMemo(() => {
+    const { key, ascending } = listSort;
+    const dir = ascending ? 1 : -1;
+
+    const pricePerKgForLcog = (row: ListMemberRow): number | null => {
+      const stored =
+        pageMode === "wholesale"
+          ? row.latest_wholesale_price
+          : row.latest_retail_price;
+      return stored != null && Number.isFinite(stored) ? stored : null;
+    };
+
+    return [...members].sort((a, b) => {
+      if (key === "item") {
+        const cmp = a.name
+          .trim()
+          .localeCompare(b.name.trim(), undefined, { sensitivity: "base" });
+        if (cmp !== 0) return dir * cmp;
+        return a.item_id.localeCompare(b.item_id);
+      }
+      const aVal = lcogPercentValue(costs[a.item_id], pricePerKgForLcog(a));
+      const bVal = lcogPercentValue(costs[b.item_id], pricePerKgForLcog(b));
+      if (aVal === null && bVal === null) {
+        return a.name
+          .trim()
+          .localeCompare(b.name.trim(), undefined, { sensitivity: "base" });
+      }
+      if (aVal === null) return 1;
+      if (bVal === null) return -1;
+      const cmp = aVal - bVal;
+      if (cmp !== 0) return dir * cmp;
+      return a.name
+        .trim()
+        .localeCompare(b.name.trim(), undefined, { sensitivity: "base" });
+    });
+  }, [members, listSort, costs, pageMode]);
+
+  const itemSearchActive = itemSearchQuery.trim().length > 0;
+  const noItemSearchMatches =
+    itemSearchActive && members.length > 0 && sortedMembers.length === 0;
+
   const candidateById = useMemo(
     () => new Map(pickerCandidates.map((c) => [c.id, c])),
     [pickerCandidates],
@@ -426,8 +642,28 @@ export function RecipeCostReportListPage({
     if (prev === eachMode) return;
     prevEachModeRef.current = eachMode;
 
-    setDraftWholesale(new Map());
-    setDraftRetail(new Map());
+    const memberById = new Map(
+      membersRef.current.map((m) => [m.item_id, m] as const),
+    );
+
+    setDraftWholesale((drafts) =>
+      convertPriceDraftMapOnEachToggle(
+        drafts,
+        memberById,
+        prev,
+        eachMode,
+        menuPricingEach,
+      ),
+    );
+    setDraftRetail((drafts) =>
+      convertPriceDraftMapOnEachToggle(
+        drafts,
+        memberById,
+        prev,
+        eachMode,
+        menuPricingEach,
+      ),
+    );
 
     setPendingNewRows((rows) => {
       if (rows.length === 0) return rows;
@@ -437,28 +673,20 @@ export function RecipeCostReportListPage({
         const c = candidateById.get(p.item_id);
         if (!c) return p;
         const row = memberRowFromCandidate(p.item_id, c);
-        const n = parseFloat(p.price);
-        if (!Number.isFinite(n)) return p;
-        if (
-          row.proceed_yield_unit !== "each" ||
-          !row.each_grams ||
-          row.each_grams <= 0
-        ) {
-          return p;
-        }
-        if (prev && !eachMode) {
-          changed = true;
-          return { ...p, price: String((n / row.each_grams) * 1000) };
-        }
-        if (!prev && eachMode) {
-          changed = true;
-          return { ...p, price: String((n / 1000) * row.each_grams) };
-        }
-        return p;
+        const converted = convertListPriceInputOnEachToggle(
+          p.price,
+          row,
+          prev,
+          eachMode,
+          menuPricingEach,
+        );
+        if (converted === p.price) return p;
+        changed = true;
+        return { ...p, price: converted };
       });
       return changed ? next : rows;
     });
-  }, [eachMode, candidateById]);
+  }, [eachMode, candidateById, menuPricingEach]);
 
   const hasDraftPrices = useMemo(() => {
     const drafts = pageMode === "wholesale" ? draftWholesale : draftRetail;
@@ -469,35 +697,119 @@ export function RecipeCostReportListPage({
     return false;
   }, [pageMode, draftWholesale, draftRetail]);
 
+  const effectiveThresholds = useMemo(
+    () => getEffectiveLcogThresholds(draftCaution, draftOver),
+    [draftCaution, draftOver],
+  );
+
+  const rowThresholds = useMemo(
+    () =>
+      isEditMode
+        ? effectiveThresholds
+        : getEffectiveLcogThresholds(
+            thresholdToDraftString(savedCaution),
+            thresholdToDraftString(savedOver),
+          ),
+    [isEditMode, effectiveThresholds, savedCaution, savedOver],
+  );
+
+  const showThresholdColumn = thresholdColumnVisible;
+
+  const tableColSpan = showThresholdColumn ? 7 : 6;
+
+  const draftThresholdsEdited = useMemo(
+    () =>
+      draftCaution !== thresholdToDraftString(savedCaution) ||
+      draftOver !== thresholdToDraftString(savedOver),
+    [draftCaution, draftOver, savedCaution, savedOver],
+  );
+
+  const hasThresholdChanges = useMemo(() => {
+    if (!thresholdColumnVisible || !draftThresholdsEdited) return false;
+    const validation = validateLcogThresholdsForSave(draftCaution, draftOver);
+    if (!validation.ok) return false;
+    return (
+      !thresholdsEqual(validation.caution, savedCaution) ||
+      !thresholdsEqual(validation.over, savedOver)
+    );
+  }, [
+    thresholdColumnVisible,
+    draftThresholdsEdited,
+    draftCaution,
+    draftOver,
+    savedCaution,
+    savedOver,
+  ]);
+
+  const canSaveThresholds = useMemo(() => {
+    if (!thresholdColumnVisible || !draftThresholdsEdited) return true;
+    return validateLcogThresholdsForSave(draftCaution, draftOver).ok;
+  }, [
+    thresholdColumnVisible,
+    draftThresholdsEdited,
+    draftCaution,
+    draftOver,
+  ]);
+
   const hasMetaChanges = useMemo(() => {
     if (listName.trim() !== savedListName.trim()) return true;
+    if (hasThresholdChanges) return true;
     if (pageMode !== "menu") return false;
     return (
       menuMeta.mode !== savedMenuMeta.mode ||
       menuMeta.wholesale_list_id !== savedMenuMeta.wholesale_list_id
     );
-  }, [listName, savedListName, pageMode, menuMeta, savedMenuMeta]);
+  }, [
+    listName,
+    savedListName,
+    pageMode,
+    menuMeta,
+    savedMenuMeta,
+    hasThresholdChanges,
+  ]);
 
   const hasPendingAdds = pendingNewRows.length > 0;
   const hasPendingRemovals = pendingRemovals.size > 0;
 
+  const hasCostBasisChanges = useMemo(() => {
+    for (const [itemId, basis] of draftCostBasis) {
+      if (savedCostBasisByItem.get(itemId) !== basis) return true;
+    }
+    return false;
+  }, [draftCostBasis, savedCostBasisByItem]);
+
   const canSave =
-    hasDraftPrices || hasMetaChanges || hasPendingAdds || hasPendingRemovals;
+    canSaveThresholds &&
+    (hasDraftPrices ||
+      hasMetaChanges ||
+      hasPendingAdds ||
+      hasPendingRemovals ||
+      hasCostBasisChanges);
 
   const handleEditClick = () => {
     setPendingRemovals(new Set());
+    setDraftCostBasis(new Map());
     setIsEditMode(true);
   };
 
   const handleEditCancel = () => {
     setListName(savedListName);
     setMenuMeta({ ...savedMenuMeta });
+    setDraftCaution(thresholdToDraftString(savedCaution));
+    setDraftOver(thresholdToDraftString(savedOver));
     setDraftWholesale(new Map());
     setDraftRetail(new Map());
+    setDraftCostBasis(new Map());
     setPendingNewRows([]);
     setPendingRemovals(new Set());
     setIsEditMode(false);
     if (selectedListId) void loadDetail(selectedListId);
+  };
+
+  const handleThresholdColumnToggle = () => {
+    const next = !thresholdColumnVisible;
+    setThresholdColumnVisible(next);
+    writeLcogThresholdColumnVisible(pageMode, next);
   };
 
   const markMemberRemoved = (itemId: string) => {
@@ -509,6 +821,11 @@ export function RecipeCostReportListPage({
       return next;
     });
     setDraftRetail((prev) => {
+      const next = new Map(prev);
+      next.delete(itemId);
+      return next;
+    });
+    setDraftCostBasis((prev) => {
       const next = new Map(prev);
       next.delete(itemId);
       return next;
@@ -581,47 +898,16 @@ export function RecipeCostReportListPage({
     );
   };
 
-  const handleCostBasisChange = async (itemId: string, basis: CostBasis) => {
-    if (!selectedListId || pageMode !== "menu") return;
-    const prevMembers = members;
-    const nextMembers = prevMembers.map((m) =>
-      m.item_id === itemId ? { ...m, cost_basis: basis } : m,
+  const handleCostBasisChange = (itemId: string, basis: CostBasis) => {
+    if (!selectedListId || pageMode !== "menu" || !isEditMode) return;
+    setDraftCostBasis((prev) => {
+      const next = new Map(prev);
+      next.set(itemId, basis);
+      return next;
+    });
+    setMembers((prev) =>
+      prev.map((m) => (m.item_id === itemId ? { ...m, cost_basis: basis } : m)),
     );
-    setMembers(nextMembers);
-    setCostsLoading(true);
-    try {
-      await recipeCostReportAPI.updateMenuMemberCostBasis(
-        selectedListId,
-        itemId,
-        basis,
-      );
-      const { costs: c } = await recipeCostReportAPI.menuCostListCosts(
-        selectedListId,
-        {
-          item_ids: costItemIds,
-          members: costItemIds.map((id) => {
-            const row = nextMembers.find((m) => m.item_id === id);
-            const pending = pendingNewRows.find((p) => p.item_id === id);
-            if (row) {
-              return {
-                item_id: id,
-                cost_basis: effectiveCostBasis(row, menuMeta.mode),
-              };
-            }
-            if (pending?.cost_basis) {
-              return { item_id: id, cost_basis: pending.cost_basis };
-            }
-            return { item_id: id, cost_basis: "corporate" as const };
-          }),
-        },
-      );
-      setCosts((prev) => ({ ...prev, ...c }));
-    } catch (e) {
-      setMembers(prevMembers);
-      alert(e instanceof Error ? e.message : "Failed to update cost basis");
-    } finally {
-      setCostsLoading(false);
-    }
   };
 
   const updatePendingCostBasis = (localId: string, basis: CostBasis) => {
@@ -722,8 +1008,6 @@ export function RecipeCostReportListPage({
     );
   };
 
-  const tableColSpan = 6;
-
   const trashButtonClass = (visible: boolean) =>
     `inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${
       isDark
@@ -737,17 +1021,22 @@ export function RecipeCostReportListPage({
     mode?: "company_owned" | "franchise";
     wholesale_list_id?: string | null;
     member_cost_basis?: Record<string, CostBasis>;
+    caution?: number | null;
+    over?: number | null;
   }) => {
     if (pageMode === "wholesale") {
       const res = await recipeCostReportAPI.createWholesaleList({
         name: payload.name,
         item_ids: payload.item_ids,
+        caution: payload.caution ?? null,
+        over: payload.over ?? null,
       });
       setLists((prev) => [...prev, { id: res.list.id, name: res.list.name }]);
       setSelectedListId(res.list.id);
       setListName(res.list.name);
       setSavedListName(res.list.name);
       setMembers(res.members);
+      applyListThresholds(res.list.caution, res.list.over);
       setCosts({});
     } else {
       const res = (await recipeCostReportAPI.createMenuCostList({
@@ -756,12 +1045,16 @@ export function RecipeCostReportListPage({
         wholesale_list_id: payload.wholesale_list_id ?? null,
         item_ids: payload.item_ids,
         member_cost_basis: payload.member_cost_basis,
+        caution: payload.caution ?? null,
+        over: payload.over ?? null,
       })) as {
         list: {
           id: string;
           name: string;
           mode: "company_owned" | "franchise";
           wholesale_list_id: string | null;
+          caution: number | null;
+          over: number | null;
         };
         members: ListMemberRow[];
       };
@@ -769,13 +1062,17 @@ export function RecipeCostReportListPage({
         mode: res.list.mode,
         wholesale_list_id: res.list.wholesale_list_id,
       };
-      setLists((prev) => [...prev, { id: res.list.id, name: res.list.name }]);
+      setLists((prev) => [
+        ...prev,
+        { id: res.list.id, name: res.list.name, mode: res.list.mode },
+      ]);
       setSelectedListId(res.list.id);
       setListName(res.list.name);
       setSavedListName(res.list.name);
       setMenuMeta(meta);
       setSavedMenuMeta(meta);
       setMembers(res.members);
+      applyListThresholds(res.list.caution, res.list.over);
       await loadCosts(
         res.list.id,
         res.members.map((m) => m.item_id),
@@ -788,6 +1085,17 @@ export function RecipeCostReportListPage({
 
   const handleSave = async () => {
     if (!selectedListId || !canSave) return;
+
+    if (thresholdColumnVisible && hasThresholdChanges) {
+      const thresholdValidation = validateLcogThresholdsForSave(
+        draftCaution,
+        draftOver,
+      );
+      if (!thresholdValidation.ok) {
+        alert(thresholdValidation.message);
+        return;
+      }
+    }
 
     for (const row of pendingNewRows) {
       if (!row.item_id) {
@@ -803,6 +1111,7 @@ export function RecipeCostReportListPage({
         row.price,
         pendingMember,
         eachMode,
+        menuPricingEach,
       );
       if (stored == null) {
         const name = c?.name ?? "Item";
@@ -830,11 +1139,46 @@ export function RecipeCostReportListPage({
       setPendingRemovals(new Set());
 
       if (pageMode === "wholesale") {
-        if (hasMetaChanges) {
-          await recipeCostReportAPI.updateWholesaleList(selectedListId, {
-            name: listName.trim(),
-          });
-          setSavedListName(listName.trim());
+        const wholesalePatch: Partial<{
+          name: string;
+          caution: number | null;
+          over: number | null;
+        }> = {};
+        if (listName.trim() !== savedListName.trim()) {
+          wholesalePatch.name = listName.trim();
+        }
+        if (thresholdColumnVisible && hasThresholdChanges) {
+          const thresholdValidation = validateLcogThresholdsForSave(
+            draftCaution,
+            draftOver,
+          );
+          if (thresholdValidation.ok) {
+            wholesalePatch.caution = thresholdValidation.caution;
+            wholesalePatch.over = thresholdValidation.over;
+          }
+        }
+        if (Object.keys(wholesalePatch).length > 0) {
+          const { list: updatedList } = (await recipeCostReportAPI.updateWholesaleList(
+            selectedListId,
+            wholesalePatch,
+          )) as {
+            list: {
+              name: string;
+              caution: number | null;
+              over: number | null;
+            };
+          };
+          if (wholesalePatch.name != null) {
+            setSavedListName(updatedList.name);
+          }
+          if (wholesalePatch.caution !== undefined || wholesalePatch.over !== undefined) {
+            const c = normalizeThresholdFromApi(updatedList.caution);
+            const o = normalizeThresholdFromApi(updatedList.over);
+            setSavedCaution(c);
+            setSavedOver(o);
+            setDraftCaution(thresholdToDraftString(c));
+            setDraftOver(thresholdToDraftString(o));
+          }
         }
         for (const row of pendingNewRows) {
           await recipeCostReportAPI.addWholesaleMember(
@@ -846,6 +1190,7 @@ export function RecipeCostReportListPage({
             row.price,
             memberRowFromCandidate(row.item_id, c),
             eachMode,
+            menuPricingEach,
           )!;
           await recipeCostReportAPI.saveWholesalePrice(
             selectedListId,
@@ -856,20 +1201,78 @@ export function RecipeCostReportListPage({
         for (const [itemId, raw] of draftWholesale) {
           const memberRow = members.find((m) => m.item_id === itemId);
           if (!memberRow) continue;
-          const n = listPriceInputToStoredPerKg(raw, memberRow, eachMode);
+          const n = listPriceInputToStoredPerKg(
+            raw,
+            memberRow,
+            eachMode,
+            menuPricingEach,
+          );
           if (n == null) continue;
           await recipeCostReportAPI.saveWholesalePrice(selectedListId, itemId, n);
         }
       } else {
-        if (hasMetaChanges) {
-          await recipeCostReportAPI.updateMenuCostList(selectedListId, {
-            name: listName.trim(),
-            mode: menuMeta.mode,
-            wholesale_list_id:
-              menuMeta.mode === "franchise" ? menuMeta.wholesale_list_id : null,
-          });
-          setSavedListName(listName.trim());
-          setSavedMenuMeta({ ...menuMeta });
+        const menuPatch: Partial<{
+          name: string;
+          mode: "company_owned" | "franchise";
+          wholesale_list_id: string | null;
+          caution: number | null;
+          over: number | null;
+        }> = {};
+        if (listName.trim() !== savedListName.trim()) {
+          menuPatch.name = listName.trim();
+        }
+        if (
+          menuMeta.mode !== savedMenuMeta.mode ||
+          menuMeta.wholesale_list_id !== savedMenuMeta.wholesale_list_id
+        ) {
+          menuPatch.mode = menuMeta.mode;
+          menuPatch.wholesale_list_id =
+            menuMeta.mode === "franchise" ? menuMeta.wholesale_list_id : null;
+        }
+        if (thresholdColumnVisible && hasThresholdChanges) {
+          const thresholdValidation = validateLcogThresholdsForSave(
+            draftCaution,
+            draftOver,
+          );
+          if (thresholdValidation.ok) {
+            menuPatch.caution = thresholdValidation.caution;
+            menuPatch.over = thresholdValidation.over;
+          }
+        }
+        if (Object.keys(menuPatch).length > 0) {
+          const { list: updatedList } = (await recipeCostReportAPI.updateMenuCostList(
+            selectedListId,
+            menuPatch,
+          )) as {
+            list: {
+              name: string;
+              mode: "company_owned" | "franchise";
+              wholesale_list_id: string | null;
+              caution: number | null;
+              over: number | null;
+            };
+          };
+          if (menuPatch.name != null) {
+            setSavedListName(updatedList.name);
+          }
+          if (menuPatch.mode != null) {
+            setSavedMenuMeta({
+              mode: updatedList.mode,
+              wholesale_list_id: updatedList.wholesale_list_id,
+            });
+            setMenuMeta({
+              mode: updatedList.mode,
+              wholesale_list_id: updatedList.wholesale_list_id,
+            });
+          }
+          if (menuPatch.caution !== undefined || menuPatch.over !== undefined) {
+            const c = normalizeThresholdFromApi(updatedList.caution);
+            const o = normalizeThresholdFromApi(updatedList.over);
+            setSavedCaution(c);
+            setSavedOver(o);
+            setDraftCaution(thresholdToDraftString(c));
+            setDraftOver(thresholdToDraftString(o));
+          }
         }
         for (const row of pendingNewRows) {
           await recipeCostReportAPI.addMenuCostMember(selectedListId, row.item_id);
@@ -888,6 +1291,7 @@ export function RecipeCostReportListPage({
             row.price,
             memberRowFromCandidate(row.item_id, c),
             eachMode,
+            menuPricingEach,
           )!;
           await recipeCostReportAPI.saveRetailPrice(
             selectedListId,
@@ -898,17 +1302,39 @@ export function RecipeCostReportListPage({
         for (const [itemId, raw] of draftRetail) {
           const memberRow = members.find((m) => m.item_id === itemId);
           if (!memberRow) continue;
-          const n = listPriceInputToStoredPerKg(raw, memberRow, eachMode);
+          const n = listPriceInputToStoredPerKg(
+            raw,
+            memberRow,
+            eachMode,
+            menuPricingEach,
+          );
           if (n == null) continue;
           await recipeCostReportAPI.saveRetailPrice(selectedListId, itemId, n);
         }
+        for (const [itemId, basis] of draftCostBasis) {
+          if (savedCostBasisByItem.get(itemId) === basis) continue;
+          await recipeCostReportAPI.updateMenuMemberCostBasis(
+            selectedListId,
+            itemId,
+            basis,
+          );
+        }
+        setDraftCostBasis(new Map());
       }
       setPendingNewRows([]);
       await loadDetail(selectedListId);
       setLists((prev) =>
-        prev.map((l) =>
-          l.id === selectedListId ? { ...l, name: listName.trim() } : l,
-        ),
+        prev.map((l) => {
+          if (l.id !== selectedListId) return l;
+          if (pageMode === "menu") {
+            return {
+              ...l,
+              name: listName.trim(),
+              mode: menuMeta.mode,
+            };
+          }
+          return { ...l, name: listName.trim() };
+        }),
       );
       setIsEditMode(false);
     } catch (e) {
@@ -918,15 +1344,101 @@ export function RecipeCostReportListPage({
     }
   };
 
-  const thCls = `px-4 py-3 text-xs font-medium uppercase tracking-wider ${
+  const thCls = `h-14 align-middle px-4 py-3 text-xs font-medium uppercase tracking-wider ${
     isDark ? "text-slate-300 bg-slate-700/80" : "text-gray-500 bg-gray-50"
   }`;
+  const tbodyRowDividerCls = `[&>tr:not(:last-child)>td]:border-b ${
+    isDark
+      ? "[&>tr:not(:last-child)>td]:border-slate-700"
+      : "[&>tr:not(:last-child)>td]:border-gray-200"
+  }`;
+
+  const renderListSortHeader = (
+    column: ListSortKey,
+    label: string,
+    hint?: string,
+  ) => {
+    const active = listSort.key === column;
+    const asc = listSort.ascending;
+    const iconMuted = isDark ? "text-slate-500" : "text-gray-400";
+    const iconActive = isDark ? "text-slate-100" : "text-gray-800";
+    const button = (
+      <button
+        type="button"
+        onClick={() => handleListSortHeaderClick(column)}
+        className={`flex items-center gap-1.5 normal-case tracking-wider ${
+          isDark ? "hover:text-slate-100" : "hover:text-gray-800"
+        }`}
+      >
+        <span>{label}</span>
+        {active ? (
+          asc ? (
+            <ChevronUp
+              className={`h-4 w-4 shrink-0 ${iconActive}`}
+              aria-hidden
+            />
+          ) : (
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 ${iconActive}`}
+              aria-hidden
+            />
+          )
+        ) : (
+          <ChevronDown
+            className={`h-4 w-4 shrink-0 ${iconMuted}`}
+            aria-hidden
+          />
+        )}
+      </button>
+    );
+    if (!hint) return button;
+    return (
+      <HeaderHoverHint hint={hint} isDark={isDark}>
+        {button}
+      </HeaderHoverHint>
+    );
+  };
+
   const cardShell = `flex min-h-0 flex-col overflow-hidden rounded-lg border shadow-sm ${card} ${border}`;
 
   const listSectionLabel =
     pageMode === "wholesale" ? "Wholesale price name" : "Retail price name";
-  const createButtonLabel =
-    pageMode === "wholesale" ? "Wholesale price list" : "Retail price list";
+  const createButtonLabel = "Create New List";
+
+  const directLists = useMemo(
+    () => lists.filter((l) => l.mode === "company_owned"),
+    [lists],
+  );
+  const franchiseLists = useMemo(
+    () => lists.filter((l) => l.mode === "franchise"),
+    [lists],
+  );
+
+  const renderListPickerRows = (sectionLists: ListSummary[]) => {
+    if (sectionLists.length === 0) {
+      return (
+        <li className={`px-3 py-6 text-center text-sm ${muted}`}>No lists yet</li>
+      );
+    }
+    return sectionLists.map((l) => (
+      <PricingListPickerRow
+        key={l.id}
+        name={l.name}
+        active={selectedListId === l.id}
+        isDark={isDark}
+        menuOpen={openListMenuId === l.id}
+        onSelect={() => {
+          setOpenListMenuId(null);
+          setSelectedListId(l.id);
+        }}
+        onToggleMenu={() =>
+          setOpenListMenuId((prev) => (prev === l.id ? null : l.id))
+        }
+        onCloseMenu={() => setOpenListMenuId(null)}
+        onDelete={() => void beginDeleteList(l)}
+      />
+    ));
+  };
 
   const applyListSelectionAfterDelete = useCallback(
     (deletedId: string, remaining: ListSummary[]) => {
@@ -1016,45 +1528,41 @@ export function RecipeCostReportListPage({
   ]);
 
   const listPickerCard = (
-    <div className={`${cardShell} h-full min-h-0 w-[240px] shrink-0`}>
-      <div className={`shrink-0 border-b px-4 py-4 ${border}`}>
+    <div
+      className={`${cardShell} flex h-full min-h-0 w-[240px] shrink-0 flex-col`}
+    >
+      <div className="shrink-0 px-4 pb-3 pt-4">
+        <p className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
+          {listSectionLabel}
+        </p>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
           disabled={!selectedTenantId}
-          className={`${btnPrimary} w-full`}
+          className={`${btnPrimary} mt-3 w-full`}
         >
           <Plus className="h-4 w-4 shrink-0" />
           {createButtonLabel}
         </button>
-        <p className={`mt-4 text-xs font-medium uppercase tracking-wide ${muted}`}>
-          {listSectionLabel}
-        </p>
       </div>
-      <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-        {lists.length === 0 ? (
-          <li className={`px-3 py-8 text-center text-sm ${muted}`}>No lists yet</li>
-        ) : (
-          lists.map((l) => (
-            <PricingListPickerRow
-              key={l.id}
-              name={l.name}
-              active={selectedListId === l.id}
-              isDark={isDark}
-              menuOpen={openListMenuId === l.id}
-              onSelect={() => {
-                setOpenListMenuId(null);
-                setSelectedListId(l.id);
-              }}
-              onToggleMenu={() =>
-                setOpenListMenuId((prev) => (prev === l.id ? null : l.id))
-              }
-              onCloseMenu={() => setOpenListMenuId(null)}
-              onDelete={() => void beginDeleteList(l)}
-            />
-          ))
-        )}
-      </ul>
+      <div className={`shrink-0 border-b ${border}`} />
+      {pageMode === "menu" ? (
+        <MenuListPickerSections
+          directCount={directLists.length}
+          franchiseCount={franchiseLists.length}
+          mutedClass={muted}
+          renderDirectRows={() => renderListPickerRows(directLists)}
+          renderFranchiseRows={() => renderListPickerRows(franchiseLists)}
+        />
+      ) : (
+        <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+          {lists.length === 0 ? (
+            <li className={`px-3 py-8 text-center text-sm ${muted}`}>No lists yet</li>
+          ) : (
+            renderListPickerRows(lists)
+          )}
+        </ul>
+      )}
     </div>
   );
 
@@ -1116,7 +1624,7 @@ export function RecipeCostReportListPage({
                           }
                           className="h-4 w-4 border-gray-300 text-blue-600"
                         />
-                        Company-owned
+                        Direct
                       </label>
                       <label
                         className={`flex h-10 cursor-pointer items-center gap-2 text-sm ${textMain}`}
@@ -1165,7 +1673,7 @@ export function RecipeCostReportListPage({
                 ) : (
                   <p className={`flex min-h-10 items-center text-sm ${textMain}`}>
                     {menuMeta.mode === "company_owned"
-                      ? "Company-owned"
+                      ? "Direct"
                       : "Franchise"}
                     {menuMeta.mode === "franchise" && menuMeta.wholesale_list_id
                       ? ` · ${wlOptions.find((w) => w.id === menuMeta.wholesale_list_id)?.name ?? "Wholesale list"}`
@@ -1176,7 +1684,7 @@ export function RecipeCostReportListPage({
             )}
           </div>
 
-          <div className="flex h-10 shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-end gap-2">
             {isEditMode ? (
               <>
                 <button
@@ -1199,10 +1707,26 @@ export function RecipeCostReportListPage({
                 </button>
               </>
             ) : (
-              <button type="button" onClick={handleEditClick} className={btnEdit}>
-                <Edit className="h-4 w-4 shrink-0" />
-                Edit
-              </button>
+              <>
+                <LcogThresholdColumnToggle
+                  isDark={isDark}
+                  checked={showThresholdColumn}
+                  onChange={handleThresholdColumnToggle}
+                />
+                <button
+                  type="button"
+                  disabled={!selectedListId || loading || members.length === 0}
+                  onClick={() => setShowPrint(true)}
+                  className={btnSecondary}
+                >
+                  <Printer className="h-4 w-4 shrink-0" />
+                  Print
+                </button>
+                <button type="button" onClick={handleEditClick} className={btnEdit}>
+                  <Edit className="h-4 w-4 shrink-0" />
+                  Edit
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -1215,12 +1739,28 @@ export function RecipeCostReportListPage({
                 </div>
               ) : (
                 <div className="min-h-0 flex-1 overflow-auto">
-                  <table className="w-full text-sm">
+                  <table className="w-full border-collapse text-sm">
                     <thead className={`sticky top-0 z-10 border-b ${border}`}>
                       <tr>
-                        <th className={`${thCls} text-left`}>
+                        <th className={`${thCls} text-left min-w-48`}>
                           <div className="flex items-center justify-between gap-2 pr-1">
-                            <span>Item</span>
+                            <div className="flex min-w-0 flex-1 items-center gap-6">
+                              {renderListSortHeader("item", "Item")}
+                              <input
+                                type="search"
+                                value={itemSearchQuery}
+                                onChange={(e) =>
+                                  setItemSearchQuery(e.target.value)
+                                }
+                                placeholder="Search items…"
+                                aria-label="Search items"
+                                className={`h-8 min-w-0 flex-1 max-w-44 rounded-md border px-2 text-xs font-normal normal-case tracking-normal focus:outline-none focus:ring-2 focus:ring-blue-500/40 sm:max-w-52 ${
+                                  isDark
+                                    ? "border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500"
+                                    : "border-gray-300 bg-white text-gray-900 placeholder:text-gray-400"
+                                }`}
+                              />
+                            </div>
                             <button
                               type="button"
                               onClick={() => setEachMode((v) => !v)}
@@ -1278,18 +1818,56 @@ export function RecipeCostReportListPage({
                           </div>
                         </th>
                         <th className={`${thCls} text-left w-40`}>
-                          {pageMode === "wholesale" ? "Wholesale" : "Retail"}
+                          {pageMode === "wholesale" ? (
+                            "Wholesale"
+                          ) : (
+                            <HeaderHoverHint
+                              hint={RETAIL_HEADER_TOOLTIP}
+                              isDark={isDark}
+                            >
+                              <span>Retail</span>
+                            </HeaderHoverHint>
+                          )}
                         </th>
-                        <th className={`${thCls} text-left w-24`}>LCOG%</th>
+                        <th className={`${thCls} text-left w-24`}>
+                          {renderListSortHeader(
+                            "lcog",
+                            "LCOG%",
+                            LCOG_HEADER_TOOLTIP,
+                          )}
+                        </th>
+                        {showThresholdColumn ? (
+                          <th
+                            className={`${thCls} w-[7.25rem] min-w-[7.25rem] px-2 text-center ${
+                              isEditMode ? "py-1" : ""
+                            }`}
+                          >
+                            <LcogThresholdHeaderCell
+                              isEditMode={isEditMode}
+                              isDark={isDark}
+                              headerTooltip={
+                                isEditMode
+                                  ? undefined
+                                  : LCOG_THRESHOLD_HEADER_TOOLTIP
+                              }
+                              cautionRaw={draftCaution}
+                              overRaw={draftOver}
+                              savedCaution={savedCaution}
+                              savedOver={savedOver}
+                              onCautionChange={setDraftCaution}
+                              onOverChange={setDraftOver}
+                              cautionInvalid={effectiveThresholds.cautionInvalid}
+                              overInvalid={effectiveThresholds.overInvalid}
+                            />
+                          </th>
+                        ) : null}
                         <th
                           className={`${thCls} w-16`}
                           aria-label="Row actions"
                         />
                       </tr>
                     </thead>
-                    <tbody
-                      className={`divide-y ${isDark ? "divide-slate-700" : "divide-gray-200"}`}
-                    >
+                    <tbody className={tbodyRowDividerCls}>
                       {isEditMode && (
                         <tr style={{ height: 52 }}>
                           <td colSpan={tableColSpan} className="px-4 py-2">
@@ -1325,6 +1903,7 @@ export function RecipeCostReportListPage({
                                 pending.price,
                                 pendingRow,
                                 eachMode,
+                                menuPricingEach,
                               )
                             : null;
                         const rowOptions = addableCandidatesForPendingRow(
@@ -1431,6 +2010,16 @@ export function RecipeCostReportListPage({
                                 ? lcogPercent(pendingBd, pendingPriceStored)
                                 : "—"}
                             </td>
+                            {showThresholdColumn ? (
+                              <LcogThresholdDataCell
+                                lcogPercent={lcogPercentValue(
+                                  pendingBd,
+                                  pendingPriceStored,
+                                )}
+                                thresholds={rowThresholds}
+                                mutedClass={muted}
+                              />
+                            ) : null}
                             <td className="w-16 whitespace-nowrap px-4 py-2">
                               <button
                                 type="button"
@@ -1445,7 +2034,17 @@ export function RecipeCostReportListPage({
                           </tr>
                         );
                       })}
-                      {members.map((row) => {
+                      {noItemSearchMatches && (
+                        <tr>
+                          <td
+                            colSpan={tableColSpan}
+                            className={`px-4 py-6 text-center text-sm ${muted}`}
+                          >
+                            No items match your search.
+                          </td>
+                        </tr>
+                      )}
+                      {sortedMembers.map((row) => {
                         const bd = costs[row.item_id];
                         const ws = draftWholesale.has(row.item_id)
                           ? draftWholesale.get(row.item_id)!
@@ -1453,6 +2052,7 @@ export function RecipeCostReportListPage({
                               row.latest_wholesale_price,
                               row,
                               eachMode,
+                              menuPricingEach,
                             );
                         const rt = draftRetail.has(row.item_id)
                           ? draftRetail.get(row.item_id)!
@@ -1460,19 +2060,33 @@ export function RecipeCostReportListPage({
                               row.latest_retail_price,
                               row,
                               eachMode,
+                              menuPricingEach,
                             );
                         const priceForLcog =
                           pageMode === "wholesale"
-                            ? listPriceInputToStoredPerKg(ws, row, eachMode)
-                            : listPriceInputToStoredPerKg(rt, row, eachMode);
+                            ? listPriceInputToStoredPerKg(
+                                ws,
+                                row,
+                                eachMode,
+                                menuPricingEach,
+                              )
+                            : listPriceInputToStoredPerKg(
+                                rt,
+                                row,
+                                eachMode,
+                                menuPricingEach,
+                              );
                         const rowDrafted =
                           pageMode === "wholesale"
                             ? draftWholesale.has(row.item_id)
-                            : draftRetail.has(row.item_id);
+                            : draftRetail.has(row.item_id) ||
+                              (draftCostBasis.has(row.item_id) &&
+                                draftCostBasis.get(row.item_id) !==
+                                  savedCostBasisByItem.get(row.item_id));
                         return (
                           <tr
                             key={row.item_id}
-                            className={`transition-colors ${
+                            className={`transition-[background-color] ${
                               rowDrafted
                                 ? isDark
                                   ? "bg-amber-900/15"
@@ -1551,11 +2165,13 @@ export function RecipeCostReportListPage({
                                         row.latest_wholesale_price,
                                         row,
                                         eachMode,
+                                        menuPricingEach,
                                       )
                                     : formatListPriceDisplay(
                                         row.latest_retail_price,
                                         row,
                                         eachMode,
+                                        menuPricingEach,
                                       )}
                                 </span>
                               )}
@@ -1565,6 +2181,13 @@ export function RecipeCostReportListPage({
                             >
                               {lcogPercent(bd, priceForLcog)}
                             </td>
+                            {showThresholdColumn ? (
+                              <LcogThresholdDataCell
+                                lcogPercent={lcogPercentValue(bd, priceForLcog)}
+                                thresholds={rowThresholds}
+                                mutedClass={muted}
+                              />
+                            ) : null}
                             <td className="w-16 whitespace-nowrap px-4 py-2">
                               <button
                                 type="button"
@@ -1600,7 +2223,7 @@ export function RecipeCostReportListPage({
     : "flex min-h-0 flex-1 flex-col overflow-hidden [&_button:not(:disabled)]:cursor-pointer [&_button:disabled]:cursor-not-allowed";
 
   const innerCls = showPageHeading
-    ? "mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col"
+    ? "mx-auto flex h-full min-h-0 w-full max-w-[96rem] flex-col"
     : "flex h-full min-h-0 flex-1 flex-col";
 
   return (
@@ -1649,6 +2272,18 @@ export function RecipeCostReportListPage({
           onConfirm={() => void confirmDeleteList()}
         />
       )}
+
+      {showPrint && selectedListId ? (
+        <PrintModal
+          isDark={isDark}
+          reportType={pageModeToPrintReportType(pageMode)}
+          listName={listName}
+          members={printSortedMembers}
+          costs={costs}
+          costDisplayOptions={costDisplayOptions}
+          onClose={() => setShowPrint(false)}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,0 +1,1183 @@
+================================================================================
+  COST RPC 統合テスト計画（fixture 設計書・改訂版 2026-05）
+  対象 RPC:
+    - calculate_item_costs_with_breakdown_scoped        … Corporate / 直営 / Costing 相当
+    - calculate_item_costs_with_breakdown_wholesale_overrides … Pricing・Wholesale 原価
+  スキーマ固定: supabase/test/schema-baseline-20260520_pre_cost_breakdown_rpc_tests.sql
+  fixture: supabase/test/cost-rpc-fixture-base.sql + cost-rpc-fixture-wl-*.sql（2026-05-20 作成）
+================================================================================
+
+【読み方】
+  各「ケース」= 1 メニュー（または 1 代表品目）を中心に、
+    ① レシピ木（材料 → その材料 …）
+    ② scoped … ベンダー＋レシピ labor からの food / labor / total（3 列とも意味あり）
+    ③ WL fixture … wholesale_list の members / lines をどう置くか（シナリオ A/B/…）
+    ④ wholesale_overrides … ③ と同じ WL 状態で RPC を叩く期待値
+  をまとめたもの。
+
+  ③ と ④ は同じ WL パターンの二面（データ vs RPC）。scoped は WL の影響を受けない。
+
+  assert（§2 参照）:
+    - scoped     → out_food, out_labor, out_total を検証
+    - wholesale  → **out_total のみ**（WL リーフ／WL 材料を含む行すべて）
+
+【文書構成】（§1 → §9 をこの順に読む）
+  §1 固定 ID（§1.1 品目 UUID 表・§1.2 vvp 列値）
+  §2 共通ルール（scoped / wholesale）
+  §3 品目マスタ（fixture INSERT 一覧）
+  §4 ケース詳細 … **C01 → C07 の番号順**（本文も同じ順）
+  §5 verify 手順メモ
+  §6 期待値確定表
+  §7 fixture SQL 章立て（§A〜§F チェックリスト）
+  §8 次のアクション
+  §9 見直しメモ
+
+【ローカル DB の作り方（本番に触らない）】
+  1. supabase start
+  2. ローカル DB に schema-baseline-*.sql を流す（箱＋関数）
+  3. cost-rpc-fixture-base.sql を流す（+ 必要なら cost-rpc-fixture-wl-*.sql）
+  4. ローカル URL で rpc → 本書の期待値と突合
+
+【クラウド退避】
+  supabase/dump/20260520_pre_cost_breakdown_rpc_tests_backup/ … 作業前バックアップ（任意）
+
+
+================================================================================
+1. 固定 ID（fixture はこの UUID をそのまま使う）
+================================================================================
+
+  test_company     11111111-1111-1111-1111-111111111001
+  test_tenant      11111111-1111-1111-1111-111111111101
+  test_tenant_b    11111111-1111-1111-1111-111111111102  … C06 のみ
+  super_test_user  22222222-2222-2222-2222-222222222201
+  test_vendor      33333333-3333-3333-3333-333333333301
+  wl_test_list     44444444-4444-4444-4444-444444444401
+  labor_kitchen    55555555-5555-5555-5555-555555555501  … $60/h
+
+  末尾 3 桁で品目を識別（fixture コメントにも同名を書く）:
+    raw      …201〜215（R15 = each 買い）
+    prepped  …301〜312
+    menu     …401〜407
+
+  補助 ID（§A・§B で使う）:
+    test_vendor_b    33333333-3333-3333-3333-333333333302  … C06 tenant_b 用
+    company_tenant_a aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa1101  … company↔101
+    company_tenant_b aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa1102  … company↔102
+    profile_test     bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbb1101  … user 101 admin（任意）
+    share_p311       cccccccc-cccc-cccc-cccc-cccccccc0601  … C06 cross_tenant
+
+  ※ profiles は RPC テストに必須ではないが、recipe_lines.user_id 等で
+    super_test_user を使うなら users 行は必須。
+
+
+--- 1.1 品目 UUID 一覧（fixture はこの表の id をそのまま INSERT）---
+
+  規則（最終セグメント 12 桁 = 種別プレフィックス + 末尾 3 桁）:
+    base_item（tenant 101）  77777777-7777-7777-7777-77777777{2xx}
+    item（tenant 101）       66666666-6666-6666-6666-66666666{2xx|3xx|4xx}
+    vvp（tenant 101）        88888888-8888-8888-8888-88888888{2xx}
+    product_mapping（101）   99999999-9999-9999-9999-99999999{2xx}
+    {2xx}=raw 201-215, {3xx}=prepped 301-312, {4xx}=menu 401-407
+
+  tenant_b 専用（C06。101 と id は別 UUID・中身は §3 と同型）:
+    base B08_b（米）         77777777-7777-7777-7777-777777770802
+    item R08_b               66666666-6666-6666-6666-666666660802
+    vvp R08_b                88888888-8888-8888-8888-888888880802
+    mapping R08_b            99999999-9999-9999-9999-999999990802
+    item P311                66666666-6666-6666-6666-666666660311
+    item R08_b の vendor は test_vendor_b（§3 R08 と同じ 20kg/$40）
+
+  --- raw（tenant 101・item_kind=raw）---
+
+  記号 | base_item (777…77) | item (666…66) | vvp (888…88) | mapping (999…99)
+  -----|--------------------|---------------|--------------|------------------
+  R01  | …0201              | …0201         | …0201        | …0201
+  R02  | …0202              | …0202         | …0202        | …0202
+  R03  | …0203              | …0203         | …0203        | …0203
+  R04  | …0204              | …0204         | …0204        | …0204
+  R05  | …0205              | …0205         | …0205        | …0205
+  R06  | …0206              | …0206         | …0206        | …0206
+  R07  | …0207              | …0207         | …0207        | …0207
+  R08  | …0208              | …0208         | …0208        | …0208
+  R09  | …0209              | …0209         | …0209        | …0209
+  R10  | …0210              | …0210         | …0210        | …0210
+  R11  | …0211              | …0211         | …0211        | …0211
+  R12  | …0212              | …0212         | …0212        | …0212
+  R13  | …0213              | …0213         | …0213        | …0213
+  R14  | …0214              | …0214         | …0214        | …0214  … specific_weight=0.92 on base
+  R15  | …0215              | …0215         | …0215        | …0215  … each_grams=55, vvp unit=each
+
+  完全 UUID の例（R01）:
+    base  77777777-7777-7777-7777-777777770201
+    item  66666666-6666-6666-6666-666666660201
+    vvp   88888888-8888-8888-8888-888888880201
+    map   99999999-9999-9999-9999-999999990201
+  他行は最終 3 桁だけ差し替え（R15 → …0215 / P312 → …0312 / M407 → …0407）。
+
+  --- prepped（tenant 101・is_menu_item=false）---
+
+  P301 …0301  P302 …0302  P303 …0303  P304 …0304  P305 …0305  P306 …0306
+  P307 …0307  P308 …0308  P309 …0309  P310 …0310
+  P312 …0312  … C07（tenant 101）
+
+  ※ P311 は tenant_b: 66666666-6666-6666-6666-666666660311（上記 tenant_b 専用）
+
+  --- menu（tenant 101・is_menu_item=true, item_kind=prepped）---
+
+  M401 …0401  M402 …0402  M403 …0403  M404 …0404
+  M405 …0405  M406 …0406  M407 …0407
+
+
+--- 1.2 virtual_vendor_products 列値（tenant 101・§3 対応）---
+
+  記号 | purchase_unit | purchase_quantity | current_price | 備考
+  -----|---------------|-------------------|---------------|------
+  R01  | kg            | 10                | 50.00         |
+  R02  | g             | 1000              | 2.00          |
+  R03  | kg            | 5                 | 25.00         |
+  R04  | kg            | 5                 | 125.00        |
+  R05  | kg            | 2                 | 10.00         |
+  R06  | g             | 2000              | 6.00          |
+  R07  | g             | 500               | 8.00          |
+  R08  | kg            | 20                | 40.00         |
+  R09  | kg            | 1                 | 8.00          |
+  R10  | kg            | 3                 | 45.00         |
+  R11  | kg            | 2                 | 20.00         |
+  R12  | g             | 500               | 5.00          |
+  R13  | g             | 1000              | 0.50          |
+  R14  | gal           | 1                 | 12.00         | base specific_weight 0.92
+  R15  | each          | 12                | 6.00          | item.each_grams=55
+
+  tenant_b R08_b: 上表 R08 と同じ（vendor=test_vendor_b, tenant_id=102）。
+
+
+================================================================================
+2. 共通ルール（手計算・RPC 突合）
+================================================================================
+
+  --- scoped のみ（calculate_item_costs_with_breakdown_scoped）---
+
+  vendor 原価（raw）:
+    質量単位（kg, g など）:
+      food $/g = current_price ÷ パッケージのグラム数
+      例: 10 kg を $50 → 50 ÷ (10×1000) = 0.005 $/g
+    each 買い（purchase_unit = each）:
+      items.each_grams 必須（1 個あたりの gram）
+      food $/g = current_price ÷ (purchase_quantity × each_grams)
+      例: 12 個 / $6.00、each_grams = 55 → 6 ÷ (12×55) = 0.009091 $/g
+      ※ レシピの使用量は g で書く（2 個分 = 110 g など）
+
+  prepped・葉（子が raw だけ。P305 / P306 / P301 / P303 など）:
+    food $/g  = Σ(raw 寄与 $) ÷ 出来高 g
+    labor $/g = (時給×分/60) ÷ 出来高 g     … 自身の labor 行のみ
+    out_labor = 上記と同じ（子 prepped がいないので按分なし）
+    total $/g = food + labor
+
+  prepped・枝（子に prepped がある。P302 など）:
+    food $/g  = Σ(子の out_food × 子使用量 g) ÷ 出来高 g
+    labor $/g = Σ(子の out_labor × 子使用量 g) ÷ 出来高 g
+              + (自身の labor バッチ $) ÷ 出来高 g
+    total $/g = food + labor
+    ※「自身 50min だけ ÷ 出来高」は不足（子 P301 の labor が漏れる）
+
+  menu / 親 prepped（M401 / M402。scoped RPC の積み上げ）:
+    親の food $/g  = Σ(子の out_food_cost_per_gram × 子使用量 g) ÷ 親出来高 g
+    親の labor $/g = Σ(子の out_labor_cost_per_gram × 子使用量 g) ÷ 親出来高 g
+                    + （親自身の labor 行バッチ $）÷ 親出来高 g
+    親の total     = food + labor（RPC の out_* と同じ）
+    ※ 親の food に子の total を入れない（二重計上になる）
+
+  --- wholesale_overrides（WL あり）— コード・UI 準拠 ---
+
+  参照: supabase/schema_dump.sql の
+    calculate_item_costs_with_breakdown_wholesale_overrides
+    frontend/lib/recipeCostReportCalc.ts formatCostDisplay（total のみ表示）
+
+  原則（本計画・verify・Pricing 表示）:
+    品目が WL リーフである、またはレシピに WL リーフの子を含む経路で
+    wholesale_overrides した行は、**out_total $/g だけ**が意味を持つ。
+    food / labor は出さない・検証しない（手計算も total のみ書く）。
+
+  注: RPC の RETURNS TABLE には out_food / out_labor 列があるが、
+    WL 文脈では内訳として使わない。UI も total_cost_per_gram のみ。
+
+  WL 単価の意味（製品・手計算・UI）:
+    WL の $/kg は **scoped の out_total $/g と同格**の卸単価（food/labor の内訳はない）。
+    RPC 内部では temp 表の food 列に載るが、**検証・表示で使うのは out_total のみ**。
+
+  WL リーフ（members + lines、wholesale_price $/kg > 0）:
+    out_total $/g = wholesale_price ÷ 1000
+    その品目のレシピは **ここで展開を止める**（下の材料・子 prepped は見ない）。
+    ※ WL member/line に載せられるのは **自テナントの prepped / menu** のみ（API）。
+      raw 不可（C07）。他テナント共有 prepped 不可（C06）。共有子を持つ自メニューは可（C06 M406）。
+
+  親（WL リーフではない）の wholesale total:
+    out_total $/g = Σ(子使用量 g × 子の $/g) ÷ 親出来高 g
+                  + （親自身の labor バッチ $）÷ 親出来高 g   … C04 M404 など
+    子の $/g:
+      WL リーフの子  → wholesale_price ÷ 1000（= 子の scoped out_total の代わり）
+      それ以外      → scoped の out_total $/g
+
+  WL なしで wholesale を呼ぶと total は scoped と同値（式は scoped と同じ子単価で書ける）。
+
+  --- 共通 ---
+
+  RPC seed:
+    多くはメニュー id 1 つ。中間品だけ見るときは prepped id も seed に含めてよい。
+
+  許容誤差: 絶対値 1e-6 〜 1e-5 $/g 程度（fixture 後に実測で微調整可）
+
+  突合（verify・§6）:
+    | RPC       | assert する列              | assert しない列      |
+    |-----------|---------------------------|----------------------|
+    | scoped    | out_food, out_labor, total | —                    |
+    | wholesale | **out_total のみ**        | out_food, out_labor  |
+
+
+================================================================================
+3. 品目マスタ一覧（fixture に INSERT するもの）
+================================================================================
+
+--- raw（名前 / 買い方 → food $/g）---
+
+  R01 小麦粉      10 kg / $50     → 0.005000
+  R02 食塩        1000 g / $2     → 0.002000
+  R03 砂糖        5 kg / $25      → 0.005000
+  R04 豚ロース    5 kg / $125     → 0.025000
+  R05 パン粉      2 kg / $10      → 0.005000
+  R06 卵液        2000 g / $6     → 0.003000   … g 買い（C02 とんかつ用）
+  R07 カレー粉    500 g / $8      → 0.016000
+  R08 米          20 kg / $40     → 0.002000
+  R09 バター      1 kg / $8       → 0.008000
+  R10 牛ひき肉    3 kg / $45      → 0.015000
+  R11 チーズ      2 kg / $20      → 0.010000
+  R12 ガーリック  500 g / $5      → 0.010000
+  R13 水          1000 g / $0.50  → 0.000500   … 安価テスト用
+  R14 サラダ油    1 gal / $12.00, base_item specific_weight = 0.92
+                  → food $/g = 12.00 ÷ (1 × 0.92 × 1000 × 3.78541)
+                  = 12.00 ÷ 3482.5772 = 0.003446 $/g（§2 gallon 式・C02 未使用）
+  R15 箱卵        12 each / $6.00, each_grams=55 on item → 0.009091 $/g  … each 買い（C07）
+
+--- prepped（出来高 g / 主な中身）---
+
+  P301 ルー（ベシャメル系）     500 g
+  P302 カレーソース             2000 g
+  P303 とんかつ（揚げ前仕込み） 400 g
+  P304 白飯                    1000 g
+  P305 バンズ生地               800 g
+  P306 ハンバーグパティ         500 g
+  P307 チーズソース層           600 g
+  P308 深い中間層 L2            800 g
+  P309 深い中間層 L3            600 g
+  P310 ガーリックバター         200 g
+  P311 シェア用仕込み（tenant_b）1000 g
+  P312 箱卵仕込み（C07）          110 g … 子 R15 each 買い（WL は P312 に付ける）
+
+--- menu（is_menu_item=true）---
+
+  M401 ハムサンド
+  M402 トンカツカレー          … メイン深木
+  M403 ダブルチーズバーガー
+  M404 キッチンコンボプレート
+  M405 ガーリックトースト
+  M406 シェア弁当（tenant が P311 参照・C06 wholesale は M406 を WL）
+  M407 目玉焼きプレート           … C07: scoped=each raw、wholesale=P312 WL
+
+
+================================================================================
+4. テストケース（1 ケース = レシピ + scoped + WL + wholesale）
+================================================================================
+
+  各ケースの必須セクション（体裁を統一）:
+    ■ レシピ木（出来高 g・使用量 g を明示）
+    ■ scoped 手計算（葉→枝→メニュー。food / labor / total と式）
+    ■ RPC（scoped）… seed と out_food / out_labor / out_total
+    ■ WL fixture … パターン A/B/…
+    ■ wholesale_overrides … out_total のみ（§2）
+
+  ケース一覧（§4 本文・§6 表とも C01 → C07 の順）:
+    C01 ハムサンド         … 浅い・scoped/wholesale 基礎
+    C02 トンカツカレー     … 深木・枝 prepped・WL 複数シナリオ
+    C03 ダブルチーズ       … 最深木・途中 WL（P307）
+    C04 コンボプレート     … メニュー nest + 親 labor
+    C05 ガーリックトースト … メニュー自身が WL リーフ
+    C06 シェア弁当         … scoped cross-tenant / wholesale 自 M406 WL
+    C07 目玉焼き           … scoped each 買い / wholesale P312 WL
+
+
+--------------------------------------------------------------------------------
+C01 — ハムサンド（浅い・両 RPC の基礎）
+--------------------------------------------------------------------------------
+
+■ レシピ木
+
+  M401 ハムサンド（出来高 220 g）
+  ├─ P305 バンズ生地 … 80 g
+  │   ├─ R01 小麦粉 … 500 g
+  │   ├─ R02 食塩 … 20 g
+  │   ├─ R09 バター … 50 g
+  │   └─ labor … 25 min（kitchen）
+  ├─ P306 ハンバーグパティ … 70 g
+  │   ├─ R10 牛ひき肉 … 300 g
+  │   ├─ R02 食塩 … 10 g
+  │   ├─ R06 卵液 … 30 g
+  │   └─ labor … 20 min
+  └─ R11 チーズ … 15 g（raw を直接投入）
+
+■ scoped 手計算（葉→メニュー）
+
+  P305 … 葉:
+    food  = (500×0.005 + 20×0.002 + 50×0.008) / 800 = 2.94/800 = 0.003675 $/g
+    labor = (60×25/60) / 800 = 25/800 = 0.031250 $/g
+    total = 0.034925 $/g
+
+  P306 … 葉:
+    food  = (300×0.015 + 10×0.002 + 30×0.003) / 500 = 4.61/500 = 0.009220 $/g
+    labor = (60×20/60) / 500 = 20/500 = 0.040000 $/g
+    total = 0.049220 $/g
+
+  M401（§2 の積み上げ式どおり・子は out_food / out_labor）:
+    food  = (80×0.003675 + 70×0.009220 + 15×0.010000) / 220
+          = 1.0894 / 220 = 0.004952 $/g
+    labor = (80×0.031250 + 70×0.040000) / 220
+          = 5.3000 / 220 = 0.024091 $/g
+    total = 0.004952 + 0.024091 = 0.029043 $/g
+
+  ※ 旧版は P305/P306 の材料合計 $ を誤って 4.1 / 5.09 としていた（正しくは 2.94 / 4.61）。
+
+■ RPC（scoped）
+
+  seed: M401
+  期待（手計算）:
+    out_food  ≈ 0.004952
+    out_labor ≈ 0.024091
+    out_total ≈ 0.029043
+
+■ WL fixture
+
+  A) WL なし（メンバー / 価格行なし）
+  B) members: P306、lines: P306 = $18/kg → リーフ 0.018 $/g
+
+■ wholesale_overrides（seed = M401, wl_test_list）
+
+  scoped は A/B どちらでも同じ（WL は scoped に効かない）。
+
+  A) fixture = WL シナリオ A（WL 未使用）
+
+      子の $/g（§2 wholesale・total 用・すべて scoped total）:
+        P305 … 0.034925
+        P306 … 0.049220
+        R11  … 0.010000
+
+      M401 out_total $/g:
+        = (80×0.034925 + 70×0.049220 + 15×0.010000) ÷ 220
+        = (2.794000 + 3.445400 + 0.150000) ÷ 220
+        = 6.389400 ÷ 220
+        = 0.029043 $/g
+      assert: out_total = 0.029043（scoped M401 と同値）
+
+  B) fixture = WL シナリオ B（P306 = $18.00 / kg）
+
+    --- P306 単体 seed（WL リーフ）---
+
+      out_total $/g = 18.00 ÷ 1000 = 0.018000
+      （food / labor は検証しない）
+
+    --- M401 seed（レシピに WL 子 P306 あり → total のみ）---
+
+      子の $/g（§2 wholesale・total 用）:
+        P305 … scoped total = 0.034925
+        P306 … WL          = 18.00 ÷ 1000 = 0.018000
+        R11  … scoped total = 0.010000（raw・labor 0）
+
+      out_total $/g:
+        = (80×0.034925 + 70×0.018000 + 15×0.010000) ÷ 220
+        = (2.794000 + 1.260000 + 0.150000) ÷ 220
+        = 4.204000 ÷ 220
+        = 0.019109 $/g
+
+      期待（assert）:
+        out_total ≈ 0.019109
+        out_total < 0.029043   … scoped M401 の total
+      （out_food / out_labor は検証しない）
+
+--------------------------------------------------------------------------------
+C02 — トンカツカレー（深い木・メインケース）
+--------------------------------------------------------------------------------
+
+■ レシピ木（4 段）
+
+  M402 トンカツカレー（出来高 450 g）
+  ├─ P302 カレーソース … 220 g
+  │   ├─ P301 ルー … 100 g
+  │   │   ├─ R01 小麦粉 … 400 g
+  │   │   ├─ R09 バター … 80 g
+  │   │   └─ labor … 10 min
+  │   ├─ R07 カレー粉 … 60 g
+  │   ├─ R13 水 … 1500 g
+  │   └─ labor … 50 min
+  ├─ P303 とんかつ … 120 g
+  │   ├─ R04 豚ロース … 260 g
+  │   ├─ R05 パン粉 … 50 g
+  │   ├─ R06 卵液 … 40 g
+  │   └─ labor … 45 min
+  └─ P304 白飯 … 110 g
+      └─ R08 米 … 1200 g（洗米・吸水は無視して g 指定）
+
+■ scoped 手計算（C01 と同じ書き方・下から葉→枝→メニューの順）
+
+  ※ C01 はメニュー直下が「葉 prepped + raw」だけ。C02 は P302 が「枝 prepped」
+    （中に P301 葉がある）なので labor に子按分が入る。ルールは §2 と同じ。
+
+  P301 ルー（yield 500g）… 葉 prepped（C01 の P305/P306 と同型）:
+    food  = (400×0.005 + 80×0.008) / 500 = 2.64/500 = 0.005280 $/g
+    labor = (60×10/60) / 500 = 10/500 = 0.020000 $/g
+    total = 0.025280 $/g
+    → この out_labor 0.020000 を P302 が 100g 使う
+
+  P302 カレーソース（yield 2000g）… 枝 prepped（§2「prepped・枝」）:
+    food  = (100×0.005280 + 60×0.016000 + 1500×0.000500) / 2000
+          = 2.238/2000 = 0.001119 $/g
+    labor = (100×0.020000) / 2000 + (60×50/60) / 2000
+          = 2.000000/2000 + 50.000000/2000
+          = 0.001000 + 0.025000 = 0.026000 $/g
+          … 1行目=子 P301 の out_labor×使用量、2行目=自身 50min（C01 の P306 と同型）
+    total = 0.001119 + 0.026000 = 0.027119 $/g
+
+  P303 とんかつ（yield 400g）… 葉 prepped:
+    food  = (260×0.025 + 50×0.005 + 40×0.003) / 400 = 6.87/400 = 0.017175 $/g
+    labor = (60×45/60) / 400 = 45/400 = 0.112500 $/g
+    total = 0.129675 $/g
+
+  P304 白飯（yield 1000g）… 葉（raw のみ・labor 行なし）:
+    food  = 1200×0.002 / 1000 = 0.002400 $/g
+    labor = 0
+    total = 0.002400 $/g
+
+  M402（§2 メニュー積み上げ。C01 の M401 と同型）:
+    food  = (220×0.001119 + 120×0.017175 + 110×0.002400) / 450
+          = (0.246180 + 2.061000 + 0.264000) / 450
+          = 2.571180 / 450 = 0.005714 $/g
+    labor = (220×0.026000 + 120×0.112500) / 450
+          = (5.720000 + 13.500000) / 450
+          = 19.220000 / 450 = 0.042711 $/g
+          … P304 は out_labor=0 なので 110g 項は加算しない（C01 の R11 と同様）
+    total = 0.005714 + 0.042711 = 0.048425 $/g
+
+■ RPC（scoped）
+
+  seed: M402
+  期待（手計算）:
+    out_food  ≈ 0.005714
+    out_labor ≈ 0.042711
+    out_total ≈ 0.048425
+
+■ WL fixture（fixture で members/lines を切替）
+
+  A) WL なし
+  B) members/lines: P303 = $28/kg
+  C) members/lines: P302 = $6/kg
+  D) members: P303 のみ（価格行なし）
+  E) members/lines: M402 = $15/kg（境界・通常 UI では載せない）
+
+■ wholesale_overrides（seed = M402, wl_test_list）
+
+  各シナリオで wholesale_overrides を呼ぶ。scoped は常に同じ。
+
+  --- シナリオ A: WL 影響なし ---
+    wl_test_list にカレー関連メンバーなし、または価格行なしのみ
+
+    子の $/g（すべて scoped total）:
+      P302 … 0.027119
+      P303 … 0.129675
+      P304 … 0.002400
+
+    M402 out_total $/g:
+      = (220×0.027119 + 120×0.129675 + 110×0.002400) ÷ 450
+      = (5.966180 + 15.561000 + 0.264000) ÷ 450
+      = 21.791180 ÷ 450
+      = 0.048425 $/g
+    assert: out_total = 0.048425（scoped M402 と同値）
+
+  --- シナリオ B: とんかつだけ WL ---
+
+    P303 リーフ:
+      out_total $/g = 28.00 ÷ 1000 = 0.028000
+
+    M402（子: P302 scoped、P303 WL、P304 scoped）:
+      out_total $/g:
+        = (220×0.027119 + 120×0.028000 + 110×0.002400) ÷ 450
+        = (5.966180 + 3.360000 + 0.264000) ÷ 450
+        = 9.590180 ÷ 450
+        = 0.021311 $/g
+    assert: P303 out_total = 0.028000；M402 out_total = 0.021311；< scoped 0.048425
+
+  --- シナリオ C: カレーソースだけ WL ---
+
+    P302 リーフ:
+      out_total $/g = 6.00 ÷ 1000 = 0.006000
+
+    M402（子: P302 WL、P303/P304 scoped）:
+      out_total $/g:
+        = (220×0.006000 + 120×0.129675 + 110×0.002400) ÷ 450
+        = (1.320000 + 15.561000 + 0.264000) ÷ 450
+        = 17.145000 ÷ 450
+        = 0.038100 $/g
+    assert: M402 out_total = 0.038100；< scoped 0.048425（WL ソースが scoped より安い）
+
+  --- シナリオ D: とんかつは WL メンバーだが価格行なし ---
+    member のみ、lines なし → P303 は WL リーフにならず子展開
+
+    子の $/g（すべて scoped total・シナリオ A と同じ）:
+      P302 … 0.027119
+      P303 … 0.129675
+      P304 … 0.002400
+
+    M402 out_total $/g:
+      = (220×0.027119 + 120×0.129675 + 110×0.002400) ÷ 450
+      = 21.791180 ÷ 450
+      = 0.048425 $/g
+    assert: out_total = 0.048425（scoped と同値）
+
+  --- シナリオ E: メニュー M402 自身を WL $15/kg（境界）---
+
+    M402 リーフ（レシピ展開しない）:
+      out_total $/g = 15.00 ÷ 1000 = 0.015000
+    assert: out_total = 0.015000（内訳・子の積み上げは検証しない）
+    Pricing UI では通常メニューを WL に載せない想定。
+
+
+--------------------------------------------------------------------------------
+C03 — ダブルチーズバーガー（最深 5 段）
+--------------------------------------------------------------------------------
+
+■ レシピ木
+
+  M403 ダブルチーズバーガー（出来高 280 g）
+  ├─ P309 深い L3 … 200 g
+  │   └─ P308 深い L2 … 350 g
+  │       ├─ P307 チーズソース層 … 400 g   … 使用量（P307 出来高 §3 = 600 g）
+  │       │   ├─ R11 チーズ … 200 g
+  │       │   ├─ R01 小麦粉 … 50 g
+  │       │   └─ labor … 15 min
+  │       ├─ P306 ハンバーグパティ … 80 g
+  │       └─ P305 バンズ … 50 g
+  └─ R12 ガーリック … 80 g                 … 280−200=80（fixture 必須）
+
+■ scoped 手計算（葉→枝→メニュー）
+
+  P305 バンズ（yield 800g）… 葉（C01 と同レシピ）:
+    food  = (500×0.005 + 20×0.002 + 50×0.008) / 800 = 2.94/800 = 0.003675 $/g
+    labor = (60×25/60) / 800 = 25/800 = 0.031250 $/g
+    total = 0.034925 $/g
+
+  P306 ハンバーグパティ（yield 500g）… 葉（C01 と同レシピ）:
+    food  = (300×0.015 + 10×0.002 + 30×0.003) / 500 = 4.61/500 = 0.009220 $/g
+    labor = (60×20/60) / 500 = 20/500 = 0.040000 $/g
+    total = 0.049220 $/g
+
+  P307 チーズソース（yield 600g）… 葉:
+    food  = (200×0.010000 + 50×0.005000) / 600 = 2.25/600 = 0.003750 $/g
+    labor = (60×15/60) / 600 = 15/600 = 0.025000 $/g
+    total = 0.028750 $/g
+
+  P308 深い L2（yield 800g）… 枝（P307 + P306 + P305）:
+    food  = (400×0.003750 + 80×0.009220 + 50×0.003675) / 800
+          = 2.42135/800 = 0.003027 $/g
+    labor = (400×0.025000 + 80×0.040000 + 50×0.031250) / 800
+          = 14.7625/800 = 0.018453 $/g
+    total = 0.021480 $/g
+
+  P309 深い L3（yield 600g）… 枝（子 P308 のみ）:
+    food  = (350×0.003027) / 600 = 1.05945/600 = 0.001766 $/g
+    labor = (350×0.018453) / 600 = 6.45855/600 = 0.010764 $/g
+    total = 0.012530 $/g
+
+  M403（yield 280g。C01 の M401 と同型）:
+    food  = (200×0.001766 + 80×0.010000) / 280
+          = (0.3532 + 0.8000) / 280 = 1.1532/280 = 0.004118 $/g
+    labor = (200×0.010764 + 80×0) / 280 = 2.1528/280 = 0.007689 $/g
+    total = 0.004118 + 0.007689 = 0.011807 $/g
+
+
+■ RPC（scoped）
+
+  seed: M403（中間確認: P307, P308, P309 も seed 可）
+  期待（手計算）:
+    out_food  ≈ 0.004118
+    out_labor ≈ 0.007689
+    out_total ≈ 0.011807
+
+■ WL fixture
+
+  B) members: P307、lines: P307 = $12/kg → リーフ 0.012 $/g
+
+■ wholesale_overrides（seed = M403, wl_test_list）
+
+  scoped は B でも同じ（WL は scoped に効かない）。
+
+  P307 リーフ:
+    out_total $/g = 12.00 ÷ 1000 = 0.012000
+
+  P308（子: P307 WL、P306/P305 scoped total）:
+    out_total $/g:
+      = (400×0.012000 + 80×0.049220 + 50×0.034925) / 800
+      = (4.800000 + 3.937600 + 1.746250) / 800
+      = 10.483850 / 800
+      = 0.013105 $/g
+
+  P309（子 P308 のみ）:
+    out_total $/g:
+      = (350×0.013105) / 600
+      = 4.586750 / 600
+      = 0.007644 $/g
+
+  M403（子: P309 wholesale、R12 scoped total 0.010000）:
+    out_total $/g:
+      = (200×0.007644 + 80×0.010000) / 280
+      = (1.528800 + 0.800000) / 280
+      = 2.328800 / 280
+      = 0.008317 $/g
+
+  期待（assert）:
+    P307 out_total = 0.012000
+    M403 out_total ≈ 0.008317（scoped 0.011807 より低い）
+  （out_food / out_labor は検証しない）
+
+
+--------------------------------------------------------------------------------
+C04 — キッチンコンボプレート（menu に labor）
+--------------------------------------------------------------------------------
+
+■ レシピ木
+
+  M404（出来高 500 g）
+  ├─ M401 ハムサンド … 180 g   … 別メニューを材料に（ネスト）
+  ├─ P302 カレーソース … 100 g
+  └─ labor … 8 min
+
+  ※ menu は item_kind=prepped 必須（chk_items_menu_must_be_prepped）。
+    M401 を M404 の子にできる。scoped は prepped 親として積み上げる。
+
+■ scoped 手計算（葉→枝→メニュー。M401 は C01・P302 は C02 と同レシピ）
+
+  P301 ルー（yield 500g）… 葉（C02 と同型・P302 の子）:
+    food  = (400×0.005 + 80×0.008) / 500 = 2.64/500 = 0.005280 $/g
+    labor = (60×10/60) / 500 = 10/500 = 0.020000 $/g
+    total = 0.025280 $/g
+
+  M401 ハムサンド（yield 220g）… メニュー（C01 と同型）:
+    food  = (80×0.003675 + 70×0.009220 + 15×0.010000) / 220
+          = 1.089400 / 220 = 0.004952 $/g
+    labor = (80×0.031250 + 70×0.040000) / 220
+          = 5.300000 / 220 = 0.024091 $/g
+    total = 0.029043 $/g
+
+  P302 カレーソース（yield 2000g）… 枝（C02 と同型）:
+    food  = (100×0.005280 + 60×0.016000 + 1500×0.000500) / 2000
+          = 2.238000 / 2000 = 0.001119 $/g
+    labor = (100×0.020000) / 2000 + (60×50/60) / 2000
+          = 2.000000/2000 + 50.000000/2000
+          = 0.001000 + 0.025000 = 0.026000 $/g
+    total = 0.027119 $/g
+
+  M404（yield 500g）… メニュー + 自身 labor 8min:
+    food  = (180×0.004952 + 100×0.001119) / 500
+          = 1.00326/500 = 0.002007 $/g
+    labor = (180×0.024091 + 100×0.026000) / 500 + (60×8/60)/500
+          = 6.93638/500 + 8/500 = 14.936/500 = 0.029872 $/g
+    total = 0.031879 $/g
+
+■ RPC（scoped）
+
+  seed: M404
+  期待: out_food ≈ 0.002007, out_labor ≈ 0.029872, out_total ≈ 0.031879
+
+■ WL fixture
+
+  A) WL なし
+  B) members: P302、lines: P302 = $6/kg → リーフ 0.006 $/g
+
+■ wholesale_overrides（seed = M404, wl_test_list）
+
+  A) WL なし
+
+    子の $/g（すべて scoped total）:
+      M401 … 0.029043
+      P302 … 0.027119
+
+    M404 out_total $/g:
+      = (180×0.029043 + 100×0.027119) / 500 + (60×8/60) / 500
+      = (5.227740 + 2.711900) / 500 + 8/500
+      = 7.939640 / 500 + 0.016000
+      = 0.015879 + 0.016000
+      = 0.031879 $/g
+    assert: out_total = 0.031879（scoped M404 と同値）
+
+  B) P302 = $6.00 / kg
+
+    P302 リーフ:
+      out_total $/g = 6.00 ÷ 1000 = 0.006000
+
+    M404（子: M401 scoped total、P302 WL + 親 labor 8min）:
+      out_total $/g:
+        = (180×0.029043 + 100×0.006000) / 500 + (60×8/60) / 500
+        = (5.227740 + 0.600000) / 500 + 8/500
+        = 5.827740 / 500 + 0.016000
+        = 0.011656 + 0.016000
+        = 0.027656 $/g
+    assert: M404 out_total ≈ 0.027656；< scoped 0.031879
+  （out_food / out_labor は検証しない）
+
+
+--------------------------------------------------------------------------------
+C05 — ガーリックトースト（メニュー自身が WL リーフ）
+--------------------------------------------------------------------------------
+
+■ レシピ木
+
+  M405（出来高 120 g）
+  ├─ P310 ガーリックバター … 40 g
+  │   ├─ R09 バター … 100 g
+  │   ├─ R12 ガーリック … 20 g
+  │   └─ labor … 5 min
+  └─ R01 小麦粉 … 30 g（トースト用）
+
+■ scoped 手計算（葉→メニュー）
+
+  P310 ガーリックバター（yield 200g）… 葉:
+    food  = (100×0.008000 + 20×0.010000) / 200 = 1.0/200 = 0.005000 $/g
+    labor = (60×5/60) / 200 = 5/200 = 0.025000 $/g
+    total = 0.030000 $/g
+
+  M405（yield 120g）… メニュー:
+    food  = (40×0.005000 + 30×0.005000) / 120 = 0.35/120 = 0.002917 $/g
+    labor = (40×0.025000) / 120 = 1.0/120 = 0.008333 $/g
+    total = 0.011250 $/g
+
+■ RPC（scoped）
+
+  seed: M405
+  期待: out_food ≈ 0.002917, out_labor ≈ 0.008333, out_total ≈ 0.011250
+
+■ WL fixture
+
+  A) WL なし
+  B) members: M405、lines: M405 = $14/kg → リーフ 0.014 $/g
+
+■ wholesale_overrides（seed = M405, wl_test_list）
+
+  --- B: M405 リーフ $14/kg（レシピ展開しない）---
+
+    M405 リーフ:
+      out_total $/g = 14.00 ÷ 1000 = 0.014000
+
+    期待（assert）:
+      M405 out_total = 0.014000（scoped 0.011250 より高い）
+    （内訳 P310/R01 は検証しない）
+
+
+--------------------------------------------------------------------------------
+C06 — シェア弁当（cross-tenant scoped ＋ 自メニュー WL）
+--------------------------------------------------------------------------------
+
+  ※ tenant_b が P311 を所有し、test_tenant の M406 が recipe で参照する。
+    cross_tenant_item_shares（company read）を fixture に追加する。
+    P311 の原価は **オーナー tenant_b** の vendor（R08_b）で計算する（§1 tenant_b 専用 ID）。
+
+  fixture（§F）cross_tenant_item_shares 1 行:
+    id              = share_p311（§1）
+    company_id      = test_company
+    item_id         = P311（666…0311）
+    owner_tenant_id = test_tenant_b
+    target_type     = 'company'
+    target_id       = test_company の uuid 文字列（ハイフン付き）
+    allowed_actions = '{read}'
+    created_by      = super_test_user
+
+  scoped … 共有 prepped P311 の原価が M406 に載る（Costing / scoped RPC の本筋）。
+  wholesale … WL は **test_tenant の M406 のみ**（自テナント prepped/menu）。
+    P311（他テナント共有品）は WL member にできない。M406 を WL リーフにすると
+    レシピは展開せず P311 は wholesale 経路では使わない（C05 と同型）。
+
+■ レシピ木
+
+  P311 シェア用仕込み（tenant_b、出来高 1000 g）… C02 P304 と同型の白飯
+  └─ R08 米 … 1200 g
+
+  M406 シェア弁当（test_tenant、出来高 400 g）
+  └─ P311 … 300 g（owner = tenant_b・共有 prepped）
+
+■ scoped 手計算（共有 prepped → 自メニュー）
+
+  P311（tenant_b・yield 1000g）… 葉（raw のみ）:
+    food  = 1200×0.002000 / 1000 = 2.400000/1000 = 0.002400 $/g
+    labor = 0
+    total = 0.002400 $/g
+
+  M406（yield 400g）… メニュー（共有 prepped 子のみ）:
+    food  = (300×0.002400) / 400 = 0.720000/400 = 0.001800 $/g
+    labor = 0
+    total = 0.001800 $/g
+
+■ RPC（scoped）
+
+  seed: M406（と必要なら P311 on tenant_b）
+  期待（手計算）:
+    P311（tenant_b）… out_food ≈ 0.002400, out_labor = 0, out_total ≈ 0.002400
+    M406             … out_food ≈ 0.001800, out_labor = 0, out_total ≈ 0.001800
+
+■ WL fixture
+
+  A) WL なし
+  B) members: M406、lines: M406 = $10/kg → リーフ 0.010 $/g
+
+■ wholesale_overrides（seed = M406, wl_test_list）
+
+  scoped は A/B どちらでも同じ（WL は scoped に効かない）。
+
+  --- A: WL なし ---
+
+    M406（子 P311 は scoped total 0.002400）:
+      out_total $/g:
+        = (300×0.002400) / 400
+        = 0.720000 / 400
+        = 0.001800 $/g
+    assert: out_total = 0.001800（scoped M406 と同値）
+
+  --- B: M406 リーフ $10/kg（共有子 P311 は展開しない）---
+
+    M406 リーフ:
+      out_total $/g = 10.00 ÷ 1000 = 0.010000
+
+    期待（assert）:
+      M406 out_total = 0.010000（scoped 0.001800 より高い）
+      P311 は wl_test_list に載せない（API 不可）。fixture でも member に入れない。
+    （out_food / out_labor は検証しない）
+
+
+--------------------------------------------------------------------------------
+C07 — 目玉焼きプレート（each 買い raw ＋ prepped 経由の WL）
+--------------------------------------------------------------------------------
+
+  ※ scoped … R15（raw・purchase_unit=each）の vendor 式を検証。
+    wholesale … WL は **prepped の P312 のみ**（raw の R15 は WL に載せない）。
+    M407 は P312 経由で卵を参照（P312 子に R15 110 g = 2 個分）。
+
+■ fixture 補足（§3 に無い vendor 設定）
+
+  items R15: item_kind=raw, each_grams=55, base_item_id=(B15)
+  items P312: prepped, proceed_yield 110 g
+  virtual_vendor_products（R15）: purchase_unit=each, purchase_quantity=12, price=$6.00
+  R15 scoped food $/g = 6.00 ÷ (12×55) = 0.009091（§2 each 式）
+
+■ レシピ木
+
+  P312 箱卵仕込み（出来高 110 g）… 葉 prepped（子は raw のみ）
+  └─ R15 箱卵 … 110 g          … 2 個分。scoped 原価は each 換算
+
+  M407 目玉焼きプレート（出来高 180 g）
+  ├─ P312 箱卵仕込み … 110 g
+  ├─ R01 小麦粉 … 25 g
+  └─ R02 食塩 … 3 g
+
+■ scoped 手計算（葉→メニュー）
+
+  R15 箱卵（each 買い・§2 式）:
+    food  = 6.00 ÷ (12 × 55) = 6.00 ÷ 660 = 0.009091 $/g
+    labor = 0
+    total = 0.009091 $/g
+
+  P312（yield 110g）… 葉（R15 のみ・按分なし）:
+    food  = (110×0.009091) / 110 = 1.000010/110 = 0.009091 $/g
+    labor = 0
+    total = 0.009091 $/g
+
+  M407（yield 180g）… メニュー:
+    food  = (110×0.009091 + 25×0.005000 + 3×0.002000) / 180
+          = (1.000010 + 0.125000 + 0.006000) / 180
+          = 1.131010 / 180 = 0.006283 $/g
+    labor = 0
+    total = 0.006283 $/g
+
+■ RPC（scoped）
+
+  seed: M407（と必要なら R15, P312）
+  期待（手計算）:
+    R15  … out_food ≈ 0.009091, out_labor = 0, out_total ≈ 0.009091
+    P312 … out_food ≈ 0.009091, out_labor = 0, out_total ≈ 0.009091
+    M407 … out_food ≈ 0.006283, out_labor = 0, out_total ≈ 0.006283
+
+■ WL fixture
+
+  A) WL なし
+  B) members: P312、lines: P312 = $13.20/kg → リーフ 0.013200 $/g
+  C) members: P312 のみ（価格行なし）
+
+■ wholesale_overrides（seed = M407, wl_test_list）
+
+  scoped は A/B/C どちらでも同じ（WL は scoped に効かない）。
+
+  --- A: WL なし ---
+
+    子の $/g（すべて scoped total）:
+      P312 … 0.009091
+      R01  … 0.005000
+      R02  … 0.002000
+
+    M407 out_total $/g:
+      = (110×0.009091 + 25×0.005000 + 3×0.002000) / 180
+      = 1.131010 / 180
+      = 0.006283 $/g
+    assert: out_total = 0.006283（scoped M407 と同値）
+
+  --- B: P312 リーフ $13.20/kg ---
+
+    P312 リーフ（R15 のレシピは展開しない）:
+      out_total $/g = 13.20 ÷ 1000 = 0.013200
+
+    M407（子: P312 WL 単価、R01/R02 scoped）:
+      out_total $/g:
+        = (110×0.013200 + 25×0.005000 + 3×0.002000) / 180
+        = (1.452000 + 0.125000 + 0.006000) / 180
+        = 1.583000 / 180
+        = 0.008794 $/g
+    assert: P312 out_total = 0.013200；M407 out_total = 0.008794；> scoped 0.006283
+  （out_food / out_labor は検証しない）
+
+  --- C: P312 メンバーのみ・価格行なし ---
+    member のみ、lines なし → P312 は WL リーフにならず子 R15 を展開
+
+    子の $/g（すべて scoped total・シナリオ A と同じ）:
+      P312 … 0.009091
+      R01  … 0.005000
+      R02  … 0.002000
+
+    M407 out_total $/g:
+      = (110×0.009091 + 25×0.005000 + 3×0.002000) / 180
+      = 1.131010 / 180
+      = 0.006283 $/g
+    assert: out_total = 0.006283（scoped と同値）
+
+
+================================================================================
+5. 1 ケース内での RPC 手順（verify スクリプト用メモ）
+================================================================================
+
+  各ケースは §4 を C01→C07 の順で実装・実行するとよい（依存: C04 は C01/C02 の品目を流用）。
+
+  例: C02 シナリオ B（とんかつ WL $28/kg）
+
+  1) fixture を WL 状態 B で投入（または WL 行だけ TRUNCATE→再 INSERT）
+  2) rpc scoped(
+       tenant = test_tenant,
+       seeds  = [M402, P303, P302, P304]   … 必要なら中間も
+     )
+  3) rpc wholesale_overrides(
+       tenant = test_tenant,
+       seeds  = [M402],
+       wl     = wl_test_list
+     )
+  4) 比較（§2: wholesale は out_total のみ）
+       - P303 リーフ: out_total = 0.028000
+       - M402: out_total < scoped out_total
+       - out_food / out_labor は見ない
+
+
+================================================================================
+6. 期待値確定表（fixture + 初回 RPC 後に埋める）
+================================================================================
+
+  cost-rpc-fixture.sql 投入後、ローカルで RPC を 1 回ずつ叩き、実測値で上書きする。
+  行の並びは **C01 → C07**（§4 ケース詳細と同じ）。
+
+  凡例:
+    scoped 行 … out_food, out_labor, out_total すべて assert
+    wholesale 行 … **out_total のみ** assert（food/labor 列は「—」）
+
+  case | seed | WL scenario | RPC        | out_food   | out_labor | out_total
+  -----|------|-------------|------------|------------|-----------|----------
+  C01  | P305 | none        | scoped     | 0.003675   | 0.031250  | 0.034925
+  C01  | P306 | none        | scoped     | 0.009220   | 0.040000  | 0.049220
+  C01  | M401 | none        | scoped     | 0.004952   | 0.024091  | 0.029043
+  C01  | M401 | none        | wholesale  | —          | —         | 0.029043
+  C01  | P306 | P306 $18/kg | wholesale  | —          | —         | 0.018000
+  C01  | M401 | P306 $18/kg | wholesale  | —          | —         | 0.019109
+  C02  | M402 | none        | scoped     | 0.005714   | 0.042711  | 0.048425
+  C02  | P302 | none        | scoped     | 0.001119   | 0.026000  | 0.027119
+  C02  | P303 | none        | scoped     | 0.017175   | 0.112500  | 0.129675
+  C02  | P304 | none        | scoped     | 0.002400   | 0         | 0.002400
+  C02  | M402 | none        | wholesale  | —          | —         | 0.048425
+  C02  | P303 | P303 $28/kg | wholesale  | —          | —         | 0.028000
+  C02  | M402 | P303 $28/kg | wholesale  | —          | —         | 0.021311
+  C02  | M402 | P302 $6/kg  | wholesale  | —          | —         | 0.038100
+  C02  | M402 | P303 member only | wholesale | —    | —         | 0.048425
+  C02  | M402 | M402 $15/kg | wholesale  | —          | —         | 0.015000
+  C03  | P307 | none        | scoped     | 0.003750   | 0.025000  | 0.028750
+  C03  | P305 | none        | scoped     | 0.003675   | 0.031250  | 0.034925
+  C03  | P306 | none        | scoped     | 0.009220   | 0.040000  | 0.049220
+  C03  | P308 | none        | scoped     | 0.003027   | 0.018453  | 0.021480
+  C03  | P309 | none        | scoped     | 0.001766   | 0.010764  | 0.012530
+  C03  | M403 | none        | scoped     | 0.004118   | 0.007689  | 0.011807
+  C03  | P307 | P307 $12/kg | wholesale  | —          | —         | 0.012000
+  C03  | M403 | P307 $12/kg | wholesale  | —          | —         | 0.008317
+  C04  | M404 | none        | scoped     | 0.002007   | 0.029872  | 0.031879
+  C04  | M404 | none        | wholesale  | —          | —         | 0.031879
+  C04  | M404 | P302 $6/kg  | wholesale  | —          | —         | 0.027656
+  C05  | M405 | none        | scoped     | 0.002917   | 0.008333  | 0.011250
+  C05  | M405 | none        | wholesale  | —          | —         | 0.011250
+  C05  | M405 | M405 $14/kg | wholesale  | —          | —         | 0.014000
+  C06  | P311 | none        | scoped     | 0.002400   | 0         | 0.002400
+  C06  | M406 | none        | scoped     | 0.001800   | 0         | 0.001800
+  C06  | M406 | none        | wholesale  | —          | —         | 0.001800
+  C06  | M406 | M406 $10/kg | wholesale  | —          | —         | 0.010000
+  C07  | R15  | none        | scoped     | 0.009091   | 0         | 0.009091
+  C07  | P312 | none        | scoped     | 0.009091   | 0         | 0.009091
+  C07  | M407 | none        | scoped     | 0.006283   | 0         | 0.006283
+  C07  | M407 | none        | wholesale  | —          | —         | 0.006283
+  C07  | P312 | P312 $13/kg | wholesale  | —          | —         | 0.013200
+  C07  | M407 | P312 $13/kg | wholesale  | —          | —         | 0.008794
+  C07  | M407 | P312 member only | wholesale | —       | —         | 0.006283
+  ...  |      |             |            |            |           |
+
+  確定後、verify は wholesale 行で out_total だけ比較する。
+
+
+================================================================================
+7. fixture SQL の章立て（これから書くファイル）
+================================================================================
+
+  supabase/test/cost-rpc-fixture.sql
+  （WL 切替は別ファイル推奨・§7.1 参照）
+
+  INSERT 順序（FK 依存）: §A → §B → §C → §D → §E → §F
+
+  §A  マスタ（下記チェックリスト・§1 の固定 UUID）
+  §B  base_items, virtual_vendor_products, product_mappings
+  §C  items（raw → prepped → menu）… §3 + §1.1
+  §D  recipe_lines（ingredient + labor）… §4 の木どおり
+  §E  wholesale_lists, members, lines … **1 ロード = 1 WL シナリオ**
+  §F  cross_tenant_item_shares（C06 のみ・§4 C06 の 1 行定義）
+
+
+--- §A チェックリスト（cost-rpc-fixture.sql 先頭）---
+
+  表 | 行数 | id / 要点
+  ---|------|----------
+  companies | 1 | test_company, company_name 任意
+  tenants | 2 | test_tenant (101, type=restaurant), test_tenant_b (102)
+  company_tenants | 2 | 同一 test_company に 101 と 102 を紐付け（C06 必須）
+  users | 1 | super_test_user（display_name 任意）
+  profiles | 0〜1 | user_id=super_test_user, tenant_id=101, role=admin（任意）
+  vendors | 2 | test_vendor @101, test_vendor_b @102
+  labor_roles | 1 | id=labor_kitchen, tenant_id=101, **name='kitchen'**, hourly_wage=60
+                 recipe_lines.labor_role は **この name 文字列**（id ではない）
+
+  labor_roles は test_tenant のみで足りる（RPC は閲覧 tenant の role を JOIN）。
+  C06 の P311 に labor 行は無い。
+
+
+--- §B チェックリスト ---
+
+  tenant 101:
+    base_items R01〜R15（§1.1・R14 は specific_weight=0.92）
+    vvp 各 raw（§1.2・vendor=test_vendor, tenant_id=101）
+    product_mappings base↔vvp
+
+  tenant 102（C06）:
+    base B08_b, item R08_b, vvp R08_b, mapping（§1 tenant_b 専用・§1.2 R08 同値）
+    **101 の R08 item / vvp を 102 で流用しない**（tenant_id FK）
+
+
+--- §C チェックリスト ---
+
+  tenant_id=101: raw R01〜R15, prepped P301〜P310,P312, menu M401〜M407
+    raw: base_item_id 必須, proceed_yield NULL
+    prepped/menu: proceed_yield_amount + unit='g', menu は is_menu_item=true
+    R15: each_grams=55
+  tenant_id=102: prepped P311 only（is_menu_item=false, yield 1000g）
+  M406 @101, recipe 子 P311 は **child_item_id=P311（102 所有）**
+
+
+--- §D チェックリスト ---
+
+  全 recipe_lines.tenant_id = 親品目と同じ tenant（M406→P311 行は 101）
+  labor 行: line_type='labor', labor_role='kitchen', minutes=§4 の値
+  ingredient: line_type='ingredient', unit='g', quantity=§4
+  レシピ行数の目安: 40 行前後
+
+  ケース別（§D コメント用・C01→C07）:
+    C01〜C05 … §4 の木どおり
+    C03 … M403 直下 R12 80g 必須
+    C04 … M404→M401 180g ネスト
+    C06 … P311@102: R08_b 1200g；M406@101: P311 300g；§F share 行
+    C07 … P312→R15 110g；M407→P312
+
+
+--- §E チェックリスト ---
+
+  wholesale_lists: id=wl_test_list, tenant_id=101, created_by=super_test_user
+  **base fixture 既定 = シナリオ A（member/line なし）**
+
+  別ファイル例（投入前に §E を TRUNCATE またはファイル差し替え）:
+    cost-rpc-fixture-base.sql      … §A〜§F + §E なし
+    cost-rpc-fixture-wl-C01B.sql   … P306 $18/kg
+    cost-rpc-fixture-wl-C02B.sql   … P303 $28/kg
+    cost-rpc-fixture-wl-C02C.sql   … P302 $6/kg
+    cost-rpc-fixture-wl-C02D.sql   … P303 member only
+    cost-rpc-fixture-wl-C02E.sql   … M402 $15/kg
+    … C03〜C07 も §4 の WL fixture 表に合わせて同様
+
+  member/line の item_id は **必ず tenant 101 の prepped/menu**（§2）
+
+
+--- §F チェックリスト（C06）---
+
+  INSERT cross_tenant_item_shares 1 行（§4 C06「fixture」ブロック参照）
+
+
+--- §7.1 ローカル投入順 ---
+
+  1. schema-baseline-20260520_pre_cost_breakdown_rpc_tests.sql
+  2. cost-rpc-fixture-base.sql（または単一 cost-rpc-fixture.sql）
+  3. （wholesale 検証時）cost-rpc-fixture-wl-*.sql
+  4. RPC → §6 実測で微調整
+
+
+================================================================================
+8. 次のアクション
+================================================================================
+
+  0. 文書: §1.1 UUID 表・§7 §A〜§F チェックリスト追記済み（2026-05-20）
+  1. ~~cost-rpc-fixture-base.sql~~ 作成済み → ローカル RPC で §6 実測確認
+  2. ローカル: baseline → fixture → RPC → §6 を実測で上書き
+  3. verify-cost-rpc.js: scoped=3列、wholesale=out_total のみ
+  4. CI（任意）
+
+================================================================================
+9. 見直しメモ
+================================================================================
+
+  一貫性ルール（全文共通）:
+    - 章番号 §1〜§9、ケース番号 C01〜C07 を表記ゆれなく揃える
+    - §2: scoped は food/labor/total。WL 単価は scoped total 相当（検証は out_total のみ）
+    - §4 各ケース: レシピ木 → scoped → RPC scoped → WL fixture → wholesale
+    - §6: §4 と同じ数字・同じケース順。wholesale の food/labor 列は「—」
+
+  ケースの役割:
+    C01 基礎 / C02 深木+WL 複数 / C03 最深+途中 WL / C04 nest+labor
+    C05 メニュー WL リーフ / C06 cross-tenant scoped + 自 M406 WL / C07 each + P312 WL
+
+  RPC 実測で微調整しうる行:
+    - 丸め差のみ想定（§6 許容誤差）。式と大きくズレたら RPC か fixture を疑う
+
+  fixture 設計書としての追記（2026-05-20）:
+    - §1.1 … 品目 UUID 規則と tenant_b 専用行
+    - §1.2 … vvp 列値一覧
+    - §7 … §A〜§F チェックリスト、WL 分割ファイル名、投入順
+    - §6 … C05 wholesale「WL なし」行を追加
+    - C06 … cross_tenant 行定義 + tenant_b vendor 明示
+
+================================================================================
+  END
+================================================================================

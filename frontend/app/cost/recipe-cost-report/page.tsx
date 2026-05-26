@@ -92,22 +92,24 @@ function RecipeCostReportPageContent() {
       }`}
     >
       <div className="flex h-full min-h-0 flex-col px-6 py-4 lg:px-8">
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-col">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[96rem] flex-col">
           <div
             className={`mb-4 shrink-0 border-b transition-colors ${
               isDark ? "border-slate-700" : "border-gray-200"
             }`}
           >
             <nav className="flex space-x-8">
-              {tabBtn("wholesale", "Wholesale price")}
-              {tabBtn("menu", "Retail price")}
+              {tabBtn("wholesale", "Wholesale Costing")}
+              {tabBtn("menu", "Pricing Strategy")}
             </nav>
           </div>
-          <RecipeCostReportListPage
-            key={activeTab}
-            pageMode={activeTab === "menu" ? "menu" : "wholesale"}
-            showPageHeading={false}
-          />
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <RecipeCostReportListPage
+              key={activeTab}
+              pageMode={activeTab === "menu" ? "menu" : "wholesale"}
+              showPageHeading={false}
+            />
+          </div>
         </div>
       </div>
     </div>
