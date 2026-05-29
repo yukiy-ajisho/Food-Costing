@@ -12,3 +12,7 @@
 --    … see cost-rpc-fixture-wl-*.sql in this directory
 --
 -- Plan: docs/cost-rpc-integration-test-plan.txt
+--
+-- Automated verify (local):
+--   ./supabase/test/run-cost-rpc-verify.sh
+-- Expectations: supabase/test/cost-rpc-expected.json (§6)

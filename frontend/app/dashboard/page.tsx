@@ -321,7 +321,7 @@ export default function DashboardPage() {
                 <p
                   className={`text-sm ${isDark ? "text-slate-400" : "text-gray-500"}`}
                 >
-                  Uploaded Document
+                  Upload Box
                 </p>
                 <p
                   className={`mt-2 ml-5 text-3xl font-bold [font-variant-numeric:tabular-nums] ${
@@ -364,7 +364,7 @@ export default function DashboardPage() {
                 <p
                   className={`text-sm ${isDark ? "text-slate-400" : "text-gray-500"}`}
                 >
-                  License Overdue
+                  Documents Overdue
                 </p>
                 <p
                   className={`mt-2 ml-5 text-3xl font-bold [font-variant-numeric:tabular-nums] ${

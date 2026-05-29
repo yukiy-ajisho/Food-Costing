@@ -17,6 +17,10 @@ INSERT INTO company_tenants (id, company_id, tenant_id) VALUES
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa1101', '11111111-1111-1111-1111-111111111001', '11111111-1111-1111-1111-111111111101'),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaa1102', '11111111-1111-1111-1111-111111111001', '11111111-1111-1111-1111-111111111102');
 
+-- public.users.id → auth.users.id (schema-baseline FK; stub auth schema on Docker)
+INSERT INTO auth.users (id) VALUES
+  ('22222222-2222-2222-2222-222222222201');
+
 INSERT INTO users (id, display_name) VALUES
   ('22222222-2222-2222-2222-222222222201', 'Cost RPC Test User');
 

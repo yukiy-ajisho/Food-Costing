@@ -54,8 +54,7 @@ export default function SettingsPage() {
                 <p
                   className={`text-xs ${isDark ? "text-slate-400" : "text-gray-500"}`}
                 >
-                  Controls red dots/badges for Uploaded Document Box and License
-                  sections.
+                  Controls red dots/badges for Upload Box and Documents sections.
                 </p>
               </div>
               <button

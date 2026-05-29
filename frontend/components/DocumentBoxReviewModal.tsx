@@ -243,7 +243,7 @@ export function DocumentBoxReviewModal({
               >
                 Remove{" "}
                 <span className="font-medium">&quot;{row.file_name}&quot;</span>{" "}
-                permanently from Uploaded Document Box?
+                permanently from Upload Box?
               </p>
               <div className="mt-4 flex justify-end gap-2">
                 <button

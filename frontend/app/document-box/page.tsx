@@ -178,9 +178,9 @@ export default function DocumentBoxPage() {
     return (
       <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
         <div className="max-w-lg mx-auto rounded-lg border border-red-200 bg-red-50 p-6 text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
-          <h1 className="text-lg font-semibold mb-2">Uploaded Document Box</h1>
+          <h1 className="text-lg font-semibold mb-2">Upload Box</h1>
           <p className="text-sm">
-            Uploaded Document Box is available to company administrators and directors
+            Upload Box is available to company administrators and directors
             only. Use Items → Import invoice for tenant-level imports.
           </p>
         </div>

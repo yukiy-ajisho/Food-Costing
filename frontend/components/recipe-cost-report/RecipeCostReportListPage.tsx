@@ -1,7 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Edit, Plus, Printer, Save, Trash2, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Edit,
+  Plus,
+  Printer,
+  Save,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
 import {
@@ -137,7 +146,9 @@ export function RecipeCostReportListPage({
   const [draftWholesale, setDraftWholesale] = useState<Map<string, string>>(
     new Map(),
   );
-  const [draftRetail, setDraftRetail] = useState<Map<string, string>>(new Map());
+  const [draftRetail, setDraftRetail] = useState<Map<string, string>>(
+    new Map(),
+  );
   /** Edit-mode drafts for corporate/wholesale; persisted on Save (not on radio change). */
   const [draftCostBasis, setDraftCostBasis] = useState<Map<string, CostBasis>>(
     new Map(),
@@ -151,7 +162,9 @@ export function RecipeCostReportListPage({
   const [candidatesCompanyOwned, setCandidatesCompanyOwned] = useState<
     ItemCandidate[]
   >([]);
-  const [wlOptions, setWlOptions] = useState<{ id: string; name: string }[]>([]);
+  const [wlOptions, setWlOptions] = useState<{ id: string; name: string }[]>(
+    [],
+  );
   const [showCreate, setShowCreate] = useState(false);
   const [showPrint, setShowPrint] = useState(false);
   const [openListMenuId, setOpenListMenuId] = useState<string | null>(null);
@@ -324,17 +337,14 @@ export function RecipeCostReportListPage({
     [pendingNewRows],
   );
 
-  const applyListThresholds = useCallback(
-    (caution: unknown, over: unknown) => {
-      const c = normalizeThresholdFromApi(caution);
-      const o = normalizeThresholdFromApi(over);
-      setSavedCaution(c);
-      setSavedOver(o);
-      setDraftCaution(thresholdToDraftString(c));
-      setDraftOver(thresholdToDraftString(o));
-    },
-    [],
-  );
+  const applyListThresholds = useCallback((caution: unknown, over: unknown) => {
+    const c = normalizeThresholdFromApi(caution);
+    const o = normalizeThresholdFromApi(over);
+    setSavedCaution(c);
+    setSavedOver(o);
+    setDraftCaution(thresholdToDraftString(c));
+    setDraftOver(thresholdToDraftString(o));
+  }, []);
 
   const loadDetail = useCallback(
     async (listId: string) => {
@@ -396,7 +406,9 @@ export function RecipeCostReportListPage({
       void recipeCostReportAPI
         .getItemCandidates({ includeCrossTenant: true })
         .then((r) => setCandidatesCompanyOwned(r.items));
-      void recipeCostReportAPI.wholesaleListOptions().then((r) => setWlOptions(r.lists));
+      void recipeCostReportAPI
+        .wholesaleListOptions()
+        .then((r) => setWlOptions(r.lists));
     } else {
       setCandidatesCompanyOwned([]);
     }
@@ -507,7 +519,10 @@ export function RecipeCostReportListPage({
     pendingCostBasisKey,
   ]);
 
-  const memberIds = useMemo(() => new Set(members.map((m) => m.item_id)), [members]);
+  const memberIds = useMemo(
+    () => new Set(members.map((m) => m.item_id)),
+    [members],
+  );
 
   const handleListSortHeaderClick = useCallback((column: ListSortKey) => {
     setListSort((prev) =>
@@ -744,12 +759,7 @@ export function RecipeCostReportListPage({
   const canSaveThresholds = useMemo(() => {
     if (!thresholdColumnVisible || !draftThresholdsEdited) return true;
     return validateLcogThresholdsForSave(draftCaution, draftOver).ok;
-  }, [
-    thresholdColumnVisible,
-    draftThresholdsEdited,
-    draftCaution,
-    draftOver,
-  ]);
+  }, [thresholdColumnVisible, draftThresholdsEdited, draftCaution, draftOver]);
 
   const hasMetaChanges = useMemo(() => {
     if (listName.trim() !== savedListName.trim()) return true;
@@ -845,7 +855,8 @@ export function RecipeCostReportListPage({
       if (memberIds.has(c.id)) return false;
       if (
         pendingNewRows.some(
-          (p) => p.localId !== localId && p.item_id !== "" && p.item_id === c.id,
+          (p) =>
+            p.localId !== localId && p.item_id !== "" && p.item_id === c.id,
         )
       )
         return false;
@@ -854,8 +865,8 @@ export function RecipeCostReportListPage({
 
   const handleAddPendingRow = () => {
     setPendingNewRows((prev) => [
-      ...prev,
       { localId: newPendingLocalId(), item_id: "", price: "" },
+      ...prev,
     ]);
   };
 
@@ -912,7 +923,9 @@ export function RecipeCostReportListPage({
 
   const updatePendingCostBasis = (localId: string, basis: CostBasis) => {
     setPendingNewRows((prev) =>
-      prev.map((p) => (p.localId === localId ? { ...p, cost_basis: basis } : p)),
+      prev.map((p) =>
+        p.localId === localId ? { ...p, cost_basis: basis } : p,
+      ),
     );
     const row = pendingNewRows.find((p) => p.localId === localId);
     if (row?.item_id && selectedListId) {
@@ -940,13 +953,11 @@ export function RecipeCostReportListPage({
     pendingBasis?: CostBasis,
   ) => {
     if (!showMenuCostBasis || !itemId) return null;
-    const onWl =
-      row?.on_linked_wholesale_list ?? linkedWlByItem.has(itemId);
+    const onWl = row?.on_linked_wholesale_list ?? linkedWlByItem.has(itemId);
     const linkedPrice =
       row?.linked_wholesale_price ?? linkedWlByItem.get(itemId) ?? null;
     const wholesaleSelectable = wholesaleCostBasisSelectable(
-      row?.wholesale_cost_basis_selectable ??
-        wlRecipeImpactByItem.has(itemId),
+      row?.wholesale_cost_basis_selectable ?? wlRecipeImpactByItem.has(itemId),
     );
     const basis =
       pendingBasis ??
@@ -997,7 +1008,9 @@ export function RecipeCostReportListPage({
     if (!showMenuCostBasis) return null;
     return (
       <CostBasisControlSlot loading={loading} isDark={isDark}>
-        {itemId ? renderCostBasisControl(itemId, row, pendingLocalId, pendingBasis) : null}
+        {itemId
+          ? renderCostBasisControl(itemId, row, pendingLocalId, pendingBasis)
+          : null}
       </CostBasisControlSlot>
     );
   };
@@ -1103,9 +1116,7 @@ export function RecipeCostReportListPage({
         return;
       }
       const c = candidateById.get(row.item_id);
-      const pendingMember = c
-        ? memberRowFromCandidate(row.item_id, c)
-        : null;
+      const pendingMember = c ? memberRowFromCandidate(row.item_id, c) : null;
       if (!pendingMember) continue;
       const stored = listPriceInputToStoredPerKg(
         row.price,
@@ -1133,7 +1144,10 @@ export function RecipeCostReportListPage({
             itemId,
           );
         } else {
-          await recipeCostReportAPI.removeMenuCostMember(selectedListId, itemId);
+          await recipeCostReportAPI.removeMenuCostMember(
+            selectedListId,
+            itemId,
+          );
         }
       }
       setPendingRemovals(new Set());
@@ -1158,20 +1172,24 @@ export function RecipeCostReportListPage({
           }
         }
         if (Object.keys(wholesalePatch).length > 0) {
-          const { list: updatedList } = (await recipeCostReportAPI.updateWholesaleList(
-            selectedListId,
-            wholesalePatch,
-          )) as {
-            list: {
-              name: string;
-              caution: number | null;
-              over: number | null;
+          const { list: updatedList } =
+            (await recipeCostReportAPI.updateWholesaleList(
+              selectedListId,
+              wholesalePatch,
+            )) as {
+              list: {
+                name: string;
+                caution: number | null;
+                over: number | null;
+              };
             };
-          };
           if (wholesalePatch.name != null) {
             setSavedListName(updatedList.name);
           }
-          if (wholesalePatch.caution !== undefined || wholesalePatch.over !== undefined) {
+          if (
+            wholesalePatch.caution !== undefined ||
+            wholesalePatch.over !== undefined
+          ) {
             const c = normalizeThresholdFromApi(updatedList.caution);
             const o = normalizeThresholdFromApi(updatedList.over);
             setSavedCaution(c);
@@ -1208,7 +1226,11 @@ export function RecipeCostReportListPage({
             menuPricingEach,
           );
           if (n == null) continue;
-          await recipeCostReportAPI.saveWholesalePrice(selectedListId, itemId, n);
+          await recipeCostReportAPI.saveWholesalePrice(
+            selectedListId,
+            itemId,
+            n,
+          );
         }
       } else {
         const menuPatch: Partial<{
@@ -1240,18 +1262,19 @@ export function RecipeCostReportListPage({
           }
         }
         if (Object.keys(menuPatch).length > 0) {
-          const { list: updatedList } = (await recipeCostReportAPI.updateMenuCostList(
-            selectedListId,
-            menuPatch,
-          )) as {
-            list: {
-              name: string;
-              mode: "company_owned" | "franchise";
-              wholesale_list_id: string | null;
-              caution: number | null;
-              over: number | null;
+          const { list: updatedList } =
+            (await recipeCostReportAPI.updateMenuCostList(
+              selectedListId,
+              menuPatch,
+            )) as {
+              list: {
+                name: string;
+                mode: "company_owned" | "franchise";
+                wholesale_list_id: string | null;
+                caution: number | null;
+                over: number | null;
+              };
             };
-          };
           if (menuPatch.name != null) {
             setSavedListName(updatedList.name);
           }
@@ -1275,11 +1298,11 @@ export function RecipeCostReportListPage({
           }
         }
         for (const row of pendingNewRows) {
-          await recipeCostReportAPI.addMenuCostMember(selectedListId, row.item_id);
-          if (
-            row.cost_basis === "wholesale" &&
-            menuMeta.mode === "franchise"
-          ) {
+          await recipeCostReportAPI.addMenuCostMember(
+            selectedListId,
+            row.item_id,
+          );
+          if (row.cost_basis === "wholesale" && menuMeta.mode === "franchise") {
             await recipeCostReportAPI.updateMenuMemberCostBasis(
               selectedListId,
               row.item_id,
@@ -1417,7 +1440,9 @@ export function RecipeCostReportListPage({
   const renderListPickerRows = (sectionLists: ListSummary[]) => {
     if (sectionLists.length === 0) {
       return (
-        <li className={`px-3 py-6 text-center text-sm ${muted}`}>No lists yet</li>
+        <li className={`px-3 py-6 text-center text-sm ${muted}`}>
+          No lists yet
+        </li>
       );
     }
     return sectionLists.map((l) => (
@@ -1520,12 +1545,7 @@ export function RecipeCostReportListPage({
     } finally {
       setDeletingList(false);
     }
-  }, [
-    deleteConfirm,
-    pageMode,
-    lists,
-    applyListSelectionAfterDelete,
-  ]);
+  }, [deleteConfirm, pageMode, lists, applyListSelectionAfterDelete]);
 
   const listPickerCard = (
     <div
@@ -1557,7 +1577,9 @@ export function RecipeCostReportListPage({
       ) : (
         <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
           {lists.length === 0 ? (
-            <li className={`px-3 py-8 text-center text-sm ${muted}`}>No lists yet</li>
+            <li className={`px-3 py-8 text-center text-sm ${muted}`}>
+              No lists yet
+            </li>
           ) : (
             renderListPickerRows(lists)
           )}
@@ -1567,15 +1589,21 @@ export function RecipeCostReportListPage({
   );
 
   const detailBody = !selectedTenantId ? (
-    <div className={`flex flex-1 items-center justify-center p-12 text-sm ${muted}`}>
+    <div
+      className={`flex flex-1 items-center justify-center p-12 text-sm ${muted}`}
+    >
       Select a tenant to continue.
     </div>
   ) : !selectedListId ? (
-    <div className={`flex flex-1 items-center justify-center p-12 text-center text-sm ${muted}`}>
+    <div
+      className={`flex flex-1 items-center justify-center p-12 text-center text-sm ${muted}`}
+    >
       Create a list or select one from the lists panel.
     </div>
   ) : loading ? (
-    <div className={`flex flex-1 items-center justify-center p-12 text-sm ${muted}`}>
+    <div
+      className={`flex flex-1 items-center justify-center p-12 text-sm ${muted}`}
+    >
       Loading…
     </div>
   ) : (
@@ -1671,10 +1699,10 @@ export function RecipeCostReportListPage({
                     )}
                   </>
                 ) : (
-                  <p className={`flex min-h-10 items-center text-sm ${textMain}`}>
-                    {menuMeta.mode === "company_owned"
-                      ? "Direct"
-                      : "Franchise"}
+                  <p
+                    className={`flex min-h-10 items-center text-sm ${textMain}`}
+                  >
+                    {menuMeta.mode === "company_owned" ? "Direct" : "Franchise"}
                     {menuMeta.mode === "franchise" && menuMeta.wholesale_list_id
                       ? ` · ${wlOptions.find((w) => w.id === menuMeta.wholesale_list_id)?.name ?? "Wholesale list"}`
                       : ""}
@@ -1722,7 +1750,11 @@ export function RecipeCostReportListPage({
                   <Printer className="h-4 w-4 shrink-0" />
                   Print
                 </button>
-                <button type="button" onClick={handleEditClick} className={btnEdit}>
+                <button
+                  type="button"
+                  onClick={handleEditClick}
+                  className={btnEdit}
+                >
                   <Edit className="h-4 w-4 shrink-0" />
                   Edit
                 </button>
@@ -1733,485 +1765,477 @@ export function RecipeCostReportListPage({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              {!isEditMode && members.length === 0 ? (
-                <div className={`flex flex-1 items-center justify-center p-12 text-sm ${muted}`}>
-                  No items on this list. Click Edit to add items.
-                </div>
-              ) : (
-                <div className="min-h-0 flex-1 overflow-auto">
-                  <table className="w-full border-collapse text-sm">
-                    <thead className={`sticky top-0 z-10 border-b ${border}`}>
-                      <tr>
-                        <th className={`${thCls} text-left min-w-48`}>
-                          <div className="flex items-center justify-between gap-2 pr-1">
-                            <div className="flex min-w-0 flex-1 items-center gap-6">
-                              {renderListSortHeader("item", "Item")}
-                              <input
-                                type="search"
-                                value={itemSearchQuery}
-                                onChange={(e) =>
-                                  setItemSearchQuery(e.target.value)
-                                }
-                                placeholder="Search items…"
-                                aria-label="Search items"
-                                className={`h-8 min-w-0 flex-1 max-w-44 rounded-md border px-2 text-xs font-normal normal-case tracking-normal focus:outline-none focus:ring-2 focus:ring-blue-500/40 sm:max-w-52 ${
-                                  isDark
-                                    ? "border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500"
-                                    : "border-gray-300 bg-white text-gray-900 placeholder:text-gray-400"
-                                }`}
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => setEachMode((v) => !v)}
-                              className={`shrink-0 rounded px-2 py-0.5 text-xs normal-case transition-colors ${
-                                eachMode
-                                  ? "bg-blue-500 font-semibold text-white"
-                                  : isDark
-                                    ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                              }`}
-                            >
-                              each
-                            </button>
-                          </div>
-                        </th>
-                        <th className={`${thCls} text-left w-24`}>Type</th>
-                        <th className={`${thCls} min-w-36 w-40 text-left`}>
-                          <div className="flex items-center gap-1">
-                            <span className="min-w-[40px] shrink-0">Cost</span>
-                            <div className="flex items-center gap-1">
-                              <span
-                                className={`text-xs normal-case ${
-                                  costUnit === "g"
-                                    ? `font-semibold ${textMain}`
-                                    : muted
-                                }`}
-                              >
-                                g
-                              </span>
-                              <label className="relative inline-flex cursor-pointer items-center">
-                                <input
-                                  type="checkbox"
-                                  checked={costUnit === "kg"}
-                                  onChange={(e) =>
-                                    setCostUnit(e.target.checked ? "kg" : "g")
-                                  }
-                                  className="peer sr-only"
-                                />
-                                <div
-                                  className={`h-4 w-8 rounded-full after:absolute after:left-[1px] after:top-[1px] after:h-3 after:w-3 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all peer-checked:after:translate-x-4 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-gray-300 after:content-[''] ${
-                                    isDark ? "bg-slate-600" : "bg-gray-300"
-                                  }`}
-                                />
-                              </label>
-                              <span
-                                className={`text-xs normal-case ${
-                                  costUnit === "kg"
-                                    ? `font-semibold ${textMain}`
-                                    : muted
-                                }`}
-                              >
-                                kg
-                              </span>
-                            </div>
-                          </div>
-                        </th>
-                        <th className={`${thCls} text-left w-40`}>
-                          {pageMode === "wholesale" ? (
-                            "Wholesale"
-                          ) : (
-                            <HeaderHoverHint
-                              hint={RETAIL_HEADER_TOOLTIP}
-                              isDark={isDark}
-                            >
-                              <span>Retail</span>
-                            </HeaderHoverHint>
-                          )}
-                        </th>
-                        <th className={`${thCls} text-left w-24`}>
-                          {renderListSortHeader(
-                            "lcog",
-                            "LCOG%",
-                            LCOG_HEADER_TOOLTIP,
-                          )}
-                        </th>
-                        {showThresholdColumn ? (
-                          <th
-                            className={`${thCls} w-[7.25rem] min-w-[7.25rem] px-2 text-center ${
-                              isEditMode ? "py-1" : ""
-                            }`}
-                          >
-                            <LcogThresholdHeaderCell
-                              isEditMode={isEditMode}
-                              isDark={isDark}
-                              headerTooltip={
-                                isEditMode
-                                  ? undefined
-                                  : LCOG_THRESHOLD_HEADER_TOOLTIP
-                              }
-                              cautionRaw={draftCaution}
-                              overRaw={draftOver}
-                              savedCaution={savedCaution}
-                              savedOver={savedOver}
-                              onCautionChange={setDraftCaution}
-                              onOverChange={setDraftOver}
-                              cautionInvalid={effectiveThresholds.cautionInvalid}
-                              overInvalid={effectiveThresholds.overInvalid}
-                            />
-                          </th>
-                        ) : null}
-                        <th
-                          className={`${thCls} w-16`}
-                          aria-label="Row actions"
+        {!isEditMode && members.length === 0 ? (
+          <div
+            className={`flex flex-1 items-center justify-center p-12 text-sm ${muted}`}
+          >
+            No items on this list. Click Edit to add items.
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1 overflow-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead className={`sticky top-0 z-10 border-b ${border}`}>
+                <tr>
+                  <th className={`${thCls} text-left min-w-48`}>
+                    <div className="flex items-center justify-between gap-2 pr-1">
+                      <div className="flex min-w-0 flex-1 items-center gap-6">
+                        {renderListSortHeader("item", "Item")}
+                        <input
+                          type="search"
+                          value={itemSearchQuery}
+                          onChange={(e) => setItemSearchQuery(e.target.value)}
+                          placeholder="Search items…"
+                          aria-label="Search items"
+                          className={`h-8 min-w-0 flex-1 max-w-44 rounded-md border px-2 text-xs font-normal normal-case tracking-normal focus:outline-none focus:ring-2 focus:ring-blue-500/40 sm:max-w-52 ${
+                            isDark
+                              ? "border-slate-600 bg-slate-900 text-slate-100 placeholder:text-slate-500"
+                              : "border-gray-300 bg-white text-gray-900 placeholder:text-gray-400"
+                          }`}
                         />
-                      </tr>
-                    </thead>
-                    <tbody className={tbodyRowDividerCls}>
-                      {isEditMode && (
-                        <tr style={{ height: 52 }}>
-                          <td colSpan={tableColSpan} className="px-4 py-2">
-                            <button
-                              type="button"
-                              onClick={handleAddPendingRow}
-                              className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm transition-colors ${
-                                isDark
-                                  ? "text-blue-400 hover:bg-blue-900/30 hover:text-blue-300"
-                                  : "text-blue-600 hover:bg-blue-50 hover:text-blue-700"
-                              }`}
-                            >
-                              <Plus className="h-4 w-4 shrink-0" />
-                              <span>Add item</span>
-                            </button>
-                          </td>
-                        </tr>
-                      )}
-                      {pendingNewRows.map((pending) => {
-                        const c = pending.item_id
-                          ? candidateById.get(pending.item_id)
-                          : undefined;
-                        const pendingRow =
-                          pending.item_id && c
-                            ? memberRowFromCandidate(pending.item_id, c)
-                            : null;
-                        const pendingBd = pending.item_id
-                          ? costs[pending.item_id]
-                          : undefined;
-                        const pendingPriceStored =
-                          pendingRow && pending.price !== ""
-                            ? listPriceInputToStoredPerKg(
-                                pending.price,
-                                pendingRow,
-                                eachMode,
-                                menuPricingEach,
-                              )
-                            : null;
-                        const rowOptions = addableCandidatesForPendingRow(
-                          pending.localId,
-                          pending.item_id,
-                        );
-                        return (
-                          <tr
-                            key={pending.localId}
-                            className={
-                              isDark ? "bg-emerald-900/15" : "bg-emerald-50/80"
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setEachMode((v) => !v)}
+                        className={`shrink-0 rounded px-2 py-0.5 text-xs normal-case transition-colors ${
+                          eachMode
+                            ? "bg-blue-500 font-semibold text-white"
+                            : isDark
+                              ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                              : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        }`}
+                      >
+                        each
+                      </button>
+                    </div>
+                  </th>
+                  <th className={`${thCls} text-left w-24`}>Type</th>
+                  <th className={`${thCls} min-w-36 w-40 text-left`}>
+                    <div className="flex items-center gap-1">
+                      <span className="min-w-[40px] shrink-0">Cost</span>
+                      <div className="flex items-center gap-1">
+                        <span
+                          className={`text-xs normal-case ${
+                            costUnit === "g"
+                              ? `font-semibold ${textMain}`
+                              : muted
+                          }`}
+                        >
+                          g
+                        </span>
+                        <label className="relative inline-flex cursor-pointer items-center">
+                          <input
+                            type="checkbox"
+                            checked={costUnit === "kg"}
+                            onChange={(e) =>
+                              setCostUnit(e.target.checked ? "kg" : "g")
                             }
-                            style={{ height: 52 }}
-                          >
-                            <td className="px-4 py-2">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <select
-                                  value={pending.item_id}
-                                  onChange={(e) =>
-                                    updatePendingItemId(
-                                      pending.localId,
-                                      e.target.value,
-                                    )
-                                  }
-                                  className={`${inputCls} min-w-0 flex-1 ${
-                                    showMenuCostBasis && isEditMode
-                                      ? "max-w-[calc(100%-12rem)]"
-                                      : ""
-                                  }`}
-                                  aria-label="Item to add"
-                                >
-                                  <option value="">Choose an item…</option>
-                                  {pending.item_id &&
-                                    c &&
-                                    !rowOptions.some((o) => o.id === c.id) && (
-                                      <option value={c.id}>
-                                        {c.name} (
-                                        {c.is_menu_item ? "menu" : "prepped"})
-                                      </option>
-                                    )}
-                                  {rowOptions.map((opt) => (
-                                    <option key={opt.id} value={opt.id}>
-                                      {opt.name}
-                                      {opt.is_cross_tenant ? " · shared" : ""} (
-                                      {opt.is_menu_item ? "menu" : "prepped"})
-                                    </option>
-                                  ))}
-                                </select>
-                                {isEditMode &&
-                                  renderCostBasisSlot(
-                                    pending.item_id,
-                                    pendingRow,
-                                    pending.localId,
-                                    pending.cost_basis,
-                                  )}
-                              </div>
-                            </td>
-                            <td className={`px-4 py-2 ${muted}`}>
-                              {c ? (
-                                <ItemKindBadge
-                                  isMenuItem={c.is_menu_item}
-                                  isDark={isDark}
-                                />
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                            <td className={`px-4 py-2 text-left tabular-nums ${muted}`}>
-                              {costsLoading &&
-                              pending.item_id &&
-                              pendingBd === undefined ? (
-                                <span className={muted}>…</span>
-                              ) : pendingRow ? (
-                                formatCostDisplay(
-                                  pendingRow,
-                                  pendingBd,
-                                  costDisplayOptions,
-                                )
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                            <td className="px-4 py-2 text-left tabular-nums">
-                              <input
-                                type="number"
-                                step="any"
-                                min="0"
-                                placeholder="0.00"
-                                disabled={!pending.item_id}
-                                aria-label={`${
-                                  pageMode === "wholesale" ? "Wholesale" : "Retail"
-                                } price`}
-                                className={`${inputCls} w-full max-w-34 text-left tabular-nums disabled:opacity-50`}
-                                value={pending.price}
-                                onChange={(e) =>
-                                  updatePendingPrice(pending.localId, e.target.value)
-                                }
-                              />
-                            </td>
-                            <td
-                              className={`px-4 py-2 text-left tabular-nums font-medium ${textMain}`}
-                            >
-                              {pendingRow
-                                ? lcogPercent(pendingBd, pendingPriceStored)
-                                : "—"}
-                            </td>
-                            {showThresholdColumn ? (
-                              <LcogThresholdDataCell
-                                lcogPercent={lcogPercentValue(
-                                  pendingBd,
-                                  pendingPriceStored,
-                                )}
-                                thresholds={rowThresholds}
-                                mutedClass={muted}
-                              />
-                            ) : null}
-                            <td className="w-16 whitespace-nowrap px-4 py-2">
-                              <button
-                                type="button"
-                                title="Remove row"
-                                onClick={() => removePendingRow(pending.localId)}
-                                className={trashButtonClass(isEditMode)}
-                                aria-hidden={!isEditMode}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {noItemSearchMatches && (
-                        <tr>
-                          <td
-                            colSpan={tableColSpan}
-                            className={`px-4 py-6 text-center text-sm ${muted}`}
-                          >
-                            No items match your search.
-                          </td>
-                        </tr>
-                      )}
-                      {sortedMembers.map((row) => {
-                        const bd = costs[row.item_id];
-                        const ws = draftWholesale.has(row.item_id)
-                          ? draftWholesale.get(row.item_id)!
-                          : listPriceInputDisplay(
-                              row.latest_wholesale_price,
-                              row,
-                              eachMode,
-                              menuPricingEach,
-                            );
-                        const rt = draftRetail.has(row.item_id)
-                          ? draftRetail.get(row.item_id)!
-                          : listPriceInputDisplay(
-                              row.latest_retail_price,
-                              row,
-                              eachMode,
-                              menuPricingEach,
-                            );
-                        const priceForLcog =
-                          pageMode === "wholesale"
-                            ? listPriceInputToStoredPerKg(
-                                ws,
-                                row,
-                                eachMode,
-                                menuPricingEach,
-                              )
-                            : listPriceInputToStoredPerKg(
-                                rt,
-                                row,
-                                eachMode,
-                                menuPricingEach,
-                              );
-                        const rowDrafted =
-                          pageMode === "wholesale"
-                            ? draftWholesale.has(row.item_id)
-                            : draftRetail.has(row.item_id) ||
-                              (draftCostBasis.has(row.item_id) &&
-                                draftCostBasis.get(row.item_id) !==
-                                  savedCostBasisByItem.get(row.item_id));
-                        return (
-                          <tr
-                            key={row.item_id}
-                            className={`transition-[background-color] ${
-                              rowDrafted
-                                ? isDark
-                                  ? "bg-amber-900/15"
-                                  : "bg-amber-50/80"
-                                : isDark
-                                  ? "hover:bg-slate-700/50"
-                                  : "hover:bg-gray-50"
+                            className="peer sr-only"
+                          />
+                          <div
+                            className={`h-4 w-8 rounded-full after:absolute after:left-[1px] after:top-[1px] after:h-3 after:w-3 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all peer-checked:after:translate-x-4 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-gray-300 after:content-[''] ${
+                              isDark ? "bg-slate-600" : "bg-gray-300"
                             }`}
-                            style={{ height: 52 }}
+                          />
+                        </label>
+                        <span
+                          className={`text-xs normal-case ${
+                            costUnit === "kg"
+                              ? `font-semibold ${textMain}`
+                              : muted
+                          }`}
+                        >
+                          kg
+                        </span>
+                      </div>
+                    </div>
+                  </th>
+                  <th className={`${thCls} text-left w-40`}>
+                    {pageMode === "wholesale" ? (
+                      "Wholesale"
+                    ) : (
+                      <HeaderHoverHint
+                        hint={RETAIL_HEADER_TOOLTIP}
+                        isDark={isDark}
+                      >
+                        <span>Retail</span>
+                      </HeaderHoverHint>
+                    )}
+                  </th>
+                  <th className={`${thCls} text-left w-24`}>
+                    {renderListSortHeader("lcog", "LCOG%", LCOG_HEADER_TOOLTIP)}
+                  </th>
+                  {showThresholdColumn ? (
+                    <th
+                      className={`${thCls} w-[7.25rem] min-w-[7.25rem] px-2 text-center ${
+                        isEditMode ? "py-1" : ""
+                      }`}
+                    >
+                      <LcogThresholdHeaderCell
+                        isEditMode={isEditMode}
+                        isDark={isDark}
+                        headerTooltip={
+                          isEditMode ? undefined : LCOG_THRESHOLD_HEADER_TOOLTIP
+                        }
+                        cautionRaw={draftCaution}
+                        overRaw={draftOver}
+                        savedCaution={savedCaution}
+                        savedOver={savedOver}
+                        onCautionChange={setDraftCaution}
+                        onOverChange={setDraftOver}
+                        cautionInvalid={effectiveThresholds.cautionInvalid}
+                        overInvalid={effectiveThresholds.overInvalid}
+                      />
+                    </th>
+                  ) : null}
+                  <th className={`${thCls} w-16`} aria-label="Row actions" />
+                </tr>
+              </thead>
+              <tbody className={tbodyRowDividerCls}>
+                {isEditMode && (
+                  <tr style={{ height: 52 }}>
+                    <td colSpan={tableColSpan} className="px-4 py-2">
+                      <button
+                        type="button"
+                        onClick={handleAddPendingRow}
+                        className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-sm transition-colors ${
+                          isDark
+                            ? "text-blue-400 hover:bg-blue-900/30 hover:text-blue-300"
+                            : "text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                        }`}
+                      >
+                        <Plus className="h-4 w-4 shrink-0" />
+                        <span>Add item</span>
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {pendingNewRows.map((pending) => {
+                  const c = pending.item_id
+                    ? candidateById.get(pending.item_id)
+                    : undefined;
+                  const pendingRow =
+                    pending.item_id && c
+                      ? memberRowFromCandidate(pending.item_id, c)
+                      : null;
+                  const pendingBd = pending.item_id
+                    ? costs[pending.item_id]
+                    : undefined;
+                  const pendingPriceStored =
+                    pendingRow && pending.price !== ""
+                      ? listPriceInputToStoredPerKg(
+                          pending.price,
+                          pendingRow,
+                          eachMode,
+                          menuPricingEach,
+                        )
+                      : null;
+                  const rowOptions = addableCandidatesForPendingRow(
+                    pending.localId,
+                    pending.item_id,
+                  );
+                  return (
+                    <tr
+                      key={pending.localId}
+                      className={
+                        isDark ? "bg-emerald-900/15" : "bg-emerald-50/80"
+                      }
+                      style={{ height: 52 }}
+                    >
+                      <td className="px-4 py-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <select
+                            value={pending.item_id}
+                            onChange={(e) =>
+                              updatePendingItemId(
+                                pending.localId,
+                                e.target.value,
+                              )
+                            }
+                            className={`${inputCls} min-w-0 flex-1 ${
+                              showMenuCostBasis && isEditMode
+                                ? "max-w-[calc(100%-12rem)]"
+                                : ""
+                            }`}
+                            aria-label="Item to add"
                           >
-                            <td className={`px-4 py-2 font-medium ${textMain}`}>
-                              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                                <span>{row.name}</span>
-                                {!isEditMode && renderCostBasisBadge(row)}
-                                {isEditMode &&
-                                  renderCostBasisSlot(row.item_id, row)}
-                                {row.deprecation_reason === "indirect" && (
-                                  <span
-                                    className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${
-                                      isDark
-                                        ? "border-yellow-700 bg-yellow-900/40 text-yellow-200"
-                                        : "border-yellow-300 bg-yellow-100 text-yellow-800"
-                                    }`}
-                                    title="Affected by a deprecated ingredient; cost cannot be calculated"
-                                  >
-                                    ⚠ Affected
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-                            <td className={`px-4 py-2 ${muted}`}>
-                              <ItemKindBadge
-                                isMenuItem={row.is_menu_item}
-                                isDark={isDark}
-                              />
-                            </td>
-                            <td className={`px-4 py-2 text-left tabular-nums ${muted}`}>
-                              {costsLoading && bd === undefined ? (
-                                <span className={muted}>…</span>
-                              ) : (
-                                formatCostDisplay(row, bd, costDisplayOptions)
+                            <option value="">Choose an item…</option>
+                            {pending.item_id &&
+                              c &&
+                              !rowOptions.some((o) => o.id === c.id) && (
+                                <option value={c.id}>
+                                  {c.name} (
+                                  {c.is_menu_item ? "menu" : "prepped"})
+                                </option>
                               )}
-                            </td>
-                            <td className="px-4 py-2 text-left tabular-nums">
-                              {isEditMode ? (
-                                <input
-                                  type="number"
-                                  step="any"
-                                  min="0"
-                                  aria-label={`${
-                                    pageMode === "wholesale" ? "Wholesale" : "Retail"
-                                  } for ${row.name}`}
-                                  className={`${inputCls} w-full max-w-34 text-left tabular-nums`}
-                                  value={pageMode === "wholesale" ? ws : rt}
-                                  onChange={(e) => {
-                                    const v = e.target.value;
-                                    if (pageMode === "wholesale") {
-                                      setDraftWholesale((prev) => {
-                                        const n = new Map(prev);
-                                        n.set(row.item_id, v);
-                                        return n;
-                                      });
-                                    } else {
-                                      setDraftRetail((prev) => {
-                                        const n = new Map(prev);
-                                        n.set(row.item_id, v);
-                                        return n;
-                                      });
-                                    }
-                                  }}
-                                />
-                              ) : (
-                                <span className={textMain}>
-                                  {pageMode === "wholesale"
-                                    ? formatListPriceDisplay(
-                                        row.latest_wholesale_price,
-                                        row,
-                                        eachMode,
-                                        menuPricingEach,
-                                      )
-                                    : formatListPriceDisplay(
-                                        row.latest_retail_price,
-                                        row,
-                                        eachMode,
-                                        menuPricingEach,
-                                      )}
-                                </span>
-                              )}
-                            </td>
-                            <td
-                              className={`px-4 py-2 text-left tabular-nums font-medium ${textMain}`}
-                            >
-                              {lcogPercent(bd, priceForLcog)}
-                            </td>
-                            {showThresholdColumn ? (
-                              <LcogThresholdDataCell
-                                lcogPercent={lcogPercentValue(bd, priceForLcog)}
-                                thresholds={rowThresholds}
-                                mutedClass={muted}
-                              />
-                            ) : null}
-                            <td className="w-16 whitespace-nowrap px-4 py-2">
-                              <button
-                                type="button"
-                                title={
-                                  isEditMode ? "Remove from list" : undefined
-                                }
-                                disabled={!isEditMode}
-                                onClick={() => {
-                                  if (!isEditMode) return;
-                                  markMemberRemoved(row.item_id);
-                                }}
-                                className={trashButtonClass(isEditMode)}
-                                aria-hidden={!isEditMode}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
-                            </td>
-                          </tr>
+                            {rowOptions.map((opt) => (
+                              <option key={opt.id} value={opt.id}>
+                                {opt.name}
+                                {opt.is_cross_tenant ? " · shared" : ""} (
+                                {opt.is_menu_item ? "menu" : "prepped"})
+                              </option>
+                            ))}
+                          </select>
+                          {isEditMode &&
+                            renderCostBasisSlot(
+                              pending.item_id,
+                              pendingRow,
+                              pending.localId,
+                              pending.cost_basis,
+                            )}
+                        </div>
+                      </td>
+                      <td className={`px-4 py-2 ${muted}`}>
+                        {c ? (
+                          <ItemKindBadge
+                            isMenuItem={c.is_menu_item}
+                            isDark={isDark}
+                          />
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td
+                        className={`px-4 py-2 text-left tabular-nums ${muted}`}
+                      >
+                        {costsLoading &&
+                        pending.item_id &&
+                        pendingBd === undefined ? (
+                          <span className={muted}>…</span>
+                        ) : pendingRow ? (
+                          formatCostDisplay(
+                            pendingRow,
+                            pendingBd,
+                            costDisplayOptions,
+                          )
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-left tabular-nums">
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          placeholder="0.00"
+                          disabled={!pending.item_id}
+                          aria-label={`${
+                            pageMode === "wholesale" ? "Wholesale" : "Retail"
+                          } price`}
+                          className={`${inputCls} w-full max-w-34 text-left tabular-nums disabled:opacity-50`}
+                          value={pending.price}
+                          onChange={(e) =>
+                            updatePendingPrice(pending.localId, e.target.value)
+                          }
+                        />
+                      </td>
+                      <td
+                        className={`px-4 py-2 text-left tabular-nums font-medium ${textMain}`}
+                      >
+                        {pendingRow
+                          ? lcogPercent(pendingBd, pendingPriceStored)
+                          : "—"}
+                      </td>
+                      {showThresholdColumn ? (
+                        <LcogThresholdDataCell
+                          lcogPercent={lcogPercentValue(
+                            pendingBd,
+                            pendingPriceStored,
+                          )}
+                          thresholds={rowThresholds}
+                          mutedClass={muted}
+                        />
+                      ) : null}
+                      <td className="w-16 whitespace-nowrap px-4 py-2">
+                        <button
+                          type="button"
+                          title="Remove row"
+                          onClick={() => removePendingRow(pending.localId)}
+                          className={trashButtonClass(isEditMode)}
+                          aria-hidden={!isEditMode}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {noItemSearchMatches && (
+                  <tr>
+                    <td
+                      colSpan={tableColSpan}
+                      className={`px-4 py-6 text-center text-sm ${muted}`}
+                    >
+                      No items match your search.
+                    </td>
+                  </tr>
+                )}
+                {sortedMembers.map((row) => {
+                  const bd = costs[row.item_id];
+                  const ws = draftWholesale.has(row.item_id)
+                    ? draftWholesale.get(row.item_id)!
+                    : listPriceInputDisplay(
+                        row.latest_wholesale_price,
+                        row,
+                        eachMode,
+                        menuPricingEach,
+                      );
+                  const rt = draftRetail.has(row.item_id)
+                    ? draftRetail.get(row.item_id)!
+                    : listPriceInputDisplay(
+                        row.latest_retail_price,
+                        row,
+                        eachMode,
+                        menuPricingEach,
+                      );
+                  const priceForLcog =
+                    pageMode === "wholesale"
+                      ? listPriceInputToStoredPerKg(
+                          ws,
+                          row,
+                          eachMode,
+                          menuPricingEach,
+                        )
+                      : listPriceInputToStoredPerKg(
+                          rt,
+                          row,
+                          eachMode,
+                          menuPricingEach,
                         );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                  const rowDrafted =
+                    pageMode === "wholesale"
+                      ? draftWholesale.has(row.item_id)
+                      : draftRetail.has(row.item_id) ||
+                        (draftCostBasis.has(row.item_id) &&
+                          draftCostBasis.get(row.item_id) !==
+                            savedCostBasisByItem.get(row.item_id));
+                  return (
+                    <tr
+                      key={row.item_id}
+                      className={`transition-[background-color] ${
+                        rowDrafted
+                          ? isDark
+                            ? "bg-amber-900/15"
+                            : "bg-amber-50/80"
+                          : isDark
+                            ? "hover:bg-slate-700/50"
+                            : "hover:bg-gray-50"
+                      }`}
+                      style={{ height: 52 }}
+                    >
+                      <td className={`px-4 py-2 font-medium ${textMain}`}>
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span>{row.name}</span>
+                          {!isEditMode && renderCostBasisBadge(row)}
+                          {isEditMode && renderCostBasisSlot(row.item_id, row)}
+                          {row.deprecation_reason === "indirect" && (
+                            <span
+                              className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-medium ${
+                                isDark
+                                  ? "border-yellow-700 bg-yellow-900/40 text-yellow-200"
+                                  : "border-yellow-300 bg-yellow-100 text-yellow-800"
+                              }`}
+                              title="Affected by a deprecated ingredient; cost cannot be calculated"
+                            >
+                              ⚠ Affected
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className={`px-4 py-2 ${muted}`}>
+                        <ItemKindBadge
+                          isMenuItem={row.is_menu_item}
+                          isDark={isDark}
+                        />
+                      </td>
+                      <td
+                        className={`px-4 py-2 text-left tabular-nums ${muted}`}
+                      >
+                        {costsLoading && bd === undefined ? (
+                          <span className={muted}>…</span>
+                        ) : (
+                          formatCostDisplay(row, bd, costDisplayOptions)
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-left tabular-nums">
+                        {isEditMode ? (
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            aria-label={`${
+                              pageMode === "wholesale" ? "Wholesale" : "Retail"
+                            } for ${row.name}`}
+                            className={`${inputCls} w-full max-w-34 text-left tabular-nums`}
+                            value={pageMode === "wholesale" ? ws : rt}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (pageMode === "wholesale") {
+                                setDraftWholesale((prev) => {
+                                  const n = new Map(prev);
+                                  n.set(row.item_id, v);
+                                  return n;
+                                });
+                              } else {
+                                setDraftRetail((prev) => {
+                                  const n = new Map(prev);
+                                  n.set(row.item_id, v);
+                                  return n;
+                                });
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span className={textMain}>
+                            {pageMode === "wholesale"
+                              ? formatListPriceDisplay(
+                                  row.latest_wholesale_price,
+                                  row,
+                                  eachMode,
+                                  menuPricingEach,
+                                )
+                              : formatListPriceDisplay(
+                                  row.latest_retail_price,
+                                  row,
+                                  eachMode,
+                                  menuPricingEach,
+                                )}
+                          </span>
+                        )}
+                      </td>
+                      <td
+                        className={`px-4 py-2 text-left tabular-nums font-medium ${textMain}`}
+                      >
+                        {lcogPercent(bd, priceForLcog)}
+                      </td>
+                      {showThresholdColumn ? (
+                        <LcogThresholdDataCell
+                          lcogPercent={lcogPercentValue(bd, priceForLcog)}
+                          thresholds={rowThresholds}
+                          mutedClass={muted}
+                        />
+                      ) : null}
+                      <td className="w-16 whitespace-nowrap px-4 py-2">
+                        <button
+                          type="button"
+                          title={isEditMode ? "Remove from list" : undefined}
+                          disabled={!isEditMode}
+                          onClick={() => {
+                            if (!isEditMode) return;
+                            markMemberRemoved(row.item_id);
+                          }}
+                          className={trashButtonClass(isEditMode)}
+                          aria-hidden={!isEditMode}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
