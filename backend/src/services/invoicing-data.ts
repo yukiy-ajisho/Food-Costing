@@ -153,6 +153,20 @@ export async function assertDeliverySiteInTenant(
   return Boolean(data);
 }
 
+export async function assertInvoicingAccountInTenant(
+  tenantId: string,
+  accountId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("invoicing_accounts")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("id", accountId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return Boolean(data);
+}
+
 export async function fetchEffectiveEachGramsByItemIds(
   tenantId: string,
   itemIds: string[],

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   Moon,
   Sun,
@@ -105,6 +105,29 @@ function isInvoicingPath(pathname: string): boolean {
   return pathname.startsWith("/invoicing");
 }
 
+type InvoicingNavSection = "account" | "invoice";
+
+function invoicingSectionFromSearchParams(
+  searchParams: URLSearchParams,
+): InvoicingNavSection {
+  const section = searchParams.get("section");
+  if (section === "account") return "account";
+  const legacyTab = searchParams.get("tab");
+  if (legacyTab === "delivery") return "account";
+  return "invoice";
+}
+
+function isInvoicingSectionNavActive(
+  pathname: string,
+  searchParams: URLSearchParams,
+  section: InvoicingNavSection,
+): boolean {
+  return (
+    pathname.startsWith("/invoicing") &&
+    invoicingSectionFromSearchParams(searchParams) === section
+  );
+}
+
 // Food costing サブメニュー
 const foodCostingSubItems = [
   { id: "cost", label: "Recipes", href: "/cost" },
@@ -152,6 +175,22 @@ const teamSubItems = [
   { id: "team-tenant", label: "Tenant", href: "/team/tenant" },
 ] as const;
 
+/** Invoicing 直下は Account / Invoice の2サブメニューのみ。各画面はページ内タブ。 */
+const invoicingSectionSubItems = [
+  {
+    id: "inv-account",
+    label: "Account",
+    href: "/invoicing?section=account&tab=accounts",
+    section: "account" as const,
+  },
+  {
+    id: "inv-invoice",
+    label: "Invoice",
+    href: "/invoicing?section=invoice&tab=box",
+    section: "invoice" as const,
+  },
+] as const;
+
 // Team（親メニュー）
 const teamNavItem = {
   id: "team",
@@ -181,6 +220,7 @@ const licenseSubItems = [
 // レイアウトコンテンツコンポーネント
 export function Layout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const {
     companies,
     selectedCompanyId,
@@ -209,6 +249,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [licenseExpanded, setLicenseExpanded] = useState(false);
   const [foodCostingExpanded, setFoodCostingExpanded] = useState(false);
   const [teamExpanded, setTeamExpanded] = useState(false);
+  const [invoicingExpanded, setInvoicingExpanded] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [sidebarAlertsEnabled, setSidebarAlertsEnabled] = useState(true);
   const [licenseOverdueCounts, setLicenseOverdueCounts] = useState<{
@@ -245,6 +286,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // Team 配下にいるときは開く／それ以外では閉じる
   useEffect(() => {
     setTeamExpanded(isTeamPath(pathname));
+  }, [pathname]);
+
+  useEffect(() => {
+    setInvoicingExpanded(isInvoicingPath(pathname));
   }, [pathname]);
 
   // サイドバー表示モード（ハンバーガー）をブラウザに永続化
@@ -624,7 +669,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/company-requirements"))
       return "Company Requirements";
     if (pathname.startsWith("/document-box")) return "Upload Box";
-    if (pathname.startsWith("/invoicing")) return "Invoicing";
+    if (pathname.startsWith("/invoicing")) {
+      const section = invoicingSectionFromSearchParams(searchParams);
+      if (section === "account") {
+        const tab = searchParams.get("tab");
+        if (tab === "delivery-site" || tab === "delivery") return "Delivery Site";
+        return "Account Information";
+      }
+      const tab = searchParams.get("tab");
+      if (tab === "generation") return "Invoice Generation";
+      return "Invoice Box";
+    }
     if (pathname.startsWith("/dashboard")) return "Dashboard";
     if (pathname.startsWith("/settings")) return "Settings";
     if (pathname.startsWith("/cost/recipe-cost-report")) return "Pricing";
@@ -1101,63 +1156,139 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 </div>
 
                 {showInvoicingNav ? (
-                  <Link
-                    href={canAccessInvoicing ? "/invoicing" : "#"}
-                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
-                      isInvoicingActive
-                        ? isDark
-                          ? "text-blue-400 font-semibold"
-                          : "text-blue-700 font-semibold"
-                        : isDark
-                          ? "text-slate-300 hover:text-blue-400"
-                          : "text-black hover:text-blue-900"
-                    }`}
-                    style={{
-                      backgroundColor: isDark ? "#1e293b" : "white",
-                      transition:
-                        "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
-                      color: isInvoicingActive
-                        ? isDark
+                  <div className="flex flex-col gap-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!canAccessInvoicing) return;
+                        setInvoicingExpanded((e) => !e);
+                      }}
+                      className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
+                        isInvoicingActive
+                          ? isDark
+                            ? "text-blue-400 font-semibold"
+                            : "text-blue-700 font-semibold"
+                          : isDark
+                            ? "text-slate-300 hover:text-blue-400"
+                            : "text-black hover:text-blue-900"
+                      }`}
+                      style={{
+                        backgroundColor: isDark ? "#1e293b" : "white",
+                        color: isInvoicingActive
+                          ? isDark
+                            ? "#60a5fa"
+                            : "#1d4ed8"
+                          : isDark
+                            ? "#cbd5e1"
+                            : "#000000",
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!canAccessInvoicing) return;
+                        e.currentTarget.style.backgroundColor = isDark
+                          ? "#334155"
+                          : "#dbeafe";
+                        e.currentTarget.style.color = isDark
                           ? "#60a5fa"
-                          : "#1d4ed8"
-                        : isDark
-                          ? "#cbd5e1"
-                          : "#000000",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!canAccessInvoicing) return;
-                      e.currentTarget.style.backgroundColor = isDark
-                        ? "#334155"
-                        : "#dbeafe";
-                      e.currentTarget.style.color = isDark
-                        ? "#60a5fa"
-                        : "#1d4ed8";
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!canAccessInvoicing) return;
-                      e.currentTarget.style.backgroundColor = isDark
-                        ? "#1e293b"
-                        : "white";
-                      e.currentTarget.style.color = isInvoicingActive
-                        ? isDark
-                          ? "#60a5fa"
-                          : "#1d4ed8"
-                        : isDark
-                          ? "#cbd5e1"
-                          : "#000000";
-                    }}
-                    onClick={(e) => {
-                      if (!canAccessInvoicing) e.preventDefault();
-                    }}
-                    aria-disabled={!canAccessInvoicing}
-                  >
-                    <Receipt className="h-5 w-5 shrink-0" />
-                    {isSidebarExpanded && (
-                      <span className="text-sm whitespace-nowrap">
-                        Invoicing
-                      </span>
-                    )}
-                  </Link>
+                          : "#1d4ed8";
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!canAccessInvoicing) return;
+                        e.currentTarget.style.backgroundColor = isDark
+                          ? "#1e293b"
+                          : "white";
+                        e.currentTarget.style.color = isInvoicingActive
+                          ? isDark
+                            ? "#60a5fa"
+                            : "#1d4ed8"
+                          : isDark
+                            ? "#cbd5e1"
+                            : "#000000";
+                      }}
+                      aria-disabled={!canAccessInvoicing}
+                    >
+                      <Receipt className="h-5 w-5 shrink-0" />
+                      {isSidebarExpanded && (
+                        <span className={SIDEBAR_NAV_LABEL_CHEVRON}>
+                          <span className="text-sm whitespace-nowrap">
+                            Invoicing
+                          </span>
+                          {invoicingExpanded ? (
+                            <ChevronDown className="h-4 w-4 shrink-0" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 shrink-0" />
+                          )}
+                        </span>
+                      )}
+                    </button>
+                    {isSidebarExpanded &&
+                      invoicingExpanded &&
+                      invoicingSectionSubItems.map((sub) => {
+                        const href = canAccessInvoicing ? sub.href : "#";
+                        const isActive =
+                          canAccessInvoicing &&
+                          isInvoicingSectionNavActive(
+                            pathname,
+                            searchParams,
+                            sub.section,
+                          );
+                        return (
+                          <Link
+                            key={sub.id}
+                            href={href}
+                            onClick={(e) => {
+                              if (!canAccessInvoicing) e.preventDefault();
+                            }}
+                            className={`w-[calc(100%-2.5rem)] ml-10 ${FOOD_COSTING_SUB_NAV_ROW_ALIGN} pl-2 pr-3 py-0.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
+                              isActive ? "font-semibold" : ""
+                            }`}
+                            style={{
+                              backgroundColor: isActive
+                                ? isDark
+                                  ? "#334155"
+                                  : "#dbeafe"
+                                : isDark
+                                  ? "#1e293b"
+                                  : "white",
+                              color: isActive
+                                ? isDark
+                                  ? "#60a5fa"
+                                  : "#1d4ed8"
+                                : isDark
+                                  ? "#94a3b8"
+                                  : "#000000",
+                            }}
+                            onMouseEnter={(e) => {
+                              if (!canAccessInvoicing) return;
+                              e.currentTarget.style.backgroundColor = isDark
+                                ? "#334155"
+                                : "#dbeafe";
+                              e.currentTarget.style.color = isDark
+                                ? "#60a5fa"
+                                : "#1d4ed8";
+                            }}
+                            onMouseLeave={(e) => {
+                              if (!canAccessInvoicing) return;
+                              e.currentTarget.style.backgroundColor = isActive
+                                ? isDark
+                                  ? "#334155"
+                                  : "#dbeafe"
+                                : isDark
+                                  ? "#1e293b"
+                                  : "white";
+                              e.currentTarget.style.color = isActive
+                                ? isDark
+                                  ? "#60a5fa"
+                                  : "#1d4ed8"
+                                : isDark
+                                  ? "#94a3b8"
+                                  : "#000000";
+                            }}
+                          >
+                            {sub.label}
+                          </Link>
+                        );
+                      })}
+                  </div>
                 ) : null}
 
                 {showDocumentBoxNav ? (

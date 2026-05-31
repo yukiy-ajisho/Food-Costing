@@ -1,13 +1,32 @@
 import { apiRequest } from "./api";
 import type { InvoicingCostBreakdown } from "./invoicingCalc";
 
+export type InvoicingAccount = {
+  id: string;
+  tenant_id: string;
+  company_name: string;
+  poc_phone: string | null;
+  poc_email: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type InvoicingAccountInput = {
+  company_name: string;
+  poc_phone?: string | null;
+  poc_email?: string | null;
+};
+
 export type DeliverySite = {
   id: string;
   tenant_id: string;
+  account_id: string;
+  company_name: string;
   name: string;
   street: string | null;
   city: string | null;
-  state_zip: string | null;
+  state: string | null;
+  zip: string | null;
   phone_1: string | null;
   phone_2: string | null;
   email: string;
@@ -16,10 +35,12 @@ export type DeliverySite = {
 };
 
 export type DeliverySiteInput = {
+  account_id: string;
   name: string;
   street?: string | null;
   city?: string | null;
-  state_zip?: string | null;
+  state?: string | null;
+  zip?: string | null;
   phone_1?: string | null;
   phone_2?: string | null;
   email: string;
@@ -109,6 +130,29 @@ export type BoxInvoice = {
 };
 
 export const invoicingAPI = {
+  listAccounts: () =>
+    apiRequest<{ accounts: InvoicingAccount[] }>("/invoicing/accounts"),
+
+  createAccount: (body: InvoicingAccountInput) =>
+    apiRequest<{ account: InvoicingAccount }>("/invoicing/accounts", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateAccount: (id: string, body: InvoicingAccountInput) =>
+    apiRequest<{ account: InvoicingAccount }>(
+      `/invoicing/accounts/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  deleteAccount: (id: string) =>
+    apiRequest<void>(`/invoicing/accounts/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+
   listDeliverySites: () =>
     apiRequest<{ sites: DeliverySite[] }>("/invoicing/delivery-sites"),
 
@@ -131,6 +175,18 @@ export const invoicingAPI = {
     apiRequest<void>(`/invoicing/delivery-sites/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
+
+  previewInvoiceNumber: (body: {
+    delivery_site_id: string;
+    invoice_date: string;
+  }) =>
+    apiRequest<{ invoice_number: string }>(
+      "/invoicing/preview-invoice-number",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+    ),
 
   getItemCandidates: () =>
     apiRequest<{ items: InvoicingItemCandidate[] }>(
@@ -202,6 +258,7 @@ export const invoicingAPI = {
     order_received_date?: string | null;
     delivery_date?: string | null;
     invoice_date: string;
+    invoice_number?: string;
     total_amount: number;
     lines: BoxInvoiceLine[];
     send?: boolean;

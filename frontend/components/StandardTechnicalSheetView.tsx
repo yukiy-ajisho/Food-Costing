@@ -54,10 +54,7 @@ import {
   type CrossTenantPickerEntry,
   type IngredientPickerType,
 } from "@/lib/ingredientItemPicker";
-import {
-  childIdFromRowKey,
-  snapshotRowKey,
-} from "@/lib/technicalSheetRowKey";
+import { childIdFromRowKey, snapshotRowKey } from "@/lib/technicalSheetRowKey";
 import {
   buildUpdateDisplayPlan,
   buildUpdateMetaByRowKey,
@@ -239,9 +236,7 @@ function displayLineToDraftRow(
     quantity: line.quantity,
     unit: line.unit,
     specific_child: line.specific_child,
-    step_quantities: base
-      ? { ...base.step_quantities }
-      : { A: line.grams },
+    step_quantities: base ? { ...base.step_quantities } : { A: line.grams },
     total: line.grams,
     pu: liveRow?.pu ?? sheetRow?.pu ?? null,
     pt: null,
@@ -315,9 +310,7 @@ function isRemovedRestoredPendingTrash(
   restoredRemovedKeys?: ReadonlySet<string>,
 ): boolean {
   return (
-    isPendingTrash &&
-    !!restoredRemovedKeys &&
-    restoredRemovedKeys.has(rowKey)
+    isPendingTrash && !!restoredRemovedKeys && restoredRemovedKeys.has(rowKey)
   );
 }
 
@@ -356,7 +349,9 @@ function formatQuantityUnit(quantity: number, unit: string): string {
   return `${displayQty} ${u}`;
 }
 
-function formatRowAmount(row: RecipeSummaryTechnicalSheetIngredientRow): string {
+function formatRowAmount(
+  row: RecipeSummaryTechnicalSheetIngredientRow,
+): string {
   const q = rowQuantity(row);
   if (q <= 0) return "—";
   return formatQuantityUnit(q, row.unit);
@@ -485,9 +480,7 @@ function buildUpdateDisplayRows(
         ? meta.liveSpecificChild
         : meta.sheetSpecificChild;
     const vendorLabel =
-      vendorChoice === "live"
-        ? meta.liveVendorLabel
-        : meta.sheetVendorLabel;
+      vendorChoice === "live" ? meta.liveVendorLabel : meta.sheetVendorLabel;
     const chosenSpecific =
       vendorChoice === "live"
         ? meta.liveSpecificChild
@@ -655,19 +648,17 @@ function defaultApplyModes(
   return m;
 }
 
-function clearUpdateSession(
-  setters: {
-    setRecipeDiff: (v: StandardRecipeDiff | null) => void;
-    setUpdateRowChoices: (v: Map<string, UpdateRowChoices>) => void;
-    setRestoredRemovedKeys: (v: Set<string>) => void;
-    setLaborUpdateRowChoices: (v: Map<string, LaborUpdateRowChoices>) => void;
-    setRestoredRemovedLaborKeys: (v: Set<string>) => void;
-    setIngredientApplyModes: (v: Map<string, StandardSheetApplyMode>) => void;
-    setLaborApplyModes: (v: Map<string, StandardSheetApplyMode>) => void;
-    setPendingTrashIngredientKeys: (v: Set<string>) => void;
-    setPendingTrashLaborKeys: (v: Set<string>) => void;
-  },
-) {
+function clearUpdateSession(setters: {
+  setRecipeDiff: (v: StandardRecipeDiff | null) => void;
+  setUpdateRowChoices: (v: Map<string, UpdateRowChoices>) => void;
+  setRestoredRemovedKeys: (v: Set<string>) => void;
+  setLaborUpdateRowChoices: (v: Map<string, LaborUpdateRowChoices>) => void;
+  setRestoredRemovedLaborKeys: (v: Set<string>) => void;
+  setIngredientApplyModes: (v: Map<string, StandardSheetApplyMode>) => void;
+  setLaborApplyModes: (v: Map<string, StandardSheetApplyMode>) => void;
+  setPendingTrashIngredientKeys: (v: Set<string>) => void;
+  setPendingTrashLaborKeys: (v: Set<string>) => void;
+}) {
   setters.setRecipeDiff(null);
   setters.setUpdateRowChoices(new Map());
   setters.setRestoredRemovedKeys(new Set());
@@ -893,7 +884,10 @@ function TechnicalSheetBody({
   vendors: Vendor[];
   crossTenantAvailableItems: CrossTenantPickerEntry[];
   onAddIngredientRow?: () => void;
-  onNewRowPickerTypeChange?: (rowKey: string, type: IngredientPickerType) => void;
+  onNewRowPickerTypeChange?: (
+    rowKey: string,
+    type: IngredientPickerType,
+  ) => void;
   onNewRowCrossTenantFilterChange?: (rowKey: string, filter: string) => void;
   onNewRowItemSelect?: (rowKey: string, itemId: string) => void;
   hasUnpricedLines?: boolean;
@@ -919,10 +913,7 @@ function TechnicalSheetBody({
   ) => void;
   priceMode?: StandardTechnicalSheetPriceMode;
   onPriceModeChange?: (mode: StandardTechnicalSheetPriceMode) => void;
-  snapshotPriceByRowKey?: Map<
-    string,
-    { pu: number | null; pt: number | null }
-  >;
+  snapshotPriceByRowKey?: Map<string, { pu: number | null; pt: number | null }>;
   snapshotTotalCost?: number | null;
   priceLoading?: boolean;
   updateLoading?: boolean;
@@ -972,10 +963,7 @@ function TechnicalSheetBody({
       ? `$${sheet.total_labor_cost.toFixed(2)}`
       : "—";
   const dualLaborTotal = showBothLaborPrices
-    ? formatDualTotalCostLines(
-        snapshotLaborTotalCost,
-        sheet.total_labor_cost,
-      )
+    ? formatDualTotalCostLines(snapshotLaborTotalCost, sheet.total_labor_cost)
     : null;
 
   return (
@@ -1041,41 +1029,43 @@ function TechnicalSheetBody({
             </div>
           ) : (
             <>
-            <IngredientTable
-              rows={rows}
-              isDark={isDark}
-              editable={!!editRows}
-              pickerItems={pickerItems}
-              baseItems={baseItems}
-              vendorProducts={vendorProducts}
-              vendors={vendors}
-              crossTenantAvailableItems={crossTenantAvailableItems}
-              onAmountChange={onAmountChange}
-              onRemoveRow={onRemoveRow}
-              onVendorChange={onVendorChange}
-              onAddIngredientRow={onAddIngredientRow}
-              onNewRowPickerTypeChange={onNewRowPickerTypeChange}
-              onNewRowCrossTenantFilterChange={onNewRowCrossTenantFilterChange}
-              onNewRowItemSelect={onNewRowItemSelect}
-              updateMode={updateMode}
-              updateEditMode={updateEditMode}
-              updateMetaByRowKey={updateMetaByRowKey}
-              pairedRemovedKeys={pairedRemovedKeys}
-              restoredRemovedKeys={restoredRemovedKeys}
-              onRestoreRemoved={onRestoreRemoved}
-              pendingTrashKeys={pendingTrashKeys}
-              updateRowChoices={updateRowChoices}
-              onVendorChoiceChange={onVendorChoiceChange}
-              onTotalChoiceChange={onTotalChoiceChange}
-              onFinalAmountChange={onFinalAmountChange}
-              ingredientApplyModes={ingredientApplyModes}
-              onIngredientApplyModeChange={onIngredientApplyModeChange}
-              priceMode={priceMode}
-              snapshotPriceByRowKey={snapshotPriceByRowKey}
-              priceLoading={priceLoading}
-              crossTenantItemIds={crossTenantIds}
-              onOpenPreppedSheet={onOpenPreppedSheet}
-            />
+              <IngredientTable
+                rows={rows}
+                isDark={isDark}
+                editable={!!editRows}
+                pickerItems={pickerItems}
+                baseItems={baseItems}
+                vendorProducts={vendorProducts}
+                vendors={vendors}
+                crossTenantAvailableItems={crossTenantAvailableItems}
+                onAmountChange={onAmountChange}
+                onRemoveRow={onRemoveRow}
+                onVendorChange={onVendorChange}
+                onAddIngredientRow={onAddIngredientRow}
+                onNewRowPickerTypeChange={onNewRowPickerTypeChange}
+                onNewRowCrossTenantFilterChange={
+                  onNewRowCrossTenantFilterChange
+                }
+                onNewRowItemSelect={onNewRowItemSelect}
+                updateMode={updateMode}
+                updateEditMode={updateEditMode}
+                updateMetaByRowKey={updateMetaByRowKey}
+                pairedRemovedKeys={pairedRemovedKeys}
+                restoredRemovedKeys={restoredRemovedKeys}
+                onRestoreRemoved={onRestoreRemoved}
+                pendingTrashKeys={pendingTrashKeys}
+                updateRowChoices={updateRowChoices}
+                onVendorChoiceChange={onVendorChoiceChange}
+                onTotalChoiceChange={onTotalChoiceChange}
+                onFinalAmountChange={onFinalAmountChange}
+                ingredientApplyModes={ingredientApplyModes}
+                onIngredientApplyModeChange={onIngredientApplyModeChange}
+                priceMode={priceMode}
+                snapshotPriceByRowKey={snapshotPriceByRowKey}
+                priceLoading={priceLoading}
+                crossTenantItemIds={crossTenantIds}
+                onOpenPreppedSheet={onOpenPreppedSheet}
+              />
               <div className="mt-3 flex justify-end text-right text-sm font-semibold">
                 {priceLoading ? (
                   <Loader2 className="inline h-4 w-4 animate-spin" />
@@ -1351,7 +1341,8 @@ function IngredientPickerCell({
                 name={`ingredient-type-${row.row_key}`}
                 checked={pickerType === type}
                 onChange={() => {
-                  if (pickerType !== type) onPickerTypeChange(row.row_key, type);
+                  if (pickerType !== type)
+                    onPickerTypeChange(row.row_key, type);
                 }}
                 className="w-3 h-3 accent-blue-500"
               />
@@ -1364,8 +1355,8 @@ function IngredientPickerCell({
               </span>
             </label>
             {type === "cross-tenant" &&
-              pickerType === "cross-tenant" &&
-              ownerTenants.length > 0 ? (
+            pickerType === "cross-tenant" &&
+            ownerTenants.length > 0 ? (
               <select
                 value={ownerFilter}
                 onChange={(e) =>
@@ -1644,7 +1635,10 @@ function IngredientTable({
   onRemoveRow?: (rowKey: string) => void;
   onVendorChange?: (rowKey: string, specificChild: string | null) => void;
   onAddIngredientRow?: () => void;
-  onNewRowPickerTypeChange?: (rowKey: string, type: IngredientPickerType) => void;
+  onNewRowPickerTypeChange?: (
+    rowKey: string,
+    type: IngredientPickerType,
+  ) => void;
   onNewRowCrossTenantFilterChange?: (rowKey: string, filter: string) => void;
   onNewRowItemSelect?: (rowKey: string, itemId: string) => void;
   updateMode?: boolean;
@@ -1668,10 +1662,7 @@ function IngredientTable({
     mode: StandardSheetApplyMode,
   ) => void;
   priceMode?: StandardTechnicalSheetPriceMode;
-  snapshotPriceByRowKey?: Map<
-    string,
-    { pu: number | null; pt: number | null }
-  >;
+  snapshotPriceByRowKey?: Map<string, { pu: number | null; pt: number | null }>;
   priceLoading?: boolean;
   crossTenantItemIds?: ReadonlySet<string>;
   onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
@@ -1680,9 +1671,7 @@ function IngredientTable({
   const showUpdateTotal = updateMode && updateMetaByRowKey && updateRowChoices;
   const showFinalColumn = !!updateEditMode;
   const showApplyModeColumn =
-    !!updateEditMode &&
-    !!ingredientApplyModes &&
-    !!onIngredientApplyModeChange;
+    !!updateEditMode && !!ingredientApplyModes && !!onIngredientApplyModeChange;
   const updateCompareMinW = showFinalColumn ? "min-w-[260px]" : "min-w-[180px]";
   const showActionColumn =
     (!!editable && !!onRemoveRow) || (!!showUpdateTotal && !!onRestoreRemoved);
@@ -1695,223 +1684,218 @@ function IngredientTable({
   }, [pickerItems, crossTenantAvailableItems]);
 
   const unitsForRow = (itemId: string) =>
-    getAvailableUnitsForItem(
-      itemById.get(itemId),
-      baseItems,
-      vendorProducts,
-    );
+    getAvailableUnitsForItem(itemById.get(itemId), baseItems, vendorProducts);
 
   const rowKeyOf = (row: (typeof rows)[number]) =>
     row.row_key ?? rowKeyForIngredientRow(row, itemById);
 
   return (
     <div className="space-y-2">
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[720px] border-collapse text-xs">
-        <thead>
-          <tr className={technicalSheetTableHeaderClass(isDark)}>
-            <th className="border px-2 py-1 text-left">Nature</th>
-            <th
-              className={
-                showUpdateTotal
-                  ? `border px-0 py-0 text-center align-bottom ${updateCompareMinW}`
-                  : "border px-2 py-1 text-left min-w-[100px]"
-              }
-            >
-              {showUpdateTotal ? (
-                <UpdateTripleHeader
-                  title="Vendor Selection"
-                  isDark={isDark}
-                  showFinalColumn={showFinalColumn}
-                />
-              ) : (
-                "Vendor Selection"
-              )}
-            </th>
-            {showUpdateTotal ? (
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] border-collapse text-xs">
+          <thead>
+            <tr className={technicalSheetTableHeaderClass(isDark)}>
+              <th className="border px-2 py-1 text-left">Nature</th>
               <th
-                className={`border px-0 py-0 text-center align-bottom ${updateCompareMinW}`}
+                className={
+                  showUpdateTotal
+                    ? `border px-0 py-0 text-center align-bottom ${updateCompareMinW}`
+                    : "border px-2 py-1 text-left min-w-[100px]"
+                }
               >
-                <UpdateTripleHeader
-                  title="Net Weight"
-                  isDark={isDark}
-                  showFinalColumn={showFinalColumn}
-                />
+                {showUpdateTotal ? (
+                  <UpdateTripleHeader
+                    title="Vendor Selection"
+                    isDark={isDark}
+                    showFinalColumn={showFinalColumn}
+                  />
+                ) : (
+                  "Vendor Selection"
+                )}
               </th>
-            ) : (
-              <th className="border px-2 py-1 text-right">Net Weight</th>
-            )}
-            <th className="border px-2 py-1 text-right">PU (kg)</th>
-            <th className="border px-2 py-1 text-right">PT</th>
-            {showApplyModeColumn ? (
-              <th className="border px-2 py-1 text-center min-w-[88px]">
-                Apply
-              </th>
-            ) : null}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, rowIndex) => {
-            const draft = row as DraftRow;
-            const stableRowKey = draft.row_key;
-            const rowKey = stableRowKey || rowKeyOf(row);
-            const reactKey = `${rowKey}@${rowIndex}`;
-            const meta = updateMetaByRowKey?.get(rowKey);
-            const diffType = meta?.diffType ?? "unchanged";
-            const isPendingNew = editable && !row.item_id;
-            const isManualNewRow =
-              (draft.isNew || isPendingNew) && meta == null;
-            const isPendingTrash = pendingTrashKeys?.has(rowKey) ?? false;
-            const storedChoices = updateRowChoices?.get(rowKey);
-            const effectiveVendorChoice = effectivePuChoice(
-              diffType,
-              storedChoices?.vendor,
-            );
-            const effectiveTotalChoice = effectivePuChoice(
-              diffType,
-              storedChoices?.total,
-            );
-            const vendorRadioResolve =
-              updateEditMode && meta && showVendorVersionSplit(diffType)
-                ? resolveEditVendorRadios(
-                    meta,
-                    diffType,
-                    row.specific_child,
-                    storedChoices?.vendor,
-                  )
-                : null;
-            const totalRadioResolve =
-              updateEditMode && meta && showTotalVersionSplit(diffType, meta)
-                ? resolveEditTotalRadios(
-                    meta,
-                    diffType,
-                    row.total,
-                    storedChoices?.total,
-                  )
-                : null;
-            const showVendorRadios =
-              !!onVendorChoiceChange && !!vendorRadioResolve?.showRadios;
-            const showTotalRadios =
-              !!onTotalChoiceChange && !!totalRadioResolve?.showRadios;
-            const vendorChoiceForRadios = vendorRadioResolve?.showRadios
-              ? vendorRadioResolve.displayChoice
-              : effectiveVendorChoice;
-            const totalChoiceForRadios = totalRadioResolve?.showRadios
-              ? totalRadioResolve.displayChoice
-              : effectiveTotalChoice;
-            const useUpdateTriple =
-              !!showUpdateTotal &&
-              (meta != null ||
-                (updateEditMode && !!editable && (draft.isNew || isPendingNew)));
-            const isRemovedPendingRestore = isRemovedRowPendingRestore(
-              diffType,
-              rowKey,
-              restoredRemovedKeys,
-            );
-            const isApplyModeLocked = isIngredientApplyModeLocked(
-              diffType,
-              rowKey,
-              isPendingTrash,
-              restoredRemovedKeys,
-            );
-            const isRowLockedForEdit = isRemovedPendingRestore || isPendingTrash;
-            const canRestoreRemoved =
-              !!onRestoreRemoved &&
-              meta != null &&
-              isRemovedPendingRestore &&
-              (pairedRemovedKeys == null || !pairedRemovedKeys.has(rowKey));
-            const rowUnits = row.item_id
-              ? unitsForRow(row.item_id)
-              : ["g"];
-            const item = row.item_id ? itemById.get(row.item_id) : undefined;
-            const applyAvailability = resolveIngredientApplyAvailabilityForDisplay(
-              meta,
-              row,
-              item,
-              { isManualNewRow, isPendingNew },
-            );
-            const isApplyInactive =
-              !!updateEditMode &&
-              !isApplyModeLocked &&
-              applyAvailability.inactive;
-            const showApplyOverride = isApplyModeLocked
-              ? true
-              : applyAvailability.showOverride;
-            const showApplyOverwrite = isApplyModeLocked
-              ? false
-              : applyAvailability.showOverwrite;
-            const applyModeValue = isApplyModeLocked
-              ? "override"
-              : resolveIngredientApplyMode(
-                  rowKey,
-                  applyAvailability,
-                  ingredientApplyModes,
-                );
-            const qty = rowQuantity(row);
-            const unit = row.unit?.trim() || "g";
-            const amountChangeHandler =
-              updateEditMode && onFinalAmountChange
-                ? onFinalAmountChange
-                : onAmountChange;
-            const showVendorFinalEdit =
-              updateEditMode &&
-              editable &&
-              !isRowLockedForEdit &&
-              onVendorChange &&
-              !!item &&
-              item.item_kind === "raw" &&
-              !item.is_menu_item;
-            const showVendorEdit =
-              editable &&
-              onVendorChange &&
-              !!item &&
-              item.item_kind === "raw" &&
-              !item.is_menu_item &&
-              !updateEditMode;
-            const vendorLabelFromMeta =
-              meta != null
-                ? effectiveVendorChoice === "live"
-                  ? meta.liveVendorLabel
-                  : meta.sheetVendorLabel
-                : null;
-            const vendorDisplay = vendorSelectionDisplay(
-              item,
-              row.specific_child,
-              vendorLabelFromMeta ?? row.vendor_item,
-            );
+              {showUpdateTotal ? (
+                <th
+                  className={`border px-0 py-0 text-center align-bottom ${updateCompareMinW}`}
+                >
+                  <UpdateTripleHeader
+                    title="Net Weight"
+                    isDark={isDark}
+                    showFinalColumn={showFinalColumn}
+                  />
+                </th>
+              ) : (
+                <th className="border px-2 py-1 text-right">Net Weight</th>
+              )}
+              <th className="border px-2 py-1 text-right">PU (kg)</th>
+              <th className="border px-2 py-1 text-right">PT</th>
+              {showApplyModeColumn ? (
+                <th className="border px-2 py-1 text-center min-w-[88px]">
+                  Apply
+                </th>
+              ) : null}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => {
+              const draft = row as DraftRow;
+              const stableRowKey = draft.row_key;
+              const rowKey = stableRowKey || rowKeyOf(row);
+              const reactKey = `${rowKey}@${rowIndex}`;
+              const meta = updateMetaByRowKey?.get(rowKey);
+              const diffType = meta?.diffType ?? "unchanged";
+              const isPendingNew = editable && !row.item_id;
+              const isManualNewRow =
+                (draft.isNew || isPendingNew) && meta == null;
+              const isPendingTrash = pendingTrashKeys?.has(rowKey) ?? false;
+              const storedChoices = updateRowChoices?.get(rowKey);
+              const effectiveVendorChoice = effectivePuChoice(
+                diffType,
+                storedChoices?.vendor,
+              );
+              const effectiveTotalChoice = effectivePuChoice(
+                diffType,
+                storedChoices?.total,
+              );
+              const vendorRadioResolve =
+                updateEditMode && meta && showVendorVersionSplit(diffType)
+                  ? resolveEditVendorRadios(
+                      meta,
+                      diffType,
+                      row.specific_child,
+                      storedChoices?.vendor,
+                    )
+                  : null;
+              const totalRadioResolve =
+                updateEditMode && meta && showTotalVersionSplit(diffType, meta)
+                  ? resolveEditTotalRadios(
+                      meta,
+                      diffType,
+                      row.total,
+                      storedChoices?.total,
+                    )
+                  : null;
+              const showVendorRadios =
+                !!onVendorChoiceChange && !!vendorRadioResolve?.showRadios;
+              const showTotalRadios =
+                !!onTotalChoiceChange && !!totalRadioResolve?.showRadios;
+              const vendorChoiceForRadios = vendorRadioResolve?.showRadios
+                ? vendorRadioResolve.displayChoice
+                : effectiveVendorChoice;
+              const totalChoiceForRadios = totalRadioResolve?.showRadios
+                ? totalRadioResolve.displayChoice
+                : effectiveTotalChoice;
+              const useUpdateTriple =
+                !!showUpdateTotal &&
+                (meta != null ||
+                  (updateEditMode &&
+                    !!editable &&
+                    (draft.isNew || isPendingNew)));
+              const isRemovedPendingRestore = isRemovedRowPendingRestore(
+                diffType,
+                rowKey,
+                restoredRemovedKeys,
+              );
+              const isApplyModeLocked = isIngredientApplyModeLocked(
+                diffType,
+                rowKey,
+                isPendingTrash,
+                restoredRemovedKeys,
+              );
+              const isRowLockedForEdit =
+                isRemovedPendingRestore || isPendingTrash;
+              const canRestoreRemoved =
+                !!onRestoreRemoved &&
+                meta != null &&
+                isRemovedPendingRestore &&
+                (pairedRemovedKeys == null || !pairedRemovedKeys.has(rowKey));
+              const rowUnits = row.item_id ? unitsForRow(row.item_id) : ["g"];
+              const item = row.item_id ? itemById.get(row.item_id) : undefined;
+              const applyAvailability =
+                resolveIngredientApplyAvailabilityForDisplay(meta, row, item, {
+                  isManualNewRow,
+                  isPendingNew,
+                });
+              const isApplyInactive =
+                !!updateEditMode &&
+                !isApplyModeLocked &&
+                applyAvailability.inactive;
+              const showApplyOverride = isApplyModeLocked
+                ? true
+                : applyAvailability.showOverride;
+              const showApplyOverwrite = isApplyModeLocked
+                ? false
+                : applyAvailability.showOverwrite;
+              const applyModeValue = isApplyModeLocked
+                ? "override"
+                : resolveIngredientApplyMode(
+                    rowKey,
+                    applyAvailability,
+                    ingredientApplyModes,
+                  );
+              const qty = rowQuantity(row);
+              const unit = row.unit?.trim() || "g";
+              const amountChangeHandler =
+                updateEditMode && onFinalAmountChange
+                  ? onFinalAmountChange
+                  : onAmountChange;
+              const showVendorFinalEdit =
+                updateEditMode &&
+                editable &&
+                !isRowLockedForEdit &&
+                onVendorChange &&
+                !!item &&
+                item.item_kind === "raw" &&
+                !item.is_menu_item;
+              const showVendorEdit =
+                editable &&
+                onVendorChange &&
+                !!item &&
+                item.item_kind === "raw" &&
+                !item.is_menu_item &&
+                !updateEditMode;
+              const vendorLabelFromMeta =
+                meta != null
+                  ? effectiveVendorChoice === "live"
+                    ? meta.liveVendorLabel
+                    : meta.sheetVendorLabel
+                  : null;
+              const vendorDisplay = vendorSelectionDisplay(
+                item,
+                row.specific_child,
+                vendorLabelFromMeta ?? row.vendor_item,
+              );
 
-            const finalDisplay =
-              meta != null
-                ? formatUpdateAmount(
-                    effectiveTotalChoice === "live"
-                      ? meta.liveQuantity
-                      : meta.sheetQuantity,
-                    effectiveTotalChoice === "live"
-                      ? meta.liveUnit
-                      : meta.sheetUnit,
-                    finalGramsForChoice(meta, effectiveTotalChoice),
-                  )
-                : formatRowAmount(row);
+              const finalDisplay =
+                meta != null
+                  ? formatUpdateAmount(
+                      effectiveTotalChoice === "live"
+                        ? meta.liveQuantity
+                        : meta.sheetQuantity,
+                      effectiveTotalChoice === "live"
+                        ? meta.liveUnit
+                        : meta.sheetUnit,
+                      finalGramsForChoice(meta, effectiveTotalChoice),
+                    )
+                  : formatRowAmount(row);
 
-            const finalAmountEditor =
-              updateEditMode && amountChangeHandler && !isRowLockedForEdit ? (
-                <AmountEditor
-                  quantity={qty}
-                  unit={unit}
-                  units={ensureUnitInList(
-                    rowUnits.length > 0 ? rowUnits : [unit || "g"],
-                    unit,
-                  )}
-                  isDark={isDark}
-                  compact={!!useUpdateTriple}
-                  onChange={(q, u) => amountChangeHandler(rowKey, q, u)}
-                />
-              ) : null;
+              const finalAmountEditor =
+                updateEditMode && amountChangeHandler && !isRowLockedForEdit ? (
+                  <AmountEditor
+                    quantity={qty}
+                    unit={unit}
+                    units={ensureUnitInList(
+                      rowUnits.length > 0 ? rowUnits : [unit || "g"],
+                      unit,
+                    )}
+                    isDark={isDark}
+                    compact={!!useUpdateTriple}
+                    onChange={(q, u) => amountChangeHandler(rowKey, q, u)}
+                  />
+                ) : null;
 
-            const finalCellContent = finalAmountEditor ?? finalDisplay;
+              const finalCellContent = finalAmountEditor ?? finalDisplay;
 
-            const rowBgClass =
-              showUpdateTotal
+              const rowBgClass = showUpdateTotal
                 ? updateRowClassForDisplay(
                     diffType,
                     isDark,
@@ -1920,292 +1904,293 @@ function IngredientTable({
                   )
                 : technicalSheetTableBodyRowClass(isDark);
 
-            return (
-              <tr
-                key={reactKey}
-                className={isDark ? "text-slate-200" : "text-gray-900"}
-              >
-                <td className={`border px-2 py-1 align-top ${rowBgClass}`}>
-                  {isPendingNew &&
-                  !isPendingTrash &&
-                  onNewRowItemSelect &&
-                  onNewRowPickerTypeChange &&
-                  onNewRowCrossTenantFilterChange ? (
-                    <IngredientPickerCell
-                      row={draft}
-                      isDark={isDark}
-                      pickerItems={pickerItems}
-                      baseItems={baseItems}
-                      vendorProducts={vendorProducts}
-                      crossTenantAvailableItems={crossTenantAvailableItems}
-                      onPickerTypeChange={onNewRowPickerTypeChange}
-                      onCrossTenantFilterChange={onNewRowCrossTenantFilterChange}
-                      onItemSelect={onNewRowItemSelect}
-                    />
-                  ) : (
-                    <NatureCell
-                      row={draft}
-                      itemById={itemById}
-                      crossTenantItemIds={crossTenantItemIds}
-                      onOpenPreppedSheet={onOpenPreppedSheet}
-                      isDark={isDark}
-                    />
-                  )}
-                </td>
-                <td
-                  className={
-                    useUpdateTriple
-                      ? technicalSheetTripleCellTdClass(rowBgClass)
-                      : `border px-2 py-1 align-top ${rowBgClass}`
-                  }
+              return (
+                <tr
+                  key={reactKey}
+                  className={isDark ? "text-slate-200" : "text-gray-900"}
                 >
-                  {showVendorEdit ? (
-                    <VendorEditor
-                      row={draft}
-                      item={item}
-                      vendorProducts={vendorProducts}
-                      vendors={vendors}
-                      pickerItems={pickerItems}
-                      baseItems={baseItems}
-                      isDark={isDark}
-                      onChange={(sc) => onVendorChange(stableRowKey || rowKey, sc)}
-                    />
-                  ) : useUpdateTriple ? (
-                    <div className="h-full">
-                      <VersionTripleCell
-                        rowKey={rowKey}
-                        radioGroup="vendor"
+                  <td className={`border px-2 py-1 align-top ${rowBgClass}`}>
+                    {isPendingNew &&
+                    !isPendingTrash &&
+                    onNewRowItemSelect &&
+                    onNewRowPickerTypeChange &&
+                    onNewRowCrossTenantFilterChange ? (
+                      <IngredientPickerCell
+                        row={draft}
                         isDark={isDark}
-                        showFinalColumn={showFinalColumn}
-                        showRadios={showVendorRadios}
-                        effectiveChoice={vendorChoiceForRadios}
-                        onChoiceChange={onVendorChoiceChange}
-                        sheetContent={
-                          <span className="text-xs">
-                            {formatUpdateVendorLabel(
-                              meta?.sheetVendorLabel,
-                              meta?.diffType,
-                              "sheet",
-                              vendorDisplay,
-                              isManualNewRow,
-                            )}
-                          </span>
+                        pickerItems={pickerItems}
+                        baseItems={baseItems}
+                        vendorProducts={vendorProducts}
+                        crossTenantAvailableItems={crossTenantAvailableItems}
+                        onPickerTypeChange={onNewRowPickerTypeChange}
+                        onCrossTenantFilterChange={
+                          onNewRowCrossTenantFilterChange
                         }
-                        liveContent={
-                          <span className="text-xs">
-                            {formatUpdateVendorLabel(
-                              meta?.liveVendorLabel,
-                              meta?.diffType,
-                              "live",
-                              vendorDisplay,
-                              isManualNewRow,
-                            )}
-                          </span>
-                        }
-                        finalContent={
-                          isPendingTrash || isRemovedPendingRestore ? (
-                            <span className="text-xs">—</span>
-                          ) : showVendorFinalEdit ? (
-                            <VendorEditor
-                              row={draft}
-                              item={item}
-                              vendorProducts={vendorProducts}
-                              vendors={vendors}
-                              pickerItems={pickerItems}
-                              baseItems={baseItems}
-                              isDark={isDark}
-                              compact
-                              onChange={(sc) =>
-                                onVendorChange!(stableRowKey || rowKey, sc)
-                              }
-                            />
-                          ) : (
-                            <span className="text-xs">{vendorDisplay}</span>
-                          )
-                        }
-                      />
-                    </div>
-                  ) : (
-                    <span className="text-xs">{vendorDisplay}</span>
-                  )}
-                </td>
-                {useUpdateTriple ? (
-                  <td className={technicalSheetTripleCellTdClass(rowBgClass)}>
-                    <div className="h-full">
-                      <VersionTripleCell
-                        rowKey={rowKey}
-                        radioGroup="total"
-                        isDark={isDark}
-                        showFinalColumn={showFinalColumn}
-                        showRadios={showTotalRadios}
-                        effectiveChoice={totalChoiceForRadios}
-                        onChoiceChange={onTotalChoiceChange}
-                        sheetContent={
-                          isManualNewRow ? (
-                            <span className="text-xs">—</span>
-                          ) : meta ? (
-                            formatUpdateAmount(
-                              meta.sheetQuantity,
-                              meta.sheetUnit,
-                              meta.sheetGrams,
-                            )
-                          ) : (
-                            formatRowAmount(row)
-                          )
-                        }
-                        liveContent={
-                          isManualNewRow ? (
-                            <span className="text-xs">—</span>
-                          ) : meta ? (
-                            formatUpdateAmount(
-                              meta.liveQuantity,
-                              meta.liveUnit,
-                              meta.liveGrams,
-                            )
-                          ) : (
-                            formatRowAmount(row)
-                          )
-                        }
-                        finalContent={
-                          isPendingTrash || isRemovedPendingRestore ? (
-                            <span className="text-xs">—</span>
-                          ) : (
-                            finalCellContent
-                          )
-                        }
-                      />
-                    </div>
-                  </td>
-                ) : (
-                  <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
-                    {editable &&
-                    amountChangeHandler &&
-                    !isRowLockedForEdit ? (
-                      <AmountEditor
-                        quantity={qty}
-                        unit={unit}
-                        units={ensureUnitInList(
-                    rowUnits.length > 0 ? rowUnits : [unit || "g"],
-                    unit,
-                  )}
-                        isDark={isDark}
-                        onChange={(q, u) =>
-                          amountChangeHandler(rowKey, q, u)
-                        }
+                        onItemSelect={onNewRowItemSelect}
                       />
                     ) : (
-                      formatRowAmount(row)
+                      <NatureCell
+                        row={draft}
+                        itemById={itemById}
+                        crossTenantItemIds={crossTenantItemIds}
+                        onOpenPreppedSheet={onOpenPreppedSheet}
+                        isDark={isDark}
+                      />
                     )}
                   </td>
-                )}
-                <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
-                  {priceLoading ||
-                  ("puLoading" in row && (row as DraftRow).puLoading) ? (
-                    <Loader2 className="inline h-3 w-3 animate-spin" />
-                  ) : showBothPrices ? (
-                    formatDualPuPerKg(
-                      snapshotPriceByRowKey.get(rowKey)?.pu,
-                      row.pu,
-                    )
-                  ) : (
-                    formatPuPerKg(row.pu)
-                  )}
-                </td>
-                <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
-                  {priceLoading ? (
-                    <Loader2 className="inline h-3 w-3 animate-spin" />
-                  ) : showBothPrices ? (
-                    formatDualPtDollars(
-                      snapshotPriceByRowKey.get(rowKey)?.pt,
-                      row.pt,
-                    )
-                  ) : (
-                    formatPtDollars(row.pt)
-                  )}
-                </td>
-                {showApplyModeColumn ? (
                   <td
-                    className={`border px-2 py-1 text-center align-middle ${rowBgClass}`}
+                    className={
+                      useUpdateTriple
+                        ? technicalSheetTripleCellTdClass(rowBgClass)
+                        : `border px-2 py-1 align-top ${rowBgClass}`
+                    }
                   >
-                    <ApplyModeRadios
-                      rowKey={rowKey}
-                      value={applyModeValue}
-                      isDark={isDark}
-                      inactive={isApplyInactive}
-                      showOverride={showApplyOverride}
-                      showOverwrite={showApplyOverwrite}
-                      onChange={(mode) =>
-                        onIngredientApplyModeChange!(rowKey, mode)
-                      }
-                    />
+                    {showVendorEdit ? (
+                      <VendorEditor
+                        row={draft}
+                        item={item}
+                        vendorProducts={vendorProducts}
+                        vendors={vendors}
+                        pickerItems={pickerItems}
+                        baseItems={baseItems}
+                        isDark={isDark}
+                        onChange={(sc) =>
+                          onVendorChange(stableRowKey || rowKey, sc)
+                        }
+                      />
+                    ) : useUpdateTriple ? (
+                      <div className="h-full">
+                        <VersionTripleCell
+                          rowKey={rowKey}
+                          radioGroup="vendor"
+                          isDark={isDark}
+                          showFinalColumn={showFinalColumn}
+                          showRadios={showVendorRadios}
+                          effectiveChoice={vendorChoiceForRadios}
+                          onChoiceChange={onVendorChoiceChange}
+                          sheetContent={
+                            <span className="text-xs">
+                              {formatUpdateVendorLabel(
+                                meta?.sheetVendorLabel,
+                                meta?.diffType,
+                                "sheet",
+                                vendorDisplay,
+                                isManualNewRow,
+                              )}
+                            </span>
+                          }
+                          liveContent={
+                            <span className="text-xs">
+                              {formatUpdateVendorLabel(
+                                meta?.liveVendorLabel,
+                                meta?.diffType,
+                                "live",
+                                vendorDisplay,
+                                isManualNewRow,
+                              )}
+                            </span>
+                          }
+                          finalContent={
+                            isPendingTrash || isRemovedPendingRestore ? (
+                              <span className="text-xs">—</span>
+                            ) : showVendorFinalEdit ? (
+                              <VendorEditor
+                                row={draft}
+                                item={item}
+                                vendorProducts={vendorProducts}
+                                vendors={vendors}
+                                pickerItems={pickerItems}
+                                baseItems={baseItems}
+                                isDark={isDark}
+                                compact
+                                onChange={(sc) =>
+                                  onVendorChange!(stableRowKey || rowKey, sc)
+                                }
+                              />
+                            ) : (
+                              <span className="text-xs">{vendorDisplay}</span>
+                            )
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-xs">{vendorDisplay}</span>
+                    )}
                   </td>
-                ) : null}
-                {showActionColumn ? (
-                  <td className={technicalSheetActionColumnCellClass(isDark)}>
-                    {canRestoreRemoved ? (
-                      <button
-                        type="button"
-                        onClick={() => onRestoreRemoved!(rowKey)}
-                        className={
-                          isDark
-                            ? "text-blue-400 hover:text-blue-300"
-                            : "text-blue-600 hover:text-blue-700"
-                        }
-                        title="Restore ingredient"
-                        aria-label="Restore ingredient"
-                      >
-                        <CornerUpLeft className="mx-auto h-4 w-4" />
-                      </button>
-                    ) : editable && onRemoveRow ? (
-                      <button
-                        type="button"
-                        onClick={() => onRemoveRow(rowKey)}
-                        className={
-                          isPendingTrash
-                            ? "rounded p-1 bg-red-600 text-white hover:bg-red-700"
-                            : "text-red-500 hover:text-red-600"
-                        }
-                        title={
-                          isPendingTrash
-                            ? "Marked for removal — click to undo"
-                            : "Mark for removal"
-                        }
-                        aria-label={
-                          isPendingTrash
-                            ? "Undo mark for removal"
-                            : "Mark for removal"
-                        }
-                        aria-pressed={isPendingTrash}
-                      >
-                        <Trash2 className="mx-auto h-4 w-4" />
-                      </button>
-                    ) : null}
+                  {useUpdateTriple ? (
+                    <td className={technicalSheetTripleCellTdClass(rowBgClass)}>
+                      <div className="h-full">
+                        <VersionTripleCell
+                          rowKey={rowKey}
+                          radioGroup="total"
+                          isDark={isDark}
+                          showFinalColumn={showFinalColumn}
+                          showRadios={showTotalRadios}
+                          effectiveChoice={totalChoiceForRadios}
+                          onChoiceChange={onTotalChoiceChange}
+                          sheetContent={
+                            isManualNewRow ? (
+                              <span className="text-xs">—</span>
+                            ) : meta ? (
+                              formatUpdateAmount(
+                                meta.sheetQuantity,
+                                meta.sheetUnit,
+                                meta.sheetGrams,
+                              )
+                            ) : (
+                              formatRowAmount(row)
+                            )
+                          }
+                          liveContent={
+                            isManualNewRow ? (
+                              <span className="text-xs">—</span>
+                            ) : meta ? (
+                              formatUpdateAmount(
+                                meta.liveQuantity,
+                                meta.liveUnit,
+                                meta.liveGrams,
+                              )
+                            ) : (
+                              formatRowAmount(row)
+                            )
+                          }
+                          finalContent={
+                            isPendingTrash || isRemovedPendingRestore ? (
+                              <span className="text-xs">—</span>
+                            ) : (
+                              finalCellContent
+                            )
+                          }
+                        />
+                      </div>
+                    </td>
+                  ) : (
+                    <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
+                      {editable &&
+                      amountChangeHandler &&
+                      !isRowLockedForEdit ? (
+                        <AmountEditor
+                          quantity={qty}
+                          unit={unit}
+                          units={ensureUnitInList(
+                            rowUnits.length > 0 ? rowUnits : [unit || "g"],
+                            unit,
+                          )}
+                          isDark={isDark}
+                          onChange={(q, u) => amountChangeHandler(rowKey, q, u)}
+                        />
+                      ) : (
+                        formatRowAmount(row)
+                      )}
+                    </td>
+                  )}
+                  <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
+                    {priceLoading ||
+                    ("puLoading" in row && (row as DraftRow).puLoading) ? (
+                      <Loader2 className="inline h-3 w-3 animate-spin" />
+                    ) : showBothPrices ? (
+                      formatDualPuPerKg(
+                        snapshotPriceByRowKey.get(rowKey)?.pu,
+                        row.pu,
+                      )
+                    ) : (
+                      formatPuPerKg(row.pu)
+                    )}
                   </td>
-                ) : null}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-    {editable && onAddIngredientRow ? (
-      <button
-        type="button"
-        onClick={onAddIngredientRow}
-        className={`flex items-center gap-2 rounded-md px-2 py-1 transition-colors ${
-          isDark
-            ? "text-blue-400 hover:bg-blue-900/30 hover:text-blue-300"
-            : "text-blue-600 hover:bg-blue-50 hover:text-blue-700"
-        }`}
-      >
-        <Plus className="h-4 w-4" />
-        <span className="text-sm">Add ingredient</span>
-      </button>
-    ) : null}
+                  <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
+                    {priceLoading ? (
+                      <Loader2 className="inline h-3 w-3 animate-spin" />
+                    ) : showBothPrices ? (
+                      formatDualPtDollars(
+                        snapshotPriceByRowKey.get(rowKey)?.pt,
+                        row.pt,
+                      )
+                    ) : (
+                      formatPtDollars(row.pt)
+                    )}
+                  </td>
+                  {showApplyModeColumn ? (
+                    <td
+                      className={`border px-2 py-1 text-center align-middle ${rowBgClass}`}
+                    >
+                      <ApplyModeRadios
+                        rowKey={rowKey}
+                        value={applyModeValue}
+                        isDark={isDark}
+                        inactive={isApplyInactive}
+                        showOverride={showApplyOverride}
+                        showOverwrite={showApplyOverwrite}
+                        onChange={(mode) =>
+                          onIngredientApplyModeChange!(rowKey, mode)
+                        }
+                      />
+                    </td>
+                  ) : null}
+                  {showActionColumn ? (
+                    <td className={technicalSheetActionColumnCellClass(isDark)}>
+                      {canRestoreRemoved ? (
+                        <button
+                          type="button"
+                          onClick={() => onRestoreRemoved!(rowKey)}
+                          className={
+                            isDark
+                              ? "text-blue-400 hover:text-blue-300"
+                              : "text-blue-600 hover:text-blue-700"
+                          }
+                          title="Restore ingredient"
+                          aria-label="Restore ingredient"
+                        >
+                          <CornerUpLeft className="mx-auto h-4 w-4" />
+                        </button>
+                      ) : editable && onRemoveRow ? (
+                        <button
+                          type="button"
+                          onClick={() => onRemoveRow(rowKey)}
+                          className={
+                            isPendingTrash
+                              ? "rounded p-1 bg-red-600 text-white hover:bg-red-700"
+                              : "text-red-500 hover:text-red-600"
+                          }
+                          title={
+                            isPendingTrash
+                              ? "Marked for removal — click to undo"
+                              : "Mark for removal"
+                          }
+                          aria-label={
+                            isPendingTrash
+                              ? "Undo mark for removal"
+                              : "Mark for removal"
+                          }
+                          aria-pressed={isPendingTrash}
+                        >
+                          <Trash2 className="mx-auto h-4 w-4" />
+                        </button>
+                      ) : null}
+                    </td>
+                  ) : null}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {editable && onAddIngredientRow ? (
+        <button
+          type="button"
+          onClick={onAddIngredientRow}
+          className={`flex items-center gap-2 rounded-md px-2 py-1 transition-colors ${
+            isDark
+              ? "text-blue-400 hover:bg-blue-900/30 hover:text-blue-300"
+              : "text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+          }`}
+        >
+          <Plus className="h-4 w-4" />
+          <span className="text-sm">Add ingredient</span>
+        </button>
+      ) : null}
     </div>
   );
 }
-
 
 export function StandardTechnicalSheetView({
   isDark,
@@ -2255,8 +2240,9 @@ export function StandardTechnicalSheetView({
   const [laborApplyModes, setLaborApplyModes] = useState<
     Map<string, StandardSheetApplyMode>
   >(() => new Map());
-  const [pendingTrashIngredientKeys, setPendingTrashIngredientKeys] =
-    useState<Set<string>>(() => new Set());
+  const [pendingTrashIngredientKeys, setPendingTrashIngredientKeys] = useState<
+    Set<string>
+  >(() => new Set());
   const [pendingTrashLaborKeys, setPendingTrashLaborKeys] = useState<
     Set<string>
   >(() => new Set());
@@ -2441,7 +2427,14 @@ export function StandardTechnicalSheetView({
     return () => {
       cancelled = true;
     };
-  }, [priceMode, viewMode, updateLoading, selectedVersionId, detail, loadDetail]);
+  }, [
+    priceMode,
+    viewMode,
+    updateLoading,
+    selectedVersionId,
+    detail,
+    loadDetail,
+  ]);
 
   useEffect(() => {
     setViewMode("sheet");
@@ -2541,10 +2534,12 @@ export function StandardTechnicalSheetView({
   const isEditUpdate = viewMode === "editUpdate";
   const showRestoreRemoved = isEditUpdate;
 
-  const displayDescription =
-    isEditUpdate ? editDescription : (detail?.description ?? "");
-  const displayProcedure =
-    isEditUpdate ? editProcedure : (detail?.procedure ?? "");
+  const displayDescription = isEditUpdate
+    ? editDescription
+    : (detail?.description ?? "");
+  const displayProcedure = isEditUpdate
+    ? editProcedure
+    : (detail?.procedure ?? "");
 
   const displaySheet = useMemo((): SheetData | null => {
     if (!detail) return null;
@@ -2554,26 +2549,29 @@ export function StandardTechnicalSheetView({
       total_labor_cost: detail.sheet.total_labor_cost ?? null,
     };
     if (isEditUpdate && editRows) {
-      const ingredientRowsForTotal =
-        updateMetaByRowKey
-          ? editRows.filter((r) => {
-              const key = r.row_key;
-              if (!key) return true;
-              const meta = updateMetaByRowKey.get(key);
-              return !(
+      const ingredientRowsForTotal = updateMetaByRowKey
+        ? editRows.filter((r) => {
+            const key = r.row_key;
+            if (!key) return true;
+            const meta = updateMetaByRowKey.get(key);
+            return (
+              !(
                 meta?.diffType === "removed" && !restoredRemovedKeys.has(key)
-              ) && !pendingTrashIngredientKeys.has(key);
-            })
-          : editRows;
+              ) && !pendingTrashIngredientKeys.has(key)
+            );
+          })
+        : editRows;
       const { total } = recomputeTotals(ingredientRowsForTotal);
       const laborRowsForTotal =
         editLaborRows != null && laborUpdateMetaByRowKey
           ? editLaborRows.filter((r) => {
               const meta = laborUpdateMetaByRowKey.get(r.row_key);
-              return !(
-                meta?.diffType === "removed" &&
-                !restoredRemovedLaborKeys.has(r.row_key)
-              ) && !pendingTrashLaborKeys.has(r.row_key);
+              return (
+                !(
+                  meta?.diffType === "removed" &&
+                  !restoredRemovedLaborKeys.has(r.row_key)
+                ) && !pendingTrashLaborKeys.has(r.row_key)
+              );
             })
           : editLaborRows;
       const laborResult =
@@ -2750,9 +2748,7 @@ export function StandardTechnicalSheetView({
         if (
           updated.item_id &&
           updated.total > 0 &&
-          (costCache.get(
-            puCacheKey(updated.item_id, updated.specific_child),
-          ) ??
+          (costCache.get(puCacheKey(updated.item_id, updated.specific_child)) ??
             updated.pu) == null
         ) {
           fetchItemId = updated.item_id;
@@ -2817,10 +2813,7 @@ export function StandardTechnicalSheetView({
     [itemById, catalogItems, vendorProducts, vendors, baseItems],
   );
 
-  const handleVendorChange = (
-    rowKey: string,
-    specificChild: string | null,
-  ) => {
+  const handleVendorChange = (rowKey: string, specificChild: string | null) => {
     const norm =
       !specificChild || specificChild === "lowest" ? "lowest" : specificChild;
     let preppedFetch: { itemId: string; cacheKey: string } | null = null;
@@ -2885,23 +2878,25 @@ export function StandardTechnicalSheetView({
 
     if (!preppedFetch) return;
     const { itemId, cacheKey } = preppedFetch;
-    void fetchPuForItem(itemId, norm, { skipRawCache: true }).then((pu) => {
-      setCostCache((c) => new Map(c).set(cacheKey, pu));
-      updateEditRows((prev) =>
-        prev.map((row) => {
-          if (row.row_key !== rowKey) return row;
-          const next: DraftRow = { ...row, puLoading: false };
-          applyPuToRow(next, pu);
-          return next;
-        }),
-      );
-    }).catch(() => {
-      updateEditRows((prev) =>
-        prev.map((row) =>
-          row.row_key === rowKey ? { ...row, puLoading: false } : row,
-        ),
-      );
-    });
+    void fetchPuForItem(itemId, norm, { skipRawCache: true })
+      .then((pu) => {
+        setCostCache((c) => new Map(c).set(cacheKey, pu));
+        updateEditRows((prev) =>
+          prev.map((row) => {
+            if (row.row_key !== rowKey) return row;
+            const next: DraftRow = { ...row, puLoading: false };
+            applyPuToRow(next, pu);
+            return next;
+          }),
+        );
+      })
+      .catch(() => {
+        updateEditRows((prev) =>
+          prev.map((row) =>
+            row.row_key === rowKey ? { ...row, puLoading: false } : row,
+          ),
+        );
+      });
   };
 
   const handleFinalAmountChange = handleAmountChange;
@@ -2925,7 +2920,9 @@ export function StandardTechnicalSheetView({
     });
   };
 
-  const updateEditLaborRows = (updater: (prev: LaborDraftRow[]) => LaborDraftRow[]) => {
+  const updateEditLaborRows = (
+    updater: (prev: LaborDraftRow[]) => LaborDraftRow[],
+  ) => {
     setEditLaborRows((prev) => {
       if (!prev) return prev;
       const next = updater(prev);
@@ -3300,10 +3297,7 @@ export function StandardTechnicalSheetView({
       }> = [];
       if (updateMetaByRowKey) {
         for (const [rowKey, meta] of updateMetaByRowKey) {
-          if (
-            meta.diffType === "removed" &&
-            !restoredRemovedKeys.has(rowKey)
-          ) {
+          if (meta.diffType === "removed" && !restoredRemovedKeys.has(rowKey)) {
             excluded_ingredients.push({
               item_id: meta.child_item_id,
               apply_mode: "override",
@@ -3318,7 +3312,8 @@ export function StandardTechnicalSheetView({
       for (const rowKey of pendingTrashIngredientKeys) {
         const row = editRows.find((r) => r.row_key === rowKey);
         if (!row?.item_id || !liveIngredientChildIds.has(row.item_id)) continue;
-        if (excluded_ingredients.some((e) => e.item_id === row.item_id)) continue;
+        if (excluded_ingredients.some((e) => e.item_id === row.item_id))
+          continue;
         excluded_ingredients.push({
           item_id: row.item_id,
           apply_mode: ingredientApplyModes.get(rowKey) ?? "overwrite",
@@ -3384,31 +3379,29 @@ export function StandardTechnicalSheetView({
               ),
             };
           }),
-          labor_rows: (editLaborRows ?? [])
-            .filter(includeLaborRow)
-            .map((r) => {
-              const meta = laborUpdateMetaByRowKey?.get(r.row_key);
-              const applyAvailability = resolveLaborApplyAvailabilityForSave(
-                meta,
-                r,
-                saveMode,
-                { isNew: r.isNew },
-              );
-              return {
-                ...(r.isNew ||
-                r.row_key.startsWith("new-") ||
-                r.row_key.startsWith("labor-swap:")
-                  ? {}
-                  : { row_key: r.row_key }),
-                labor_role: r.labor_role.trim(),
-                minutes: r.minutes,
-                apply_mode: resolveLaborApplyMode(
-                  r.row_key,
-                  applyAvailability,
-                  laborApplyModes,
-                ),
-              };
-            }),
+          labor_rows: (editLaborRows ?? []).filter(includeLaborRow).map((r) => {
+            const meta = laborUpdateMetaByRowKey?.get(r.row_key);
+            const applyAvailability = resolveLaborApplyAvailabilityForSave(
+              meta,
+              r,
+              saveMode,
+              { isNew: r.isNew },
+            );
+            return {
+              ...(r.isNew ||
+              r.row_key.startsWith("new-") ||
+              r.row_key.startsWith("labor-swap:")
+                ? {}
+                : { row_key: r.row_key }),
+              labor_role: r.labor_role.trim(),
+              minutes: r.minutes,
+              apply_mode: resolveLaborApplyMode(
+                r.row_key,
+                applyAvailability,
+                laborApplyModes,
+              ),
+            };
+          }),
           excluded_ingredients:
             excluded_ingredients.length > 0 ? excluded_ingredients : undefined,
           excluded_labor:
@@ -3552,247 +3545,227 @@ export function StandardTechnicalSheetView({
         windowMode={windowMode}
       />
 
-          <div
-            className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-6 py-3 ${isDark ? "border-slate-700" : "border-gray-200"}`}
+      <div
+        className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-6 py-3 ${isDark ? "border-slate-700" : "border-gray-200"}`}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-sm font-medium">Version</label>
+          <select
+            value={selectedVersionId ?? ""}
+            onChange={(e) => setSelectedVersionId(e.target.value || null)}
+            disabled={loading || versions.length === 0 || isEditUpdate}
+            className={`rounded border px-3 py-1.5 text-sm ${isDark ? "bg-slate-800 border-slate-600" : "bg-white border-gray-300"}`}
           >
-            <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm font-medium">Version</label>
-            <select
-              value={selectedVersionId ?? ""}
-              onChange={(e) => setSelectedVersionId(e.target.value || null)}
-              disabled={
-                loading ||
-                versions.length === 0 ||
-                isEditUpdate
-              }
-              className={`rounded border px-3 py-1.5 text-sm ${isDark ? "bg-slate-800 border-slate-600" : "bg-white border-gray-300"}`}
+            {versions.map((v) => (
+              <option key={v.id} value={v.id}>
+                v{v.version_number}
+                {v.is_latest ? " (latest)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {updateLoading ? null : isEditUpdate ? (
+            <>
+              <button
+                type="button"
+                className={btnEdit}
+                disabled={savePending}
+                onClick={() => void handleSave("this_version")}
+              >
+                {savePending ? "Saving…" : "Save this version"}
+              </button>
+              <button
+                type="button"
+                className={btnPrimary}
+                disabled={savePending || !detail?.is_latest}
+                title={
+                  !detail?.is_latest
+                    ? "Only available when viewing the latest version"
+                    : undefined
+                }
+                onClick={() => void handleSave("new_version")}
+              >
+                Save as new version
+              </button>
+              <button
+                type="button"
+                className={btnSecondary}
+                onClick={cancelEditUpdate}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className={btnPrimary}
+              onClick={() => void openEditUpdate()}
             >
-              {versions.map((v) => (
-                <option key={v.id} value={v.id}>
-                  v{v.version_number}
-                  {v.is_latest ? " (latest)" : ""}
-                </option>
-              ))}
-            </select>
+              Edit/Update
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showDiffBanner ? <DiffBanner isDark={isDark} /> : null}
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-4">
+        {loading || sheetLoading || !sheet || !detail ? (
+          <LoadingBox isDark={isDark} />
+        ) : (
+          <>
+            {detail.has_unpriced_lines &&
+            (priceMode === "latest" || priceMode === "both") &&
+            viewMode === "sheet" &&
+            !priceLoading ? (
+              <UnpricedBanner isDark={isDark} />
+            ) : null}
+            <div
+              className={`grid grid-cols-2 gap-x-4 gap-y-2 rounded border p-4 text-sm ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-gray-50"}`}
+            >
+              <div className="min-w-0">
+                <span className="font-semibold">Product:</span>{" "}
+                {sheet.product.name}
+              </div>
+              <p className={isDark ? "text-slate-300" : "text-gray-600"}>
+                <span className="font-semibold">Version created:</span>{" "}
+                {formatVersionCreatedAt(detail.created_at)}
+                <span className="ml-2 text-xs opacity-80">
+                  (v{detail.version_number}
+                  {detail.is_latest ? ", latest" : ""})
+                </span>
+              </p>
             </div>
-
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              {updateLoading ? null : isEditUpdate ? (
-                <>
-                  <button
-                    type="button"
-                    className={btnEdit}
-                    disabled={savePending}
-                    onClick={() => void handleSave("this_version")}
-                  >
-                    {savePending ? "Saving…" : "Save this version"}
-                  </button>
-                  <button
-                    type="button"
-                    className={btnPrimary}
-                    disabled={savePending || !detail?.is_latest}
-                    title={
-                      !detail?.is_latest
-                        ? "Only available when viewing the latest version"
-                        : undefined
-                    }
-                    onClick={() => void handleSave("new_version")}
-                  >
-                    Save as new version
-                  </button>
-                  <button
-                    type="button"
-                    className={btnSecondary}
-                    onClick={cancelEditUpdate}
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className={btnPrimary}
-                  onClick={() => void openEditUpdate()}
-                >
-                  Edit/Update
-                </button>
-              )}
-            </div>
-          </div>
-
-          {showDiffBanner ? <DiffBanner isDark={isDark} /> : null}
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-4">
-            {loading || sheetLoading || !sheet || !detail ? (
-              <LoadingBox isDark={isDark} />
-            ) : (
-              <>
-                  {detail.has_unpriced_lines &&
-                  (priceMode === "latest" || priceMode === "both") &&
-                  viewMode === "sheet" &&
-                  !priceLoading ? (
-                    <UnpricedBanner isDark={isDark} />
-                  ) : null}
-                  <div
-                    className={`grid grid-cols-2 gap-x-4 gap-y-2 rounded border p-4 text-sm ${isDark ? "border-slate-700 bg-slate-800" : "border-gray-200 bg-gray-50"}`}
-                  >
-                    <div className="min-w-0">
-                      <span className="font-semibold">Product:</span>{" "}
-                      {sheet.product.name}
-                    </div>
-                    <p className={isDark ? "text-slate-300" : "text-gray-600"}>
-                      <span className="font-semibold">Version created:</span>{" "}
-                      {formatVersionCreatedAt(detail.created_at)}
-                      <span className="ml-2 text-xs opacity-80">
-                        (v{detail.version_number}
-                        {detail.is_latest ? ", latest" : ""})
-                      </span>
-                    </p>
-                  </div>
-                <TechnicalSheetBody
-                  sheet={sheet}
-                  isDark={isDark}
-                  description={displayDescription}
-                  procedure={displayProcedure}
-                  onDescriptionChange={
-                    isEditUpdate ? setEditDescription : undefined
-                  }
-                  onProcedureChange={
-                    isEditUpdate ? setEditProcedure : undefined
-                  }
-                  editRows={isEditUpdate ? editRows : null}
-                  onAmountChange={
-                    isEditUpdate ? handleAmountChange : undefined
-                  }
-                  onRemoveRow={
-                    isEditUpdate ? handleRemoveRow : undefined
-                  }
-                  pickerItems={pickerItems}
-                  baseItems={baseItems}
-                  vendorProducts={vendorProducts}
-                  vendors={vendors}
-                  onVendorChange={
-                    isEditUpdate ? handleVendorChange : undefined
-                  }
-                  hasUnpricedLines={
-                    isEditUpdate
-                      ? editHasUnpriced
-                      : viewMode === "sheet" &&
-                        detail.has_unpriced_lines &&
-                        (priceMode === "latest" || priceMode === "both")
-                  }
-                  priceMode={viewMode === "sheet" ? priceMode : "latest"}
-                  onPriceModeChange={
-                    viewMode === "sheet" ? setPriceMode : undefined
-                  }
-                  snapshotPriceByRowKey={
-                    viewMode === "sheet" ? snapshotPriceByRowKey : undefined
-                  }
-                  snapshotTotalCost={
-                    viewMode === "sheet" ? snapshotTotalCost : undefined
-                  }
-                  priceLoading={viewMode === "sheet" ? priceLoading : false}
-                  updateLoading={updateLoading}
-                  updateMode={isEditUpdate}
-                  updateEditMode={isEditUpdate}
-                  updateMetaByRowKey={updateMetaByRowKey ?? undefined}
-                  pairedRemovedKeys={
-                    isEditUpdate ? pairedRemovedKeys : undefined
-                  }
-                  restoredRemovedKeys={
-                    isEditUpdate ? restoredRemovedKeys : undefined
-                  }
-                  onRestoreRemoved={
-                    showRestoreRemoved ? handleRestoreRemoved : undefined
-                  }
-                  pendingTrashKeys={
-                    isEditUpdate ? pendingTrashIngredientKeys : undefined
-                  }
-                  updateRowChoices={updateRowChoices}
-                  onVendorChoiceChange={
-                    isEditUpdate ? handleVendorChoiceChange : undefined
-                  }
-                  onTotalChoiceChange={
-                    isEditUpdate ? handleTotalChoiceChange : undefined
-                  }
-                  onFinalAmountChange={
-                    isEditUpdate ? handleFinalAmountChange : undefined
-                  }
-                  ingredientApplyModes={
-                    isEditUpdate ? ingredientApplyModes : undefined
-                  }
-                  onIngredientApplyModeChange={
-                    isEditUpdate ? handleIngredientApplyModeChange : undefined
-                  }
-                  crossTenantAvailableItems={crossTenantAvailableItems}
-                  onAddIngredientRow={
-                    isEditUpdate ? handleAddIngredientRow : undefined
-                  }
-                  onNewRowPickerTypeChange={
-                    isEditUpdate ? handleNewRowPickerTypeChange : undefined
-                  }
-                  onNewRowCrossTenantFilterChange={
-                    isEditUpdate
-                      ? handleNewRowCrossTenantFilterChange
-                      : undefined
-                  }
-                  onNewRowItemSelect={
-                    isEditUpdate ? handleNewRowItemSelect : undefined
-                  }
-                  laborRoles={laborRoles}
-                  editLaborRows={isEditUpdate ? editLaborRows : null}
-                  hasUnpricedLaborLines={
-                    isEditUpdate
-                      ? editLaborHasUnpriced
-                      : viewMode === "sheet" &&
-                        detail.has_unpriced_lines &&
-                        (priceMode === "latest" || priceMode === "both")
-                  }
-                  laborUpdateMetaByRowKey={laborUpdateMetaByRowKey ?? undefined}
-                  pairedRemovedLaborKeys={
-                    isEditUpdate ? pairedRemovedLaborKeys : undefined
-                  }
-                  restoredRemovedLaborKeys={
-                    isEditUpdate ? restoredRemovedLaborKeys : undefined
-                  }
-                  onRestoreRemovedLabor={
-                    showRestoreRemoved ? handleRestoreRemovedLabor : undefined
-                  }
-                  pendingTrashLaborKeys={
-                    isEditUpdate ? pendingTrashLaborKeys : undefined
-                  }
-                  laborUpdateRowChoices={laborUpdateRowChoices}
-                  onLaborMinutesChoiceChange={
-                    isEditUpdate ? handleLaborMinutesChoiceChange : undefined
-                  }
-                  onLaborRoleChange={
-                    isEditUpdate ? handleLaborRoleChange : undefined
-                  }
-                  onLaborMinutesChange={
-                    isEditUpdate ? handleLaborMinutesChange : undefined
-                  }
-                  onRemoveLaborRow={
-                    isEditUpdate ? handleRemoveLaborRow : undefined
-                  }
-                  onAddLaborRow={
-                    isEditUpdate ? handleAddLaborRow : undefined
-                  }
-                  laborApplyModes={isEditUpdate ? laborApplyModes : undefined}
-                  onLaborApplyModeChange={
-                    isEditUpdate ? handleLaborApplyModeChange : undefined
-                  }
-                  snapshotLaborCostByRowKey={
-                    viewMode === "sheet" ? snapshotLaborCostByRowKey : undefined
-                  }
-                  snapshotLaborTotalCost={
-                    viewMode === "sheet" ? snapshotLaborTotalCost : undefined
-                  }
-                  crossTenantItemIds={crossTenantItemIds}
-                  onOpenPreppedSheet={onOpenPreppedSheet}
-                />
-                </>
-              )}
-          </div>
+            <TechnicalSheetBody
+              sheet={sheet}
+              isDark={isDark}
+              description={displayDescription}
+              procedure={displayProcedure}
+              onDescriptionChange={
+                isEditUpdate ? setEditDescription : undefined
+              }
+              onProcedureChange={isEditUpdate ? setEditProcedure : undefined}
+              editRows={isEditUpdate ? editRows : null}
+              onAmountChange={isEditUpdate ? handleAmountChange : undefined}
+              onRemoveRow={isEditUpdate ? handleRemoveRow : undefined}
+              pickerItems={pickerItems}
+              baseItems={baseItems}
+              vendorProducts={vendorProducts}
+              vendors={vendors}
+              onVendorChange={isEditUpdate ? handleVendorChange : undefined}
+              hasUnpricedLines={
+                isEditUpdate
+                  ? editHasUnpriced
+                  : viewMode === "sheet" &&
+                    detail.has_unpriced_lines &&
+                    (priceMode === "latest" || priceMode === "both")
+              }
+              priceMode={viewMode === "sheet" ? priceMode : "latest"}
+              onPriceModeChange={
+                viewMode === "sheet" ? setPriceMode : undefined
+              }
+              snapshotPriceByRowKey={
+                viewMode === "sheet" ? snapshotPriceByRowKey : undefined
+              }
+              snapshotTotalCost={
+                viewMode === "sheet" ? snapshotTotalCost : undefined
+              }
+              priceLoading={viewMode === "sheet" ? priceLoading : false}
+              updateLoading={updateLoading}
+              updateMode={isEditUpdate}
+              updateEditMode={isEditUpdate}
+              updateMetaByRowKey={updateMetaByRowKey ?? undefined}
+              pairedRemovedKeys={isEditUpdate ? pairedRemovedKeys : undefined}
+              restoredRemovedKeys={
+                isEditUpdate ? restoredRemovedKeys : undefined
+              }
+              onRestoreRemoved={
+                showRestoreRemoved ? handleRestoreRemoved : undefined
+              }
+              pendingTrashKeys={
+                isEditUpdate ? pendingTrashIngredientKeys : undefined
+              }
+              updateRowChoices={updateRowChoices}
+              onVendorChoiceChange={
+                isEditUpdate ? handleVendorChoiceChange : undefined
+              }
+              onTotalChoiceChange={
+                isEditUpdate ? handleTotalChoiceChange : undefined
+              }
+              onFinalAmountChange={
+                isEditUpdate ? handleFinalAmountChange : undefined
+              }
+              ingredientApplyModes={
+                isEditUpdate ? ingredientApplyModes : undefined
+              }
+              onIngredientApplyModeChange={
+                isEditUpdate ? handleIngredientApplyModeChange : undefined
+              }
+              crossTenantAvailableItems={crossTenantAvailableItems}
+              onAddIngredientRow={
+                isEditUpdate ? handleAddIngredientRow : undefined
+              }
+              onNewRowPickerTypeChange={
+                isEditUpdate ? handleNewRowPickerTypeChange : undefined
+              }
+              onNewRowCrossTenantFilterChange={
+                isEditUpdate ? handleNewRowCrossTenantFilterChange : undefined
+              }
+              onNewRowItemSelect={
+                isEditUpdate ? handleNewRowItemSelect : undefined
+              }
+              laborRoles={laborRoles}
+              editLaborRows={isEditUpdate ? editLaborRows : null}
+              hasUnpricedLaborLines={
+                isEditUpdate
+                  ? editLaborHasUnpriced
+                  : viewMode === "sheet" &&
+                    detail.has_unpriced_lines &&
+                    (priceMode === "latest" || priceMode === "both")
+              }
+              laborUpdateMetaByRowKey={laborUpdateMetaByRowKey ?? undefined}
+              pairedRemovedLaborKeys={
+                isEditUpdate ? pairedRemovedLaborKeys : undefined
+              }
+              restoredRemovedLaborKeys={
+                isEditUpdate ? restoredRemovedLaborKeys : undefined
+              }
+              onRestoreRemovedLabor={
+                showRestoreRemoved ? handleRestoreRemovedLabor : undefined
+              }
+              pendingTrashLaborKeys={
+                isEditUpdate ? pendingTrashLaborKeys : undefined
+              }
+              laborUpdateRowChoices={laborUpdateRowChoices}
+              onLaborMinutesChoiceChange={
+                isEditUpdate ? handleLaborMinutesChoiceChange : undefined
+              }
+              onLaborRoleChange={
+                isEditUpdate ? handleLaborRoleChange : undefined
+              }
+              onLaborMinutesChange={
+                isEditUpdate ? handleLaborMinutesChange : undefined
+              }
+              onRemoveLaborRow={isEditUpdate ? handleRemoveLaborRow : undefined}
+              onAddLaborRow={isEditUpdate ? handleAddLaborRow : undefined}
+              laborApplyModes={isEditUpdate ? laborApplyModes : undefined}
+              onLaborApplyModeChange={
+                isEditUpdate ? handleLaborApplyModeChange : undefined
+              }
+              snapshotLaborCostByRowKey={
+                viewMode === "sheet" ? snapshotLaborCostByRowKey : undefined
+              }
+              snapshotLaborTotalCost={
+                viewMode === "sheet" ? snapshotLaborTotalCost : undefined
+              }
+              crossTenantItemIds={crossTenantItemIds}
+              onOpenPreppedSheet={onOpenPreppedSheet}
+            />
+          </>
+        )}
+      </div>
     </div>
   );
 
