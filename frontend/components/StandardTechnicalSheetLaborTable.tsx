@@ -5,12 +5,13 @@ import type { ReactNode } from "react";
 import type { LaborRole, RecipeSummaryTechnicalSheetLaborRow, StandardSheetApplyMode } from "@/lib/api";
 import {
   effectiveLaborChoice,
-  isLaborApplyChoiceNeeded,
   formatLaborCost,
   formatLaborMinutes,
   formatLaborWage,
   laborRoleForDisplay,
   resolveEditMinutesRadios,
+  resolveLaborApplyAvailabilityForDisplay,
+  resolveLaborApplyMode,
   showLaborMinutesVersionSplit,
   type LaborUpdateDiffType,
   type LaborUpdateRowChoices,
@@ -126,6 +127,7 @@ function ApplyModeRadios({
   value,
   isDark,
   onChange,
+  showOverride = true,
   showOverwrite = true,
   inactive = false,
 }: {
@@ -133,7 +135,9 @@ function ApplyModeRadios({
   value: StandardSheetApplyMode;
   isDark: boolean;
   onChange: (mode: StandardSheetApplyMode) => void;
+  showOverride?: boolean;
   showOverwrite?: boolean;
+  /** No meaningful Apply choice for this row. */
   inactive?: boolean;
 }) {
   const name = `apply-mode-${rowKey}`;
@@ -173,39 +177,53 @@ function ApplyModeRadios({
     );
   }
 
-  const locked = !showOverwrite;
-  const effectiveValue: StandardSheetApplyMode = locked ? "override" : value;
+  const overrideLocked = !showOverride;
+  const overwriteLocked = !showOverwrite;
+  let effectiveValue = value;
+  if (overrideLocked && !overwriteLocked) {
+    effectiveValue = "overwrite";
+  } else if (overwriteLocked && !overrideLocked) {
+    effectiveValue = "override";
+  }
+
+  const containerTitle = overwriteLocked
+    ? showOverride
+      ? "Recipe has no line — TS only"
+      : undefined
+    : overrideLocked
+      ? "New recipe matches Current version — Overwrite only"
+      : undefined;
 
   return (
     <div
       className="mx-auto flex w-fit flex-col items-start gap-1"
-      title={locked ? "Recipe has no line — TS only" : undefined}
+      title={containerTitle}
     >
       <label
-        className={`${labelClass}${locked ? " cursor-default" : ""}`}
+        className={`${labelClass}${overrideLocked ? " cursor-default opacity-60" : ""}`}
       >
         <input
           type="radio"
           name={name}
           checked={effectiveValue === "override"}
-          disabled={locked}
-          readOnly={locked}
+          disabled={overrideLocked}
+          readOnly={overrideLocked}
           onChange={() => onChange("override")}
-          className={`h-3 w-3 shrink-0${locked ? " cursor-default" : ""}`}
+          className={`h-3 w-3 shrink-0${overrideLocked ? " cursor-default" : ""}`}
         />
         <span>Override</span>
       </label>
       <label
-        className={`${labelClass}${locked ? " cursor-default opacity-60" : ""}`}
+        className={`${labelClass}${overwriteLocked ? " cursor-default opacity-60" : ""}`}
       >
         <input
           type="radio"
           name={name}
           checked={effectiveValue === "overwrite"}
-          disabled={locked}
-          readOnly={locked}
+          disabled={overwriteLocked}
+          readOnly={overwriteLocked}
           onChange={() => onChange("overwrite")}
-          className={`h-3 w-3 shrink-0${locked ? " cursor-default" : ""}`}
+          className={`h-3 w-3 shrink-0${overwriteLocked ? " cursor-default" : ""}`}
         />
         <span>Overwrite</span>
       </label>
@@ -458,8 +476,9 @@ export function StandardTechnicalSheetLaborTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, rowIndex) => {
               const rowKey = row.row_key;
+              const reactKey = `${rowKey}@${rowIndex}`;
               const meta = updateMetaByRowKey?.get(rowKey);
               const diffType = meta?.diffType ?? "unchanged";
               const isPendingTrash = pendingTrashKeys?.has(rowKey) ?? false;
@@ -498,14 +517,28 @@ export function StandardTechnicalSheetLaborTable({
                 isPendingTrash,
                 restoredRemovedKeys,
               );
-              const isApplyChoiceNeeded = isLaborApplyChoiceNeeded(
-                diffType,
+              const applyAvailability = resolveLaborApplyAvailabilityForDisplay(
                 meta,
                 row,
                 { isNew: row.isNew },
               );
               const isApplyInactive =
-                !!updateEditMode && !isApplyModeLocked && !isApplyChoiceNeeded;
+                !!updateEditMode &&
+                !isApplyModeLocked &&
+                applyAvailability.inactive;
+              const showApplyOverride = isApplyModeLocked
+                ? true
+                : applyAvailability.showOverride;
+              const showApplyOverwrite = isApplyModeLocked
+                ? false
+                : applyAvailability.showOverwrite;
+              const applyModeValue = isApplyModeLocked
+                ? "override"
+                : resolveLaborApplyMode(
+                    rowKey,
+                    applyAvailability,
+                    laborApplyModes!,
+                  );
               const isRowLockedForEdit = isRemovedPendingRestore || isPendingTrash;
               const canRestoreRemoved =
                 !!onRestoreRemoved &&
@@ -561,7 +594,7 @@ export function StandardTechnicalSheetLaborTable({
 
               return (
                 <tr
-                  key={rowKey}
+                  key={reactKey}
                   className={isDark ? "text-slate-200" : "text-gray-900"}
                 >
                   <td className={`border px-2 py-1 align-top ${rowBgClass}`}>
@@ -646,14 +679,11 @@ export function StandardTechnicalSheetLaborTable({
                     >
                       <ApplyModeRadios
                         rowKey={rowKey}
-                        value={
-                          isApplyModeLocked
-                            ? "override"
-                            : (laborApplyModes!.get(rowKey) ?? "overwrite")
-                        }
+                        value={applyModeValue}
                         isDark={isDark}
                         inactive={isApplyInactive}
-                        showOverwrite={!isApplyModeLocked}
+                        showOverride={showApplyOverride}
+                        showOverwrite={showApplyOverwrite}
                         onChange={(mode) =>
                           onLaborApplyModeChange!(rowKey, mode)
                         }

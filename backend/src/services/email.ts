@@ -129,10 +129,70 @@ export async function sendCompanyInvitationEmail(
     );
     return data.id;
   } catch (error) {
-    console.error(
-      "[Email Service] Failed to send company invitation email:",
-      error
-    );
     throw error;
   }
+}
+
+export interface InvoiceEmailParams {
+  to: string;
+  deliverySiteName: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  totalAmount: number;
+  pdfBase64: string;
+}
+
+/**
+ * 請求書 PDF 添付メールを送信
+ */
+export async function sendInvoiceEmail(
+  params: InvoiceEmailParams,
+): Promise<string> {
+  const {
+    to,
+    deliverySiteName,
+    invoiceNumber,
+    invoiceDate,
+    totalAmount,
+    pdfBase64,
+  } = params;
+
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is not configured");
+  }
+
+  const resend = getResendClient();
+
+  const subject = `Invoice ${invoiceNumber} from ${deliverySiteName}`;
+  const html = `
+    <p>Please find attached invoice <strong>${invoiceNumber}</strong>.</p>
+    <p>Invoice date: ${invoiceDate}<br/>
+    Total amount: $${totalAmount.toFixed(2)}</p>
+    <p>This message was sent from Food Costing.</p>
+  `.trim();
+
+  const { data, error } = await resend.emails.send({
+    from:
+      process.env.RESEND_FROM_EMAIL || "Food Costing <onboarding@resend.dev>",
+    to: [to],
+    subject,
+    html,
+    attachments: [
+      {
+        filename: `${invoiceNumber}.pdf`,
+        content: pdfBase64,
+      },
+    ],
+  });
+
+  if (error) {
+    console.error("[Email Service] Error sending invoice email:", error);
+    throw error;
+  }
+
+  if (!data?.id) {
+    throw new Error("Resend did not return an email_id");
+  }
+
+  return data.id;
 }

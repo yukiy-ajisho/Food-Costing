@@ -3,6 +3,7 @@ import type {
   Item,
   StandardRecipeDiff,
   StandardSheetApplyMode,
+  StandardSheetSaveMode,
   Vendor,
 } from "@/lib/api";
 import { childIdFromRowKey, snapshotRowKey } from "@/lib/technicalSheetRowKey";
@@ -421,6 +422,131 @@ export function ingredientNewRecipeDiffersFromVersions(
   return false;
 }
 
+export function ingredientMatchesCurrentVersion(
+  meta: UpdateRowMeta,
+  row: { specific_child?: string | null; total: number },
+  item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
+): boolean {
+  if (item?.item_kind === "raw" && !item.is_menu_item) {
+    if (!vendorMatchesSheet(meta, row.specific_child)) return false;
+  }
+  return totalMatchesSheet(meta, row.total);
+}
+
+export function ingredientMatchesRecipeDatabase(
+  meta: UpdateRowMeta,
+  row: { specific_child?: string | null; total: number },
+  item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
+): boolean {
+  if (item?.item_kind === "raw" && !item.is_menu_item) {
+    if (!vendorMatchesLive(meta, row.specific_child)) return false;
+  }
+  return totalMatchesLive(meta, row.total);
+}
+
+export type IngredientApplyAvailability = {
+  inactive: boolean;
+  showOverride: boolean;
+  showOverwrite: boolean;
+  defaultMode: StandardSheetApplyMode;
+};
+
+function ingredientApplyAvailabilityBase(
+  meta: UpdateRowMeta | undefined,
+  row: { specific_child?: string | null; total: number },
+  item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
+  opts?: { isManualNewRow?: boolean; isPendingNew?: boolean },
+): IngredientApplyAvailability {
+  if (opts?.isManualNewRow || opts?.isPendingNew || meta == null) {
+    return {
+      inactive: false,
+      showOverride: true,
+      showOverwrite: true,
+      defaultMode: "overwrite",
+    };
+  }
+
+  const matchesCurrent = ingredientMatchesCurrentVersion(meta, row, item);
+  const matchesLive = ingredientMatchesRecipeDatabase(meta, row, item);
+
+  if (matchesCurrent && matchesLive) {
+    return {
+      inactive: true,
+      showOverride: false,
+      showOverwrite: false,
+      defaultMode: "override",
+    };
+  }
+
+  if (matchesLive && !matchesCurrent) {
+    return {
+      inactive: false,
+      showOverride: true,
+      showOverwrite: false,
+      defaultMode: "override",
+    };
+  }
+
+  if (matchesCurrent && !matchesLive) {
+    return {
+      inactive: false,
+      showOverride: true,
+      showOverwrite: true,
+      defaultMode: "overwrite",
+    };
+  }
+
+  return {
+    inactive: false,
+    showOverride: true,
+    showOverwrite: true,
+    defaultMode: "overwrite",
+  };
+}
+
+/** Apply column before save (union of both save buttons). */
+export function resolveIngredientApplyAvailabilityForDisplay(
+  meta: UpdateRowMeta | undefined,
+  row: { specific_child?: string | null; total: number },
+  item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
+  opts?: { isManualNewRow?: boolean; isPendingNew?: boolean },
+): IngredientApplyAvailability {
+  return ingredientApplyAvailabilityBase(meta, row, item, opts);
+}
+
+/** Apply mode resolution at save time (save-mode aware). */
+export function resolveIngredientApplyAvailabilityForSave(
+  meta: UpdateRowMeta | undefined,
+  row: { specific_child?: string | null; total: number },
+  item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
+  saveMode: StandardSheetSaveMode,
+  opts?: { isManualNewRow?: boolean; isPendingNew?: boolean },
+): IngredientApplyAvailability {
+  const base = ingredientApplyAvailabilityBase(meta, row, item, opts);
+
+  if (
+    saveMode === "this_version" &&
+    base.showOverride &&
+    base.showOverwrite &&
+    !base.inactive &&
+    meta != null
+  ) {
+    const matchesCurrent = ingredientMatchesCurrentVersion(meta, row, item);
+    const matchesLive = ingredientMatchesRecipeDatabase(meta, row, item);
+    if (matchesCurrent && !matchesLive) {
+      return {
+        inactive: false,
+        showOverride: false,
+        showOverwrite: true,
+        defaultMode: "overwrite",
+      };
+    }
+  }
+
+  return base;
+}
+
+/** @deprecated Use resolveIngredientApplyAvailabilityForDisplay().inactive */
 export function isIngredientApplyChoiceNeeded(
   diffType: UpdateDiffType | undefined,
   meta: UpdateRowMeta | undefined,
@@ -428,18 +554,20 @@ export function isIngredientApplyChoiceNeeded(
   item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
   opts?: { isManualNewRow?: boolean; isPendingNew?: boolean },
 ): boolean {
-  if (opts?.isManualNewRow || opts?.isPendingNew || meta == null) return true;
-  if (diffType !== "unchanged") return true;
-  return ingredientNewRecipeDiffersFromVersions(meta, row, item);
+  void diffType;
+  return !resolveIngredientApplyAvailabilityForDisplay(meta, row, item, opts)
+    .inactive;
 }
 
 export function resolveIngredientApplyMode(
   rowKey: string,
-  choiceNeeded: boolean,
+  availability: IngredientApplyAvailability,
   modes: Map<string, StandardSheetApplyMode> | undefined,
 ): StandardSheetApplyMode {
-  if (!choiceNeeded) return "override";
-  return modes?.get(rowKey) ?? "overwrite";
+  if (availability.inactive) return "override";
+  if (!availability.showOverwrite) return "override";
+  if (!availability.showOverride) return "overwrite";
+  return modes?.get(rowKey) ?? availability.defaultMode;
 }
 
 function resolveEditFieldRadios(

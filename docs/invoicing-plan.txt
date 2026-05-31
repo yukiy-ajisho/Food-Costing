@@ -1,0 +1,666 @@
+================================================================================
+  INVOICING — 請求・配送機能 計画
+  対象: food_costing プロジェクト
+  作成日: 2026-05-29
+  ステータス: 計画（未実装）
+================================================================================
+
+本書は、Google Spreadsheet で運用していた Invoice Generator / Invoice Box を
+本アプリに組み込むための要件・設計を会話で合意した内容をまとめたものである。
+
+参考資料（ユーザー提供スプレッドシート）:
+- Invoice Generator … リスト作成・品目・Generate・PDF・メール
+- Invoice Box … 請求履歴・Sent マーク・再表示・再送
+
+関連 UI 参考:
+- frontend/components/recipe-cost-report/RecipeCostReportListPage.tsx … 一覧・Create new
+- frontend/components/recipe-cost-report/CreateListModal.tsx … リスト作成モーダル
+- frontend/components/Layout.tsx … サイドメニュー（Food Costing とは別トップ項目）
+
+
+================================================================================
+1. 背景・目的
+================================================================================
+
+1-1. やりたいこと
+
+- Prepped / Menu 品目を使った **請求リスト** を作成し、都度 Units を入力して
+  **請求書（PDF）を生成** する。
+- 生成した請求は **Invoice Box** に履歴として残し、後から PDF 表示・メール再送できる。
+- **配送先（Delivery Information）** をマスタ登録し、請求先メールと紐付ける。
+
+1-2. Food Costing との関係
+
+- サイドメニューに **Invoicing** を **新設** する。
+- **Food Costing サブメニューには入れない**（Pricing / Recipes 等とは独立）。
+- **Cost（kg 単価）** は `calculate_item_costs_with_breakdown_scoped` による内部原価（§7）。
+  Wholesale List（WL）とは **無関係**。
+- **Unit Size** は recipe の quantity + unit に相当する「1 unit あたりの量」の概念。
+
+
+================================================================================
+2. ナビゲーション・画面構成（確定）
+================================================================================
+
+2-1. サイドメニュー
+
+| 項目 | 内容 |
+|------|------|
+| ラベル | Invoicing（アイコン・href は実装時決定。例: /invoicing） |
+| 位置 | Food Costing / Documents / Team 等と **同列のトップ項目** |
+| Food Costing 内 | **含めない** |
+
+2-2. タブ（3 つ）
+
+| # | タブ名 | 役割 |
+|---|--------|------|
+| 1 | **Invoice Generation** | 請求リストの作成・編集・Generate |
+| 2 | **Invoice Box** | Generate 済み請求の履歴・PDF 表示・Send |
+| 3 | **Delivery Information** | 配送先マスタ（名前・住所・メール等） |
+
+2-3. データの流れ
+
+  Delivery Information（マスタ登録）
+           ↓
+  Invoice Generation（リスト作成 → 都度 Units 入力 → Generate）
+           ↓ Save / Save and Send
+  Invoice Box（請求レコード追加）
+           ↓ レコードクリック
+  PDF 表示・Send（その場で PDF 生成）
+
+
+================================================================================
+3. Delivery Information（タブ 3）
+================================================================================
+
+3-1. 機能
+
+- 配送先（Delivery Site）の CRUD。
+- スプレッドシート右上の Delivery Site 表に相当:
+  Site Name, Street, City, State Zip, Phone 1, Phone 2, Email 等。
+- **email のみ必須**。street / city / state_zip / phone は **nullable**（§8-1）。
+- **名前 ↔ メール** を必ず紐付ける（Generate / Send で使用）。
+
+3-2. Invoice Generation との連携
+
+- Create リスト時、登録済み **配送先名** をプルダウンで選択。
+- 選択した配送先の email が Save and Send / Invoice Box の Send に使われる。
+
+
+================================================================================
+4. Invoice Generation（タブ 1）
+================================================================================
+
+4-1. 一覧 UI
+
+- **見た目・操作感は Pricing（Recipe Cost Report リスト）と同様**。
+  - リスト一覧
+  - **Create new** ボタン
+  - リスト選択 → 詳細（テーブル）表示
+- 作成したリストは **使い回す**（Generate 後も残す）。**リスト自体は削除可能**
+  （削除しても、そのリストから生成済みの Box 請求は残る — §8-4）。
+
+4-2. Create new モーダル
+
+| 入力 | 内容 |
+|------|------|
+| リスト名 | リストそのものの名称（**請求書名ではない**）。識別・プリセット用 |
+| アイテム | **Prepped** と **Menu** から選択して追加（§4-2-1） |
+| Delivery Site | Delivery Information で登録した **名前** をプルダウン |
+| Create | リスト + 行を作成し、詳細画面へ |
+
+4-2-1. 品目ピッカー（確定）
+
+- **選択中 tenant が所有する item のみ** 表示する。
+- **cross-tenant 共有 prepped / menu はピッカーに出さない**（選択不可）。
+  （`cross_tenant_item_shares` 経由の他 tenant 品目は除外）
+- Menu: `is_menu_item = true`。Prepped: `item_kind = 'prepped'` かつ menu 以外、等
+  CreateListModal と同型のフィルタだが **tenant 内 item に限定**。
+
+4-3. リスト詳細 — レイアウト（上から）
+
+**(A) 日付（テーブルの上に常時表示・編集可）**
+
+| フィールド | 備考 |
+|------------|------|
+| Order Received | 日付 |
+| Delivery Date | 日付 |
+| Invoice *Date | 日付（必須系。ラベルはスプレッドシートに合わせ Invoice *Date） |
+
+  **日付のライフサイクル（Units と同じ — 確定）**
+
+| タイミング | 動作 |
+|------------|------|
+| リスト詳細表示時 | 空（または UI デフォルト）。**`invoice_lists` には保存しない** |
+| Generate / Save 時 | 入力値を **`invoice_box_invoices` の 3 カラム** に保存（§8-4） |
+| Save 成功後（Generation 側） | **日付 3 種をクリア**（Units / Sub tot と同様） |
+
+  日付はリストのプリセットでは **ない**（使い回さない）。請求確定時のみ Box ヘッダーに
+  スナップショットする。**`invoice_box_invoices.lines` には含めない**。
+
+**(B) 品目テーブル（5 列）**
+
+| 列 | 意味 | 備考 |
+|----|------|------|
+| **Name** | 品名 | `item_id` から join 表示。**DB には name を持たない**（§8） |
+| **Unit Size** | 1 unit あたりの量（旧 ? / UNIT KG or PCS） | **数値 + 単位** の 2 部分（§4-5-1）。**DB に保持** |
+| **Units** | 何 unit 分か | **毎回手入力**。Generate 成功後 **クリア**（リスト行は残る） |
+| **Cost** | kg あたり単価（スプレッドシートの UNIT-PRICE） | **常に RPC で最新** を表示。Generate 時点の値は Box 側にスナップショット |
+| **Sub tot** | 行小計 | **表示のみ（計算）**。Generate 成功後 **クリア** |
+
+4-4. 行小計の計算式（確定）
+
+  総量 x = Unit Size × Units
+  Sub tot = x × Cost
+
+  ※ Cost が kg 単価である前提。`unit_size_unit` が each の行は `each_grams` で g に換算し、
+    その他 mass 系（g/kg/oz/lb）は既存 unit 換算（`recipeCostReportCalc.ts` 等）で
+    総量を kg ベースに揃えてから `Sub tot = unit_size × units × cost` を計算する。
+    each は **`each_grams > 0` の item にのみプルダウン表示**（§4-5-2）のため、
+    換算不能な each 選択は v1 では起こさない。
+
+4-5. Unit Size のライフサイクル（Generation 側）
+
+4-5-1. `unit_size` と `unit_size_unit` とは（確定）
+
+スプレッドシートの **?（数値）** と **UNIT KG or PCS（単位）** に相当する 2 フィールド。
+
+| DB キー | UI | 例 |
+|---------|-----|-----|
+| **unit_size** | 数値部分 | `5` |
+| **unit_size_unit** | 単位部分 | `kg` / `each` / `lb` 等 |
+
+  - 「5 kg 分が 1 unit」→ unit_size=5, unit_size_unit=`kg`
+  - 「12 each 分が 1 unit」→ unit_size=12, unit_size_unit=`each`
+  - recipe からの **数値** の自動填入は **しない**。ユーザーが Generate 前に入力（初回）または
+    リストに保存済みの値を表示（2 回目以降）。
+  - UI では 1 列「Unit Size」として見せても、保存時は **数値と単位を分けて** JSONB に書く。
+
+4-5-2. `unit_size_unit` のプルダウン（確定）
+
+- **単位はユーザーがプルダウンで選択** する（`unit_size` の数値とセット）。
+- プルダウンに **出る候補は item 由来**（行ごとにその item の属性から決める）。
+- 対象は Prepped / Menu のみ（Invoicing ピッカーと同じ）。
+
+| 候補 | 条件 |
+|------|------|
+| **g, kg, oz, lb** | 常に表示（mass 系。DB の prepped 許可単位に準拠） |
+| **each** | 当該 item の **`each_grams > 0` のときのみ** 表示 |
+
+  - **`each_grams` が未設定の item には `each` を出さない**。
+    Sub tot 換算に `each_grams` が必要なため、選べない状態を UI で防ぐ
+    （Generate 時の each 専用エラーは不要）。
+  - 参考: `frontend/lib/ingredientUnits.ts` の prepped 向けロジック。
+    Invoicing では **`each_grams > 0` を each 表示の条件** とする（§4-5-2 表）。
+  - **数値（unit_size）の自動填入はしない**。単位プルダウンの初期値も空（または保存済み値）とし、
+    item の `proceed_yield_unit` からの自動選択は **しない**（v1）。
+
+| タイミング | 動作 |
+|------------|------|
+| リスト作成直後 | **unit_size = null**（空）。recipe からの自動填入は **しない** |
+| **初回 Generate 成功時** | その時入力されていた Unit Size を **`invoice_lists.lines` に保存** |
+| 2 回目以降 | 保存済み Unit Size をデフォルト表示。**ユーザーが変えない限り 1 回目の値のまま** |
+| 手動変更 | Edit 画面で Unit Size を編集可能（変更後は新値がリストに残る） |
+| Generate 後 | Unit Size は **クリアしない**（リストの作業用マスタとして残す） |
+
+  **Generate 前バリデーション（Units と同様 — 確定）**
+  - **全行** で `unit_size` **および** `unit_size_unit` が入っていること。
+  - 1 行でも未入力なら **Generate 不可（エラー）**。
+
+  Unit Size は **変わりうる** ため、Generation（`invoice_lists.lines`）にも
+  Invoice Box（`invoice_box_invoices.lines`）にも **両方** unit_size を保持する（§8）。
+
+4-6. Edit
+
+- **Edit** 押下 → Pricing と同様、**Prepped / Menu アイテムの追加** が可能。
+- 既存行の Unit Size 手編集可否は実装時 UI で決定（推奨: 編集可）。
+
+4-7. Generate フロー
+
+1. 日付 3 種・Units・Unit Size（未登録行）を入力
+2. **Generate** 押下
+3. モーダル: **PDF プレビュー**（このタイミングで PDF 生成。DB には PDF 本体を保存しない）
+4. ボタン:
+   - **Save** … 請求作成 → Invoice Box にレコード追加のみ
+   - **Save and Send** … 上記 + **メール送信**（Delivery Site の email）
+   - **Cancel** … 破棄（Box には追加しない）
+5. Save / Save and Send 成功後（Generation 側）:
+   - **日付 3 種** … クリア（Units と同様。DB には Box ヘッダーのみ保存済み）
+   - **Units** … クリア
+   - **Sub tot** … クリア（表示のみのため）
+   - **Unit Size** … 未登録行は今回の値を **リスト行に保存**。既存行は変更があれば更新
+   - **リスト自体** … 残す（使い回し）
+
+4-8. 同一リストからの複数回 Generate
+
+- **許可する**（リストは使い回し）。
+- 例: 同じリストで Units=3 で 1 回目 Generate → Box に 1 件。
+        後日 Units=5 で 2 回目 Generate → Box に別レコード 1 件。
+- 部分出荷（リスト内の一部行だけ Generate）は **v1 では想定しない**。
+- **Units 未入力行が 1 行でもあれば Generate 不可（エラー）**。全行 Units 必須（§10 #3）。
+- **Unit Size（unit_size + unit_size_unit）未入力行が 1 行でもあれば Generate 不可（エラー）**。
+  全行 Unit Size 必須（§10 #11）。
+
+
+================================================================================
+5. Invoice Box（タブ 2）
+================================================================================
+
+5-1. 一覧 UI
+
+- スプレッドシート 2 枚目（Invoice Box）を参考。
+- **Generate された請求** がレコードとして時系列に並ぶ。
+
+| 列（案） | 内容 |
+|----------|------|
+| Date | Invoice *Date（または Generate 日 — 実装時どちらを主表示にするか決定） |
+| Invoice# | 請求番号（採番ルール §10） |
+| Invoice Amount | 合計金額（**スナップショット保存**） |
+| Delivery Site | 配送先名 |
+| **Sent** | 一度でも Send したらマーク（Save のみでは付けない） |
+| Note | 任意メモ（v1 は空でも可） |
+
+- **Cost 列は一覧に出さない**（情報を減らす）。
+- **Payment Received / Running Balance** … **今回スコープ外**。必要になったら後から追加。
+
+5-2. レコード詳細
+
+- レコードクリック → モーダル。
+- 保存済みスナップショットから **PDF をその場で生成** して表示。
+- モーダルから **Send** 可能（PDF 再生成 → メール）。
+- Send 成功 → **Sent** マークを付与（既に付いていればそのまま）。
+
+5-3. Invoice Box に保存するデータ（確定方針）
+
+PDF ファイル本体は **DB に常時保存しない**（容量対策）。
+表示・送信時のみ PDF 生成。
+
+**請求レコード（invoice_box_invoices 1 行 = 請求 1 件）**
+
+| 項目 | 保存 |
+|------|------|
+| invoice_number | ✅ |
+| order_received_date | ✅ **`invoice_box_invoices` のカラム**（lines JSONB には入れない） |
+| delivery_date | ✅ 同上 |
+| invoice_date | ✅ 同上 |
+| delivery_site_id | ✅ |
+| delivery_site_name | ✅ スナップショット |
+| delivery_email | ✅ スナップショット（Send 用） |
+| total_amount | ✅ **スナップショット** |
+| sent_at | ✅ null = 未 Send |
+| list_id | ✅ Generate 時は必ず設定。**リスト削除後は null 可**（§8-4） |
+| note | ✅ optional |
+| **lines** (JSONB) | ✅ 行スナップショット配列（§8-3） |
+| created_at, created_by | ✅ |
+
+**lines 配列の各要素（請求行スナップショット）**
+
+| 項目 | 保存 | 備考 |
+|------|------|------|
+| item_id | ✅ | |
+| name | ✅ | **請求時点の品名**（PDF・履歴用。Generation 側には name なし） |
+| unit_size | ✅ | **請求時点のスナップショット** |
+| unit_size_unit | ✅ | |
+| units | ✅ | **その回の値** |
+| cost | ✅ | **Generate 時点の RPC 値を固定** |
+| sub_total | ✅ | **スナップショット保存**（§5-4） |
+| sort_order | ✅ | |
+
+5-4. Sub total を Box に保存する理由（合意）
+
+- Generation 側: Sub tot は **計算表示のみ** でよい。
+- Invoice Box 側: **sub_total を DB に保存** する。
+  - 請求確定時にユーザーが見た金額を凍結する。
+  - 将来の計算式変更・丸め・データ誤更新があっても PDF / 履歴が変わらない。
+  - Save 時に `unit_size × units × cost` と一致チェック（不一致ならエラー）を推奨。
+- ヘッダー **total_amount** も行 sub_total の合計を **スナップショット** として保存。
+
+5-5. Save と Save and Send（確定）
+
+| 操作 | Invoice Box | Sent マーク | メール |
+|------|-------------|-------------|--------|
+| **Save** | レコード追加 | 付けない | 送らない |
+| **Save and Send** | レコード追加 | 付ける | 送信 |
+| Invoice Box から **Send** | 既存レコード | 付ける | 送信 |
+
+
+================================================================================
+6. PDF・メール
+================================================================================
+
+6-1. PDF
+
+- **常時 DB 保存しない**。Generate プレビュー・Box 詳細表示・Send の各タイミングで生成。
+- レイアウトはスプレッドシート Invoice Generator に準拠（実装時テンプレート化）。
+- 使用ライブラリ: 既存 frontend の pdf-lib 等を流用検討。
+
+6-2. メール（確定: Resend）
+
+- **送信サービス: Resend**（既存 `backend/src/services/email.ts` を流用・拡張）。
+- 環境変数: `RESEND_API_KEY`（既存 backend `.env` と同様）。
+- 宛先: Delivery Site に紐付く **email**（Box 保存時スナップショットを使用）。
+- 添付: Generate / 再送時にその場で作った **PDF**。
+- 件名・本文: v1 はシンプルな固定テンプレート（後からカスタム可）。
+- Webhook: 既存 `POST /webhooks/resend` がある場合、配送ステータス追跡に将来利用可（v1 必須ではない）。
+
+
+================================================================================
+7. Cost（RPC）との関係（確定）
+================================================================================
+
+| 画面 | Cost の扱い |
+|------|-------------|
+| Invoice Generation | **常に最新 RPC** で表示・Generate 直前に取得 |
+| Invoice Box（保存後） | **Generate 時点の cost を固定**。再表示・PDF も保存値を使用 |
+| Invoice Box 一覧 | Cost **非表示** |
+
+7-1. 使用 RPC（確定）
+
+- **RPC**: `calculate_item_costs_with_breakdown_scoped`
+  - 引数: `p_tenant_id`, `p_call_depth`, `p_seed_item_ids`（リスト行の item_id 配列）
+  - 取得: `out_total_cost_per_gram`（food + labor の内部原価 $/g）
+- **画面表示**: `out_total_cost_per_gram × 1000` → **$/kg**（Costing / Pricing と同様）
+- **Wholesale List（`wholesale_list_lines` 等）は使用しない**。WL 上書き RPC も使わない。
+- Invoice Generation ではリストに含まれる item_id のみ scoped で一括取得する。
+
+
+================================================================================
+8. データベース設計（確定）
+================================================================================
+
+テナントスコープ（tenant_id）・RLS は既存テーブルに合わせる。
+
+**物理テーブルは 4 つ。** 行データは Generation / Box とも **親テーブルの JSONB**
+に埋め込む（別行テーブルは作らない）。
+
+8-0. 行を JSONB にする理由（合意）
+
+| 観点 | 内容 |
+|------|------|
+| UI | リスト・請求とも **1 件まるごと読み書き**（Pricing 的ドキュメント） |
+| Generation | 1 リストあたり行数は有限。`invoice_lists` 1 行 + `lines` JSONB |
+| Box | 請求 1 件 = 不変スナップショット。`invoice_box_invoices` 1 行 + `lines` JSONB |
+| テーブル数 | `invoice_list_lines` / `invoice_box_lines` は **作らない** |
+| FK | JSON 内 `item_id` は DB FK 不可 → **保存時にアプリで存在チェック** |
+| 将来 | 品目別集計が必要になったら materialized view / 別テーブルを後付け |
+
+8-1. delivery_sites（Delivery Information）
+
+| 列 | 型（案） | 備考 |
+|----|----------|------|
+| id | uuid PK | |
+| tenant_id | uuid | |
+| name | text | プルダウン表示名。ユニーク（tenant 内） |
+| street | text | **nullable** |
+| city | text | **nullable** |
+| state_zip | text | **nullable** |
+| phone_1 | text | nullable |
+| phone_2 | text | nullable |
+| email | text | **必須**（Send に使用。住所は PDF 用任意） |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+8-2. invoice_lists（Invoice Generation）
+
+| 列 | 型（案） | 備考 |
+|----|----------|------|
+| id | uuid PK | |
+| tenant_id | uuid | |
+| name | text | **リスト名**（請求書名ではない）。**tenant 内 UNIQUE** |
+| delivery_site_id | uuid FK → delivery_sites | このリストの **デフォルト配送先** |
+| **lines** | **jsonb** | 品目行配列（スキーマ §8-3） |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+| created_by | uuid | nullable |
+
+**リスト名と delivery_sites.name の関係（合意）**
+
+- `invoice_lists.name` は **リストの名前**（Prepped/Menu 構成のプリセット）。
+- `delivery_sites.name` は **配送先マスタの名前**。
+- 両者は **別カラム** だが、運用上 **同じ文字列になることが多い**。
+  例: Delivery Information に「会社 A」を登録 → いつも使うリストも「会社 A」と名付ける。
+- 必ず一致させる制約は **設けない**（同名推奨のワークフロー程度）。
+- Create モーダルではリスト名と Delivery Site を **別々に選ぶ**（同名を選べばよい）。
+
+  ※ 品名 **name は JSON に含めない**。表示は `item_id` → items join。
+  ※ **日付 3 種 / units / cost / sub_total は JSON に含めない**
+    （日付・Units は画面入力のみ。Cost は RPC。Sub tot は画面計算のみ）。
+
+8-3. JSONB スキーマ — invoice_lists.lines（Generation 行）
+
+配列。各要素:
+
+| キー | 型 | 備考 |
+|------|-----|------|
+| item_id | uuid | Prepped or Menu。**必須** |
+| unit_size | number \| null | **リスト作業用**。Generate 成功後に保存・更新可 |
+| unit_size_unit | string \| null | Unit Size の **単位**。ユーザーがプルダウンで選択（§4-5-2） |
+| sort_order | number | 表示順 |
+
+例:
+
+  [
+    { "item_id": "…", "unit_size": 5, "unit_size_unit": "kg", "sort_order": 0 },
+    { "item_id": "…", "unit_size": null, "unit_size_unit": null, "sort_order": 1 }
+  ]
+
+  Unit Size の正本は **ここ**（invoice_list_lines テーブルは作らない）。
+  直近 Invoice から引く設計には **しない**（invoice なしでリスト側に登録可能）。
+
+8-4. invoice_box_invoices（Invoice Box）
+
+| 列 | 型（案） | 備考 |
+|----|----------|------|
+| id | uuid PK | |
+| tenant_id | uuid | |
+| invoice_number | text | **`delivery_sites.name` + `yymmdd`**（§10）。Generate 時の配送先名を使用 |
+| list_id | uuid FK → invoice_lists | **nullable**。Generate 時は **必ず設定** |
+| delivery_site_id | uuid FK → delivery_sites | nullable |
+| delivery_site_name | text | スナップショット |
+| delivery_email | text | スナップショット |
+| order_received_date | date | **請求ヘッダーの 3 カラム**。lines JSONB には **含めない** |
+| delivery_date | date | 同上 |
+| invoice_date | date | 同上 |
+| total_amount | numeric | **合計スナップショット** |
+| sent_at | timestamptz | nullable。null = 未 Send |
+| note | text | nullable |
+| **lines** | **jsonb** | 請求行スナップショット配列（§8-5） |
+| created_at | timestamptz | |
+| created_by | uuid | nullable |
+
+**list_id が nullable な理由 / リスト削除（確定）**
+
+- 通常フローでは Generate 時に **必ず list_id を入れる**。
+- **`invoice_lists` は削除可能**（ユーザーがリスト一覧から削除できる）。
+- **リスト削除後も Box の請求履歴は残す**。FK は `ON DELETE SET NULL` とし、
+  削除後は `list_id = null` の孤立請求になりうる（請求本体・lines・日付・金額は保持）。
+
+8-5. JSONB スキーマ — invoice_box_invoices.lines（Box 行）
+
+配列。各要素（**請求確定時の不変スナップショット**）:
+
+| キー | 型 | 備考 |
+|------|-----|------|
+| item_id | uuid | |
+| name | string | **請求時点の品名**（PDF・履歴用） |
+| unit_size | number | 請求時スナップショット |
+| unit_size_unit | string | |
+| units | number | その回の値 |
+| cost | number | Generate 時 RPC スナップショット |
+| sub_total | number | 行小計スナップショット |
+| sort_order | number | |
+
+例:
+
+  [
+    {
+      "item_id": "…",
+      "name": "Potato Salad",
+      "unit_size": 5,
+      "unit_size_unit": "kg",
+      "units": 3,
+      "cost": 46.31,
+      "sub_total": 694.65,
+      "sort_order": 0
+    }
+  ]
+
+  Save 時: 各要素の sub_total が unit_size × units × cost と一致するか検証推奨。
+  total_amount = lines[].sub_total の合計と一致するか検証推奨。
+
+8-6. Generation 作業値 vs Box スナップショット（確定）
+
+| 項目 | invoice_lists | invoice_box_invoices（ヘッダー） | invoice_box_invoices.lines |
+|------|---------------|----------------------------------|----------------------------|
+| 日付 3 種 | **持たない**（Units と同様 UI のみ） | **3 カラムで保存** | **含めない** |
+| unit_size | 作業用・次回デフォルト（**可変**） | — | 請求時 **固定** |
+| units | **持たない**（UI のみ） | — | 請求時 **固定** |
+| cost | **持たない**（RPC 最新） | — | 請求時 **固定** |
+| name | **持たない**（items join） | — | 請求時 **固定** |
+
+  Generation 側に name / 日付 / units なし。Box 側 lines に name あり — 役割の違いに注意。
+
+8-7. ER（テーブル関係）
+
+  delivery_sites
+        ↑
+  invoice_lists ──(list_id, ON DELETE SET NULL)── invoice_box_invoices
+        │                                              │
+        └── lines JSONB                                └── lines JSONB
+
+
+================================================================================
+9. API・バックエンド（案）
+================================================================================
+
+| エンドポイント群 | 内容 |
+|------------------|------|
+| /api/invoicing/delivery-sites | CRUD |
+| /api/invoicing/lists | リスト CRUD（**lines JSONB** 含む全体更新。**DELETE 可** — Box は残る） |
+| /api/invoicing/lists/:id/costs | lines 内 item_id ごと最新 Cost（`calculate_item_costs_with_breakdown_scoped` 一括） |
+| /api/invoicing/generate-preview | PDF プレビュー用（保存しない） |
+| /api/invoicing/invoices | Box 一覧・詳細 |
+| /api/invoicing/invoices POST | Save / Save and Send（Box 作成 + 任意メール） |
+| /api/invoicing/invoices/:id/pdf | PDF 生成（オンデマンド） |
+| /api/invoicing/invoices/:id/send | 再送 |
+
+  Generate 成功時の Generation 側更新（lines JSONB 内 unit_size 保存、UI 上の日付・units クリア）は
+  POST invoices のトランザクション内で行う。
+
+
+================================================================================
+10. 実装前に決めること（残タスク）
+================================================================================
+
+| # | 項目 | 現状 |
+|---|------|------|
+| 1 | Invoice# 採番 | **確定**: `{delivery_sites.name}{yymmdd}`。同日・同一配送先で複数件ある場合の連番 suffix は実装時（例: `-2`） |
+| 2 | Unit Size 初期値 | **確定**: リスト作成時は **null**。recipe からの自動填入は **しない**。初回 Generate 成功時に入力値を `invoice_lists.lines` に保存し、**ユーザーが変えない限り以降ずっとその値** |
+| 3 | Units 未入力行 | **確定**: **Generate 不可（エラー）**。全行 Units 必須 |
+| 4 | Royalties / SCHED. DEL. 等 | **確定**: **v1 対象外**（不要） |
+| 5 | メール送信 | **確定: Resend**（`backend/src/services/email.ts`）。Save and Send / Box Send で PDF 添付送信 |
+| 6 | PDF テンプレート詳細 | スプレッドシート概形に合わせる。ロゴ等は後から |
+| 7 | 権限（Cedar） | **確定**: Pricing（Recipe Cost Report）と **同一ルール**（§10-1） |
+| 8 | 日付の保存 | **確定**: Generation 側は Units と同様（DB 不保存・Save 後クリア）。Box は **ヘッダー 3 カラム**（lines には入れない） |
+| 9 | Cost RPC | **確定**: `calculate_item_costs_with_breakdown_scoped`。WL **無関係**（§7-1） |
+| 10 | リスト削除 | **確定**: 削除可。Box 請求は残す（`list_id` ON DELETE SET NULL） |
+| 11 | Unit Size 未入力行 | **確定**: **Generate 不可（エラー）**。全行 unit_size + unit_size_unit 必須 |
+| 12 | invoice_lists.name | **確定**: **tenant 内 UNIQUE**（Pricing のリスト名と同様） |
+| 13 | 品目ピッカー | **確定**: **選択中 tenant 所属のみ**。cross-tenant 共有品目は **選択肢に出さない**（§4-2-1） |
+| 14 | unit_size_unit プルダウン | **確定**: ユーザー選択。候補は item 由来 — g/kg/oz/lb 常時、**each は each_grams > 0 のみ**（§4-5-2） |
+
+10-1. 権限（Cedar 認可・確定 — Pricing と同一）
+
+Invoicing の CRUD / Generate / Send の権限は **Pricing（Recipe Cost Report）と同じ Cedar パターン** とする。
+参考実装: `authorizeRecipeCostReportAccess`（`backend/src/authz/unified/authorize.ts`）、
+`backend/src/routes/recipe-cost-report.ts` のルート middleware。
+
+| スコープ | ロール | 動作 |
+|----------|--------|------|
+| Company | company_admin, company_director | UI で **選択中 tenant** の Invoicing を read/manage |
+| Tenant | admin, director | **自分の tenant** の Invoicing を read/manage |
+
+  manager / staff 等は **v1 では不可**（Pricing と同様）。
+  実装: `policies.cedar` / `schema.json` に Invoicing 用 action
+  （例: `company::read_invoicing`, `company::manage_invoicing`,
+        `tenant::read_invoicing`, `tenant::manage_invoicing`）を追加し、
+  `authorizeInvoicingAccess`（RCR の `authorizeRecipeCostReportAccess` と同型）経由で enforce。
+  API は **`selected_tenant_id` スコープ** でデータを read/write する（横断一覧などの特別仕様は不要）。
+
+
+================================================================================
+11. 明示的に「やらない」こと（初版）
+================================================================================
+
+- Payment Received / Running Balance（入金・残高管理）
+- PDF の DB 常時保存
+- Food Costing メニュー内への Invoicing 配置
+- 請求書の部分行のみ Generate（リスト内一部行だけ — §4-8）
+- Royalties 自動計算行（スプレッドシートの ROYALTY 行）— 除非明示
+
+
+================================================================================
+12. 実装フェーズ（提案）
+================================================================================
+
+Phase 1: 基盤
+  [ ] DB マイグレーション（§8 … 4 テーブル + lines JSONB ×2）
+  [ ] サイドメニュー Invoicing + 3 タブのルーティング
+  [ ] Delivery Information CRUD
+
+Phase 2: Invoice Generation
+  [ ] リスト一覧（Pricing 風）
+  [ ] Create new モーダル（Prepped / Menu / Delivery Site）
+  [ ] リスト詳細（日付 3 種 + 5 列テーブル）
+  [ ] Cost RPC 接続
+  [ ] Edit（アイテム追加）
+  [ ] Generate → PDF プレビューモーダル
+
+Phase 3: Invoice Box + 送信
+  [ ] Save / Save and Send（Box 作成、Generation 側 units クリア等）
+  [ ] Box 一覧・詳細・PDF 再表示
+  [ ] Send + Sent マーク
+  [ ] sub_total / total_amount 整合チェック
+
+Phase 4: 仕上げ
+  [ ] Invoice# 採番
+  [ ] エラー処理・空状態 UI
+  [ ] 手動 QA チェックリスト
+
+
+================================================================================
+13. QA チェックリスト（実装後）
+================================================================================
+
+[ ] サイドメニューに Invoicing があり、Food Costing 内にない
+[ ] Delivery Site 登録 → Create モーダルでプルダウン表示
+[ ] リスト Create → Generate → Box に 1 件。Generation の日付・Units はクリア
+[ ] 日付は Box ヘッダー 3 カラムに保存。lines JSONB に日付が無いこと
+[ ] リスト削除 → Box 請求は残る（list_id が null になる）
+[ ] 同じリストで 2 回目 Generate → Box に 2 件目
+[ ] Unit Size: 初回 Generate 後リストに保存、Box にもスナップショット
+[ ] Unit Size をリスト側で変更 → 次回 Generate は新値、旧 Box レコードは旧値のまま
+[ ] Cost: Generation は RPC 最新、Box は Generate 時点固定
+[ ] Sub tot: Box に保存され PDF と一致
+[ ] Save のみ → Sent なし。Save and Send → Sent あり
+[ ] Box から Send → Sent マーク
+[ ] PDF は DB にファイルとして残らない（ストレージ使用量確認）
+
+
+================================================================================
+14. 用語集
+================================================================================
+
+| 用語 | 意味 |
+|------|------|
+| Unit Size | 1 unit あたりの量。`unit_size`（数値・ユーザー入力）+ `unit_size_unit`（単位・item 由来プルダウン） |
+| Units | 何 unit 分請求するか（都度入力） |
+| Cost | kg あたり単価。`calculate_item_costs_with_breakdown_scoped` の内部原価（WL 無関係） |
+| Sub tot | Unit Size × Units × Cost |
+| Save | Box に記録のみ |
+| Save and Send | Box 記録 + メール送信 + Sent |
+| Sent | 一度でも Send した請求に付くマーク |
+
+================================================================================
+  END
+================================================================================

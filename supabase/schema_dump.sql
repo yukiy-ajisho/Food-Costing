@@ -2917,6 +2917,48 @@ $$;
 ALTER FUNCTION "public"."update_recipe_lines_updated_at"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."update_standard_technical_sheet_version"("p_id" "uuid", "p_tenant_id" "uuid", "p_snapshot" "jsonb", "p_description" "text" DEFAULT NULL::"text", "p_procedure" "text" DEFAULT NULL::"text") RETURNS TABLE("id" "uuid", "version_number" integer, "is_latest" boolean)
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_version integer;
+  v_is_latest boolean;
+BEGIN
+  IF p_id IS NULL OR p_tenant_id IS NULL OR p_snapshot IS NULL THEN
+    RAISE EXCEPTION 'id, tenant_id, and snapshot are required';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(
+    hashtext(p_tenant_id::text || ':' || p_id::text)
+  );
+
+  UPDATE public.standard_technical_sheets sts
+  SET
+    snapshot = p_snapshot,
+    description = NULLIF(TRIM(p_description), ''),
+    procedure = NULLIF(TRIM(p_procedure), '')
+  WHERE sts.id = p_id
+    AND sts.tenant_id = p_tenant_id
+  RETURNING sts.version_number, sts.is_latest
+  INTO v_version, v_is_latest;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'standard technical sheet not found for update';
+  END IF;
+
+  RETURN QUERY SELECT p_id, v_version, v_is_latest;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."update_standard_technical_sheet_version"("p_id" "uuid", "p_tenant_id" "uuid", "p_snapshot" "jsonb", "p_description" "text", "p_procedure" "text") OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."update_standard_technical_sheet_version"("p_id" "uuid", "p_tenant_id" "uuid", "p_snapshot" "jsonb", "p_description" "text", "p_procedure" "text") IS 'Overwrite snapshot (and description/procedure) on an existing Standard TS version row.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."user_jurisdictions_company_match"() RETURNS "trigger"
     LANGUAGE "plpgsql"
     AS $$
@@ -3443,6 +3485,8 @@ CREATE TABLE IF NOT EXISTS "public"."menu_cost_lists" (
     "wholesale_list_id" "uuid",
     "created_by" "uuid" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "caution" numeric,
+    "over" numeric,
     CONSTRAINT "menu_cost_lists_franchise_wl_check" CHECK (((("mode" = 'company_owned'::"text") AND ("wholesale_list_id" IS NULL)) OR (("mode" = 'franchise'::"text") AND ("wholesale_list_id" IS NOT NULL)))),
     CONSTRAINT "menu_cost_lists_mode_check" CHECK (("mode" = ANY (ARRAY['company_owned'::"text", 'franchise'::"text"])))
 );
@@ -3452,6 +3496,14 @@ ALTER TABLE "public"."menu_cost_lists" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."menu_cost_lists" IS 'Recipe Cost Report: menu cost list (company_owned or franchise + WL ref).';
+
+
+
+COMMENT ON COLUMN "public"."menu_cost_lists"."caution" IS 'LCOG% yellow threshold (caution <= LCOG < over)';
+
+
+
+COMMENT ON COLUMN "public"."menu_cost_lists"."over" IS 'LCOG% red threshold (over <= LCOG)';
 
 
 
@@ -3525,6 +3577,31 @@ CREATE TABLE IF NOT EXISTS "public"."profiles" (
 
 
 ALTER TABLE "public"."profiles" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."recipe_cost_report_print_presets" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "report_type" "text" NOT NULL,
+    "preset_slot" smallint NOT NULL,
+    "name" "text" NOT NULL,
+    "col_item" boolean DEFAULT false NOT NULL,
+    "col_type" boolean DEFAULT false NOT NULL,
+    "col_cost" boolean DEFAULT false NOT NULL,
+    "col_price" boolean DEFAULT false NOT NULL,
+    "col_lcog" boolean DEFAULT false NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "recipe_cost_report_print_presets_preset_slot_check" CHECK ((("preset_slot" >= 1) AND ("preset_slot" <= 4))),
+    CONSTRAINT "recipe_cost_report_print_presets_report_type_check" CHECK (("report_type" = ANY (ARRAY['wholesale'::"text", 'retail'::"text"])))
+);
+
+
+ALTER TABLE "public"."recipe_cost_report_print_presets" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."recipe_cost_report_print_presets" IS 'Tenant-scoped print column presets for Wholesale Costing (wholesale) and Pricing Strategy (retail)';
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."recipe_lines" (
@@ -3908,7 +3985,9 @@ CREATE TABLE IF NOT EXISTS "public"."wholesale_lists" (
     "tenant_id" "uuid" NOT NULL,
     "name" "text" NOT NULL,
     "created_by" "uuid" NOT NULL,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "caution" numeric,
+    "over" numeric
 );
 
 
@@ -3916,6 +3995,14 @@ ALTER TABLE "public"."wholesale_lists" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."wholesale_lists" IS 'Recipe Cost Report: wholesale list header per tenant.';
+
+
+
+COMMENT ON COLUMN "public"."wholesale_lists"."caution" IS 'LCOG% yellow threshold (caution <= LCOG < over)';
+
+
+
+COMMENT ON COLUMN "public"."wholesale_lists"."over" IS 'LCOG% red threshold (over <= LCOG)';
 
 
 
@@ -4116,6 +4203,16 @@ ALTER TABLE ONLY "public"."profiles"
 
 ALTER TABLE ONLY "public"."base_items"
     ADD CONSTRAINT "raw_items_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."recipe_cost_report_print_presets"
+    ADD CONSTRAINT "recipe_cost_report_print_pres_tenant_id_report_type_preset__key" UNIQUE ("tenant_id", "report_type", "preset_slot");
+
+
+
+ALTER TABLE ONLY "public"."recipe_cost_report_print_presets"
+    ADD CONSTRAINT "recipe_cost_report_print_presets_pkey" PRIMARY KEY ("id");
 
 
 
@@ -4720,6 +4817,10 @@ CREATE INDEX "idx_wholesale_lists_tenant_id" ON "public"."wholesale_lists" USING
 
 
 
+CREATE INDEX "recipe_cost_report_print_presets_tenant_idx" ON "public"."recipe_cost_report_print_presets" USING "btree" ("tenant_id");
+
+
+
 CREATE UNIQUE INDEX "uq_virtual_vendor_products_unique" ON "public"."virtual_vendor_products" USING "btree" ("vendor_id", "product_name", "tenant_id", COALESCE("case_unit", 0)) WHERE ("product_name" IS NOT NULL);
 
 
@@ -5050,6 +5151,11 @@ ALTER TABLE ONLY "public"."profiles"
 
 
 
+ALTER TABLE ONLY "public"."recipe_cost_report_print_presets"
+    ADD CONSTRAINT "recipe_cost_report_print_presets_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."recipe_lines"
     ADD CONSTRAINT "recipe_lines_child_item_id_fkey" FOREIGN KEY ("child_item_id") REFERENCES "public"."items"("id");
 
@@ -5365,6 +5471,17 @@ CREATE POLICY "menu_cost_lists_tenant_access" ON "public"."menu_cost_lists" USIN
 ALTER TABLE "public"."proceed_validation_settings" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."recipe_cost_report_print_presets" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "recipe_cost_report_print_presets_tenant_access" ON "public"."recipe_cost_report_print_presets" USING (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"())))) WITH CHECK (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"()))));
+
+
+
 ALTER TABLE "public"."recipe_summaries" ENABLE ROW LEVEL SECURITY;
 
 
@@ -5560,6 +5677,12 @@ GRANT ALL ON FUNCTION "public"."update_recipe_lines_updated_at"() TO "service_ro
 
 
 
+GRANT ALL ON FUNCTION "public"."update_standard_technical_sheet_version"("p_id" "uuid", "p_tenant_id" "uuid", "p_snapshot" "jsonb", "p_description" "text", "p_procedure" "text") TO "anon";
+GRANT ALL ON FUNCTION "public"."update_standard_technical_sheet_version"("p_id" "uuid", "p_tenant_id" "uuid", "p_snapshot" "jsonb", "p_description" "text", "p_procedure" "text") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."update_standard_technical_sheet_version"("p_id" "uuid", "p_tenant_id" "uuid", "p_snapshot" "jsonb", "p_description" "text", "p_procedure" "text") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."user_jurisdictions_company_match"() TO "anon";
 GRANT ALL ON FUNCTION "public"."user_jurisdictions_company_match"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."user_jurisdictions_company_match"() TO "service_role";
@@ -5731,6 +5854,12 @@ GRANT ALL ON TABLE "public"."product_mappings" TO "service_role";
 GRANT ALL ON TABLE "public"."profiles" TO "anon";
 GRANT ALL ON TABLE "public"."profiles" TO "authenticated";
 GRANT ALL ON TABLE "public"."profiles" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."recipe_cost_report_print_presets" TO "anon";
+GRANT ALL ON TABLE "public"."recipe_cost_report_print_presets" TO "authenticated";
+GRANT ALL ON TABLE "public"."recipe_cost_report_print_presets" TO "service_role";
 
 
 

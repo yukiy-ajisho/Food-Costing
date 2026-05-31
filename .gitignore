@@ -16,6 +16,7 @@ node_modules/
 # Supabase
 supabase/dump/
 supabase/.env
+supabase/config.toml
 
 # Misc
 .DS_Store

@@ -65,7 +65,8 @@ import {
   defaultUpdateRowChoices,
   effectivePuChoice,
   finalGramsForChoice,
-  isIngredientApplyChoiceNeeded,
+  resolveIngredientApplyAvailabilityForDisplay,
+  resolveIngredientApplyAvailabilityForSave,
   resolveEditTotalRadios,
   resolveEditVendorRadios,
   resolveIngredientApplyMode,
@@ -96,9 +97,9 @@ import {
   defaultLaborUpdateRowChoices,
   laborRoleForDisplay,
   effectiveLaborChoice,
-  isLaborApplyChoiceNeeded,
   laborCostFromWage,
   resolveEditMinutesRadios,
+  resolveLaborApplyAvailabilityForSave,
   resolveLaborApplyMode,
   resolveLaborSnapshotKeysForChoice,
   type LaborUpdateRowChoices,
@@ -117,6 +118,13 @@ type StandardTechnicalSheetViewProps = {
   sourceItemId: string;
   baseRecipeName: string;
   onClose: () => void;
+  /** Stacked desktop-style window (no full-screen backdrop wrapper). */
+  windowMode?: boolean;
+  zIndex?: number;
+  openSourceItemIds?: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
+  costRefreshGeneration?: number;
+  onSheetSaved?: (savedSourceItemId: string) => void;
 };
 
 type SheetData = Omit<
@@ -135,6 +143,57 @@ type DraftRow = RecipeSummaryTechnicalSheetIngredientRow & {
 function ptFromRow(grams: number, pu: number | null): number | null {
   if (pu == null || !Number.isFinite(pu) || grams <= 0) return null;
   return grams * pu;
+}
+
+function canLinkNatureToPreppedSheet(
+  itemId: string,
+  itemById: Map<string, Item>,
+  crossTenantItemIds: ReadonlySet<string>,
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void,
+): boolean {
+  if (!onOpenPreppedSheet || !itemId) return false;
+  if (crossTenantItemIds.has(itemId)) return false;
+  const item = itemById.get(itemId);
+  return !!item && item.item_kind === "prepped";
+}
+
+function NatureCell({
+  row,
+  itemById,
+  crossTenantItemIds,
+  onOpenPreppedSheet,
+  isDark,
+}: {
+  row: { item_id: string; nature: string };
+  itemById: Map<string, Item>;
+  crossTenantItemIds: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
+  isDark: boolean;
+}) {
+  const link = canLinkNatureToPreppedSheet(
+    row.item_id,
+    itemById,
+    crossTenantItemIds,
+    onOpenPreppedSheet,
+  );
+  if (!link) {
+    return <span>{row.nature}</span>;
+  }
+  const linkClass = isDark
+    ? "text-blue-300 hover:text-blue-200 hover:underline"
+    : "text-blue-700 hover:text-blue-900 hover:underline";
+  return (
+    <button
+      type="button"
+      className={`ts-window-no-drag text-left ${linkClass}`}
+      title="Open standard technical sheet for this prepped item"
+      onClick={() =>
+        onOpenPreppedSheet!(row.item_id, row.nature || "Prepped item")
+      }
+    >
+      {row.nature}
+    </button>
+  );
 }
 
 function puCacheKey(itemId: string, specificChild?: string | null): string {
@@ -815,6 +874,8 @@ function TechnicalSheetBody({
   onLaborApplyModeChange,
   snapshotLaborCostByRowKey,
   snapshotLaborTotalCost,
+  crossTenantItemIds,
+  onOpenPreppedSheet,
 }: {
   sheet: SheetData;
   isDark: boolean;
@@ -889,7 +950,10 @@ function TechnicalSheetBody({
     { hourly_wage: number | null; cost: number | null }
   >;
   snapshotLaborTotalCost?: number | null;
+  crossTenantItemIds?: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
 }) {
+  const crossTenantIds = crossTenantItemIds ?? new Set<string>();
   const rows = editRows ?? sheet.ingredient_rows;
   const laborRows = editLaborRows ?? sheet.labor_rows ?? [];
   const showBothPrices = priceMode === "both" && snapshotPriceByRowKey != null;
@@ -1009,6 +1073,8 @@ function TechnicalSheetBody({
               priceMode={priceMode}
               snapshotPriceByRowKey={snapshotPriceByRowKey}
               priceLoading={priceLoading}
+              crossTenantItemIds={crossTenantIds}
+              onOpenPreppedSheet={onOpenPreppedSheet}
             />
               <div className="mt-3 flex justify-end text-right text-sm font-semibold">
                 {priceLoading ? (
@@ -1427,6 +1493,7 @@ function ApplyModeRadios({
   value,
   isDark,
   onChange,
+  showOverride = true,
   showOverwrite = true,
   inactive = false,
 }: {
@@ -1434,8 +1501,9 @@ function ApplyModeRadios({
   value: StandardSheetApplyMode;
   isDark: boolean;
   onChange: (mode: StandardSheetApplyMode) => void;
+  showOverride?: boolean;
   showOverwrite?: boolean;
-  /** No changes in New recipe — neither option applies. */
+  /** No meaningful Apply choice for this row. */
   inactive?: boolean;
 }) {
   const name = `apply-mode-${rowKey}`;
@@ -1475,39 +1543,53 @@ function ApplyModeRadios({
     );
   }
 
-  const locked = !showOverwrite;
-  const effectiveValue: StandardSheetApplyMode = locked ? "override" : value;
+  const overrideLocked = !showOverride;
+  const overwriteLocked = !showOverwrite;
+  let effectiveValue = value;
+  if (overrideLocked && !overwriteLocked) {
+    effectiveValue = "overwrite";
+  } else if (overwriteLocked && !overrideLocked) {
+    effectiveValue = "override";
+  }
+
+  const containerTitle = overwriteLocked
+    ? showOverride
+      ? "Recipe has no line — TS only"
+      : undefined
+    : overrideLocked
+      ? "New recipe matches Current version — Overwrite only"
+      : undefined;
 
   return (
     <div
       className="mx-auto flex w-fit flex-col items-start gap-1"
-      title={locked ? "Recipe has no line — TS only" : undefined}
+      title={containerTitle}
     >
       <label
-        className={`${labelClass}${locked ? " cursor-default" : ""}`}
+        className={`${labelClass}${overrideLocked ? " cursor-default opacity-60" : ""}`}
       >
         <input
           type="radio"
           name={name}
           checked={effectiveValue === "override"}
-          disabled={locked}
-          readOnly={locked}
+          disabled={overrideLocked}
+          readOnly={overrideLocked}
           onChange={() => onChange("override")}
-          className={`h-3 w-3 shrink-0${locked ? " cursor-default" : ""}`}
+          className={`h-3 w-3 shrink-0${overrideLocked ? " cursor-default" : ""}`}
         />
         <span>Override</span>
       </label>
       <label
-        className={`${labelClass}${locked ? " cursor-default opacity-60" : ""}`}
+        className={`${labelClass}${overwriteLocked ? " cursor-default opacity-60" : ""}`}
       >
         <input
           type="radio"
           name={name}
           checked={effectiveValue === "overwrite"}
-          disabled={locked}
-          readOnly={locked}
+          disabled={overwriteLocked}
+          readOnly={overwriteLocked}
           onChange={() => onChange("overwrite")}
-          className={`h-3 w-3 shrink-0${locked ? " cursor-default" : ""}`}
+          className={`h-3 w-3 shrink-0${overwriteLocked ? " cursor-default" : ""}`}
         />
         <span>Overwrite</span>
       </label>
@@ -1547,6 +1629,8 @@ function IngredientTable({
   priceMode = "latest",
   snapshotPriceByRowKey,
   priceLoading,
+  crossTenantItemIds = new Set<string>(),
+  onOpenPreppedSheet,
 }: {
   rows: (RecipeSummaryTechnicalSheetIngredientRow & { row_key?: string })[];
   isDark: boolean;
@@ -1589,6 +1673,8 @@ function IngredientTable({
     { pu: number | null; pt: number | null }
   >;
   priceLoading?: boolean;
+  crossTenantItemIds?: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
 }) {
   const showBothPrices = priceMode === "both" && snapshotPriceByRowKey != null;
   const showUpdateTotal = updateMode && updateMetaByRowKey && updateRowChoices;
@@ -1665,10 +1751,11 @@ function IngredientTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {rows.map((row, rowIndex) => {
             const draft = row as DraftRow;
             const stableRowKey = draft.row_key;
             const rowKey = stableRowKey || rowKeyOf(row);
+            const reactKey = `${rowKey}@${rowIndex}`;
             const meta = updateMetaByRowKey?.get(rowKey);
             const diffType = meta?.diffType ?? "unchanged";
             const isPendingNew = editable && !row.item_id;
@@ -1737,15 +1824,29 @@ function IngredientTable({
               ? unitsForRow(row.item_id)
               : ["g"];
             const item = row.item_id ? itemById.get(row.item_id) : undefined;
-            const isApplyChoiceNeeded = isIngredientApplyChoiceNeeded(
-              diffType,
+            const applyAvailability = resolveIngredientApplyAvailabilityForDisplay(
               meta,
               row,
               item,
               { isManualNewRow, isPendingNew },
             );
             const isApplyInactive =
-              !!updateEditMode && !isApplyModeLocked && !isApplyChoiceNeeded;
+              !!updateEditMode &&
+              !isApplyModeLocked &&
+              applyAvailability.inactive;
+            const showApplyOverride = isApplyModeLocked
+              ? true
+              : applyAvailability.showOverride;
+            const showApplyOverwrite = isApplyModeLocked
+              ? false
+              : applyAvailability.showOverwrite;
+            const applyModeValue = isApplyModeLocked
+              ? "override"
+              : resolveIngredientApplyMode(
+                  rowKey,
+                  applyAvailability,
+                  ingredientApplyModes,
+                );
             const qty = rowQuantity(row);
             const unit = row.unit?.trim() || "g";
             const amountChangeHandler =
@@ -1821,7 +1922,7 @@ function IngredientTable({
 
             return (
               <tr
-                key={stableRowKey || rowKey}
+                key={reactKey}
                 className={isDark ? "text-slate-200" : "text-gray-900"}
               >
                 <td className={`border px-2 py-1 align-top ${rowBgClass}`}>
@@ -1842,7 +1943,13 @@ function IngredientTable({
                       onItemSelect={onNewRowItemSelect}
                     />
                   ) : (
-                    <span>{row.nature}</span>
+                    <NatureCell
+                      row={draft}
+                      itemById={itemById}
+                      crossTenantItemIds={crossTenantItemIds}
+                      onOpenPreppedSheet={onOpenPreppedSheet}
+                      isDark={isDark}
+                    />
                   )}
                 </td>
                 <td
@@ -2022,14 +2129,11 @@ function IngredientTable({
                   >
                     <ApplyModeRadios
                       rowKey={rowKey}
-                      value={
-                        isApplyModeLocked
-                          ? "override"
-                          : (ingredientApplyModes!.get(rowKey) ?? "overwrite")
-                      }
+                      value={applyModeValue}
                       isDark={isDark}
                       inactive={isApplyInactive}
-                      showOverwrite={!isApplyModeLocked}
+                      showOverride={showApplyOverride}
+                      showOverwrite={showApplyOverwrite}
                       onChange={(mode) =>
                         onIngredientApplyModeChange!(rowKey, mode)
                       }
@@ -2108,6 +2212,10 @@ export function StandardTechnicalSheetView({
   sourceItemId,
   baseRecipeName,
   onClose,
+  windowMode = false,
+  onOpenPreppedSheet,
+  costRefreshGeneration = 0,
+  onSheetSaved,
 }: StandardTechnicalSheetViewProps) {
   const [versions, setVersions] = useState<StandardTechnicalSheetVersionMeta[]>(
     [],
@@ -2253,6 +2361,11 @@ export function StandardTechnicalSheetView({
           row.owner_tenant_id,
       }));
   }, [crossTenantShareRows, contextTenants]);
+
+  const crossTenantItemIds = useMemo(
+    () => new Set(crossTenantAvailableItems.map((entry) => entry.item.id)),
+    [crossTenantAvailableItems],
+  );
 
   const loadDetail = useCallback(
     async (versionId: string, mode: StandardTechnicalSheetPriceMode) => {
@@ -3249,11 +3362,11 @@ export function StandardTechnicalSheetView({
           ingredient_rows: editRows.filter(includeIngredientRow).map((r) => {
             const meta = updateMetaByRowKey?.get(r.row_key);
             const item = r.item_id ? itemById.get(r.item_id) : undefined;
-            const choiceNeeded = isIngredientApplyChoiceNeeded(
-              meta?.diffType,
+            const applyAvailability = resolveIngredientApplyAvailabilityForSave(
               meta,
               r,
               item,
+              saveMode,
               {
                 isManualNewRow: meta == null && !r.item_id,
                 isPendingNew: !r.item_id,
@@ -3266,7 +3379,7 @@ export function StandardTechnicalSheetView({
               step_quantities: r.step_quantities,
               apply_mode: resolveIngredientApplyMode(
                 r.row_key,
-                choiceNeeded,
+                applyAvailability,
                 ingredientApplyModes,
               ),
             };
@@ -3275,10 +3388,10 @@ export function StandardTechnicalSheetView({
             .filter(includeLaborRow)
             .map((r) => {
               const meta = laborUpdateMetaByRowKey?.get(r.row_key);
-              const choiceNeeded = isLaborApplyChoiceNeeded(
-                meta?.diffType,
+              const applyAvailability = resolveLaborApplyAvailabilityForSave(
                 meta,
                 r,
+                saveMode,
                 { isNew: r.isNew },
               );
               return {
@@ -3291,7 +3404,7 @@ export function StandardTechnicalSheetView({
                 minutes: r.minutes,
                 apply_mode: resolveLaborApplyMode(
                   r.row_key,
-                  choiceNeeded,
+                  applyAvailability,
                   laborApplyModes,
                 ),
               };
@@ -3310,6 +3423,7 @@ export function StandardTechnicalSheetView({
       setSelectedVersionId(savedId);
       cancelEditUpdate();
       await loadDetail(savedId, priceMode);
+      onSheetSaved?.(sourceItemId);
     } catch (e) {
       console.error(e);
       const message = e instanceof Error ? e.message : String(e);
@@ -3318,6 +3432,90 @@ export function StandardTechnicalSheetView({
       setSavePending(false);
     }
   };
+
+  const refreshCostsFromExternalSave = useCallback(async () => {
+    if (viewMode === "sheet") {
+      if (
+        !selectedVersionId ||
+        (priceMode !== "latest" && priceMode !== "both")
+      ) {
+        return;
+      }
+      setPriceLoading(true);
+      try {
+        await loadDetail(selectedVersionId, priceMode);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setPriceLoading(false);
+      }
+      return;
+    }
+    if (!editRows) return;
+    const preppedIds = [
+      ...new Set(
+        editRows
+          .filter((row) => {
+            if (!row.item_id || crossTenantItemIds.has(row.item_id)) {
+              return false;
+            }
+            const item = itemById.get(row.item_id);
+            return item?.item_kind === "prepped";
+          })
+          .map((row) => row.item_id),
+      ),
+    ];
+    if (preppedIds.length === 0) return;
+    try {
+      const { costs } = await costAPI.getCostsBreakdownMissing(preppedIds);
+      const cacheUpdates = new Map<string, number | null>();
+      updateEditRows((prev) => {
+        if (!prev) return prev;
+        const next = prev.map((row) => {
+          const item = itemById.get(row.item_id);
+          if (item?.item_kind !== "prepped") return row;
+          const entry = costs[row.item_id];
+          const pu =
+            entry &&
+            Number.isFinite(entry.total_cost_per_gram) &&
+            entry.total_cost_per_gram > 0
+              ? entry.total_cost_per_gram
+              : null;
+          const updated: DraftRow = { ...row, puLoading: false };
+          applyPuToRow(updated, pu);
+          cacheUpdates.set(puCacheKey(row.item_id, row.specific_child), pu);
+          return updated;
+        });
+        setEditHasUnpriced(recomputeTotals(next).hasUnpriced);
+        return next;
+      });
+      if (cacheUpdates.size > 0) {
+        setCostCache((c) => {
+          const merged = new Map(c);
+          for (const [key, pu] of cacheUpdates) merged.set(key, pu);
+          return merged;
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [
+    viewMode,
+    selectedVersionId,
+    priceMode,
+    loadDetail,
+    editRows,
+    itemById,
+    crossTenantItemIds,
+  ]);
+
+  const prevCostRefreshRef = useRef(costRefreshGeneration);
+  useEffect(() => {
+    if (costRefreshGeneration === prevCostRefreshRef.current) return;
+    prevCostRefreshRef.current = costRefreshGeneration;
+    if (costRefreshGeneration <= 0) return;
+    void refreshCostsFromExternalSave();
+  }, [costRefreshGeneration, refreshCostsFromExternalSave]);
 
   const sheet = displaySheet;
   const modalClass = isDark
@@ -3342,18 +3540,17 @@ export function StandardTechnicalSheetView({
     !sheetLoading &&
     !!sheet;
 
-  return (
-    <>
-      <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/50 p-1.5">
-        <div
-          className={`flex h-[100vh] w-[100vw] max-w-none flex-col overflow-hidden rounded-xl border shadow-2xl ${modalClass}`}
-          role="dialog"
-        >
-          <ModalHeader
-            isDark={isDark}
-            title={`Standard Technical Sheet — ${baseRecipeName}`}
-            onClose={onClose}
-          />
+  const panel = (
+    <div
+      className={`flex h-[100vh] w-[100vw] max-w-none flex-col overflow-hidden rounded-xl border shadow-2xl ${modalClass}`}
+      role="dialog"
+    >
+      <ModalHeader
+        isDark={isDark}
+        title={`Standard Technical Sheet — ${baseRecipeName}`}
+        onClose={onClose}
+        windowMode={windowMode}
+      />
 
           <div
             className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-6 py-3 ${isDark ? "border-slate-700" : "border-gray-200"}`}
@@ -3590,13 +3787,23 @@ export function StandardTechnicalSheetView({
                   snapshotLaborTotalCost={
                     viewMode === "sheet" ? snapshotLaborTotalCost : undefined
                   }
+                  crossTenantItemIds={crossTenantItemIds}
+                  onOpenPreppedSheet={onOpenPreppedSheet}
                 />
                 </>
               )}
           </div>
-        </div>
-      </div>
-    </>
+    </div>
+  );
+
+  if (windowMode) {
+    return panel;
+  }
+
+  return (
+    <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/50 p-1.5">
+      {panel}
+    </div>
   );
 }
 
@@ -3648,20 +3855,22 @@ function ModalHeader({
   isDark,
   title,
   onClose,
+  windowMode,
 }: {
   isDark: boolean;
   title: string;
   onClose: () => void;
+  windowMode?: boolean;
 }) {
   return (
     <div
-      className={`flex items-center justify-between border-b px-6 py-4 ${isDark ? "border-slate-700" : "border-gray-200"}`}
+      className={`flex items-center justify-between border-b px-6 py-4 ${isDark ? "border-slate-700" : "border-gray-200"} ${windowMode ? "ts-window-drag-handle cursor-move" : ""}`}
     >
-      <h3 className="text-lg font-semibold">{title}</h3>
+      <h3 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h3>
       <button
         type="button"
         onClick={onClose}
-        className={`rounded px-2 py-1 text-sm ${isDark ? "hover:bg-slate-800" : "hover:bg-gray-100"}`}
+        className={`ts-window-no-drag shrink-0 rounded px-2 py-1 text-sm ${isDark ? "hover:bg-slate-800" : "hover:bg-gray-100"}`}
       >
         Close
       </button>

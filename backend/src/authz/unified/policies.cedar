@@ -76,6 +76,57 @@ when {
   principal.tenant_role == "manager"
 };
 
+// Invoicing: 親会社の company_admin / company_director
+permit (
+  principal,
+  action,
+  resource
+)
+when {
+  action in [
+    Action::"company::read_invoicing",
+    Action::"company::manage_invoicing"
+  ] &&
+  resource is Tenant &&
+  principal has company_role &&
+  (principal.company_role == "company_admin" || principal.company_role == "company_director")
+};
+
+// Invoicing: テナント admin / director
+permit (
+  principal,
+  action,
+  resource
+)
+when {
+  action in [
+    Action::"tenant::read_invoicing",
+    Action::"tenant::manage_invoicing"
+  ] &&
+  resource is Tenant &&
+  principal has tenant_role &&
+  principal has tenant_id &&
+  (principal.tenant_role == "admin" || principal.tenant_role == "director")
+};
+
+// Invoicing: manager の Tenant 全許可より優先（Invoicing 専用 action のみ拒否）
+forbid (
+  principal,
+  action,
+  resource
+)
+when {
+  action in [
+    Action::"tenant::read_invoicing",
+    Action::"tenant::manage_invoicing",
+    Action::"company::read_invoicing",
+    Action::"company::manage_invoicing"
+  ] &&
+  resource is Tenant &&
+  principal has tenant_role &&
+  principal.tenant_role == "manager"
+};
+
 // ----- Tenant scope: RBAC (admin, director = full; manager with prepped rule; staff = read) -----
 // Admin and director: full access (director = admin equivalent at tenant level)
 permit (

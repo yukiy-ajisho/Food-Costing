@@ -1,0 +1,952 @@
+import { Router, type NextFunction, type Request, type Response } from "express";
+import { supabase } from "../config/supabase";
+import { authorizeInvoicingAccess } from "../authz/unified/authorize";
+import { withTenantFilter } from "../middleware/tenant-filter";
+import { computeScopedBreakdownCosts } from "../services/franchise-menu-cost";
+import { sendInvoiceEmail } from "../services/email";
+import {
+  allocateInvoiceNumber,
+  computeInvoicingSubTotal,
+  subTotalsMatch,
+} from "../lib/invoicing-calc";
+import {
+  INVOICE_COLUMNS,
+  LIST_COLUMNS,
+  assertDeliverySiteInTenant,
+  buildInitialLines,
+  enrichInvoiceListLines,
+  fetchEffectiveEachGramsByItemIds,
+  fetchInvoicingItemCandidates,
+  mergeUnitSizesIntoListLines,
+  normalizeInvoiceBoxLines,
+  normalizeInvoiceListLines,
+  validateBoxLineCostsAgainstRpc,
+  validateBoxLinesCoverAllListLines,
+  validateInvoicingItemIds,
+  type InvoiceBoxLineJson,
+} from "../services/invoicing-data";
+
+const router = Router();
+
+router.use(async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const tenantId =
+      req.user.selected_tenant_id || req.user.tenant_ids[0] || undefined;
+    if (!tenantId) {
+      return res.status(403).json({ error: "No tenant associated" });
+    }
+    const mode =
+      req.method === "GET" || req.method === "HEAD" ? "read" : "manage";
+    const allowed = await authorizeInvoicingAccess(
+      req.user.id,
+      tenantId,
+      mode,
+      req.user.roles,
+    );
+    if (!allowed) {
+      return res
+        .status(403)
+        .json({ error: "Forbidden: Insufficient permissions" });
+    }
+    next();
+  } catch (e: unknown) {
+    console.error("Invoicing authorization error:", e);
+    return res.status(500).json({ error: "Authorization check failed" });
+  }
+});
+
+function resolveTenantId(req: Request): string {
+  const tenantId =
+    req.user!.selected_tenant_id || req.user!.tenant_ids[0] || undefined;
+  if (!tenantId) {
+    throw new Error("No tenant associated");
+  }
+  return tenantId;
+}
+
+const DELIVERY_SITE_COLUMNS =
+  "id, tenant_id, name, street, city, state_zip, phone_1, phone_2, email, created_at, updated_at";
+
+type DeliverySiteBody = {
+  name?: string;
+  street?: string | null;
+  city?: string | null;
+  state_zip?: string | null;
+  phone_1?: string | null;
+  phone_2?: string | null;
+  email?: string;
+};
+
+function normalizeOptionalText(value: unknown): string | null {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function parseDeliverySiteBody(body: DeliverySiteBody): {
+  name: string;
+  street: string | null;
+  city: string | null;
+  state_zip: string | null;
+  phone_1: string | null;
+  phone_2: string | null;
+  email: string;
+} | { error: string } {
+  const name = body.name?.trim() ?? "";
+  const email = body.email?.trim() ?? "";
+  if (!name) return { error: "name is required" };
+  if (!email) return { error: "email is required" };
+  return {
+    name,
+    email,
+    street: normalizeOptionalText(body.street),
+    city: normalizeOptionalText(body.city),
+    state_zip: normalizeOptionalText(body.state_zip),
+    phone_1: normalizeOptionalText(body.phone_1),
+    phone_2: normalizeOptionalText(body.phone_2),
+  };
+}
+
+/**
+ * GET /invoicing/delivery-sites
+ */
+router.get("/delivery-sites", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const { data, error } = await withTenantFilter(
+      supabase
+        .from("delivery_sites")
+        .select(DELIVERY_SITE_COLUMNS)
+        .order("name", { ascending: true }),
+      req,
+    );
+
+    if (error) {
+      console.error(`delivery_sites list error (tenant ${tenantId}):`, error);
+      return res.status(500).json({ error: "Failed to list delivery sites" });
+    }
+
+    res.json({ sites: data ?? [] });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /invoicing/delivery-sites
+ */
+router.post("/delivery-sites", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const parsed = parseDeliverySiteBody(req.body ?? {});
+    if ("error" in parsed) {
+      return res.status(400).json({ error: parsed.error });
+    }
+
+    const { data, error } = await supabase
+      .from("delivery_sites")
+      .insert({
+        tenant_id: tenantId,
+        ...parsed,
+      })
+      .select(DELIVERY_SITE_COLUMNS)
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res
+          .status(409)
+          .json({ error: "A delivery site with this name already exists" });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(201).json({ site: data });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PATCH /invoicing/delivery-sites/:id
+ */
+router.patch("/delivery-sites/:id", async (req, res) => {
+  try {
+    const siteId = req.params.id?.trim();
+    if (!siteId) return res.status(400).json({ error: "id is required" });
+
+    const parsed = parseDeliverySiteBody(req.body ?? {});
+    if ("error" in parsed) {
+      return res.status(400).json({ error: parsed.error });
+    }
+
+    const { data: existing, error: fetchError } = await withTenantFilter(
+      supabase.from("delivery_sites").select("id").eq("id", siteId),
+      req,
+    ).maybeSingle();
+
+    if (fetchError) {
+      return res.status(500).json({ error: fetchError.message });
+    }
+    if (!existing) {
+      return res.status(404).json({ error: "Delivery site not found" });
+    }
+
+    const { data, error } = await withTenantFilter(
+      supabase
+        .from("delivery_sites")
+        .update(parsed)
+        .eq("id", siteId)
+        .select(DELIVERY_SITE_COLUMNS),
+      req,
+    ).single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res
+          .status(409)
+          .json({ error: "A delivery site with this name already exists" });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ site: data });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /invoicing/delivery-sites/:id
+ */
+router.delete("/delivery-sites/:id", async (req, res) => {
+  try {
+    const siteId = req.params.id?.trim();
+    if (!siteId) return res.status(400).json({ error: "id is required" });
+
+    const { data: existing, error: fetchError } = await withTenantFilter(
+      supabase.from("delivery_sites").select("id").eq("id", siteId),
+      req,
+    ).maybeSingle();
+
+    if (fetchError) {
+      return res.status(500).json({ error: fetchError.message });
+    }
+    if (!existing) {
+      return res.status(404).json({ error: "Delivery site not found" });
+    }
+
+    const { error } = await withTenantFilter(
+      supabase.from("delivery_sites").delete().eq("id", siteId),
+      req,
+    );
+
+    if (error) {
+      if (error.code === "23503") {
+        return res.status(409).json({
+          error:
+            "Cannot delete: one or more invoice lists still reference this delivery site",
+        });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.status(204).send();
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/item-candidates
+ * Tenant-owned prepped/menu only (no cross-tenant).
+ */
+router.get("/item-candidates", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const items = await fetchInvoicingItemCandidates(tenantId);
+    res.json({ items });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/lists
+ */
+router.get("/lists", async (req, res) => {
+  try {
+    const { data, error } = await withTenantFilter(
+      supabase
+        .from("invoice_lists")
+        .select("id, name, delivery_site_id, created_at, updated_at")
+        .order("name"),
+      req,
+    );
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ lists: data ?? [] });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /invoicing/lists
+ * Body: { name, delivery_site_id, item_ids: string[] }
+ */
+router.post("/lists", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const userId = req.user!.id;
+    const name = String(req.body?.name ?? "").trim();
+    const deliverySiteId = String(req.body?.delivery_site_id ?? "").trim();
+    const itemIds = Array.isArray(req.body?.item_ids)
+      ? (req.body.item_ids as string[]).filter(Boolean)
+      : [];
+
+    if (!name) return res.status(400).json({ error: "name is required" });
+    if (!deliverySiteId) {
+      return res.status(400).json({ error: "delivery_site_id is required" });
+    }
+    if (itemIds.length === 0) {
+      return res.status(400).json({ error: "At least one item is required" });
+    }
+
+    const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
+    if (!siteOk) {
+      return res.status(400).json({ error: "Invalid delivery_site_id" });
+    }
+
+    const validIds = await validateInvoicingItemIds(tenantId, itemIds);
+    if (validIds.length !== itemIds.length) {
+      return res.status(400).json({
+        error: "One or more items are invalid or not in this tenant",
+      });
+    }
+
+    const lines = buildInitialLines(validIds);
+    const { data: list, error } = await supabase
+      .from("invoice_lists")
+      .insert({
+        tenant_id: tenantId,
+        name,
+        delivery_site_id: deliverySiteId,
+        lines,
+        created_by: userId,
+      })
+      .select(LIST_COLUMNS)
+      .single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res
+          .status(409)
+          .json({ error: "An invoice list with this name already exists" });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
+    const items = await enrichInvoiceListLines(tenantId, lines);
+    const { data: site } = await supabase
+      .from("delivery_sites")
+      .select("id, name, email")
+      .eq("id", deliverySiteId)
+      .maybeSingle();
+
+    res.status(201).json({
+      list,
+      items,
+      delivery_site: site ?? null,
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/lists/:id
+ */
+router.get("/lists/:id", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const listId = req.params.id?.trim();
+    if (!listId) return res.status(400).json({ error: "id is required" });
+
+    const { data: list, error: listErr } = await withTenantFilter(
+      supabase.from("invoice_lists").select(LIST_COLUMNS).eq("id", listId),
+      req,
+    ).maybeSingle();
+    if (listErr) return res.status(500).json({ error: listErr.message });
+    if (!list) return res.status(404).json({ error: "List not found" });
+
+    const normalized = normalizeInvoiceListLines(list.lines);
+    if ("error" in normalized) {
+      return res.status(500).json({ error: normalized.error });
+    }
+
+    const items = await enrichInvoiceListLines(tenantId, normalized);
+    const { data: site } = await supabase
+      .from("delivery_sites")
+      .select("id, name, email, street, city, state_zip, phone_1, phone_2")
+      .eq("id", list.delivery_site_id)
+      .maybeSingle();
+
+    res.json({ list: { ...list, lines: normalized }, items, delivery_site: site });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PATCH /invoicing/lists/:id
+ * Body: { name?, delivery_site_id?, lines? }
+ */
+router.patch("/lists/:id", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const listId = req.params.id?.trim();
+    if (!listId) return res.status(400).json({ error: "id is required" });
+
+    const { data: existing, error: fetchErr } = await withTenantFilter(
+      supabase.from("invoice_lists").select("id").eq("id", listId),
+      req,
+    ).maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!existing) return res.status(404).json({ error: "List not found" });
+
+    const patch: Record<string, unknown> = {};
+    if (req.body?.name != null) {
+      const name = String(req.body.name).trim();
+      if (!name) return res.status(400).json({ error: "name cannot be empty" });
+      patch.name = name;
+    }
+    if (req.body?.delivery_site_id != null) {
+      const deliverySiteId = String(req.body.delivery_site_id).trim();
+      if (!deliverySiteId) {
+        return res.status(400).json({ error: "delivery_site_id cannot be empty" });
+      }
+      const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
+      if (!siteOk) {
+        return res.status(400).json({ error: "Invalid delivery_site_id" });
+      }
+      patch.delivery_site_id = deliverySiteId;
+    }
+    if (req.body?.lines != null) {
+      const normalized = normalizeInvoiceListLines(req.body.lines);
+      if ("error" in normalized) {
+        return res.status(400).json({ error: normalized.error });
+      }
+      const itemIds = normalized.map((l) => l.item_id);
+      const validIds = await validateInvoicingItemIds(tenantId, itemIds);
+      if (validIds.length !== itemIds.length) {
+        return res.status(400).json({
+          error: "One or more items are invalid or not in this tenant",
+        });
+      }
+      patch.lines = normalized;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
+    const { data: list, error } = await withTenantFilter(
+      supabase
+        .from("invoice_lists")
+        .update(patch)
+        .eq("id", listId)
+        .select(LIST_COLUMNS),
+      req,
+    ).single();
+
+    if (error) {
+      if (error.code === "23505") {
+        return res
+          .status(409)
+          .json({ error: "An invoice list with this name already exists" });
+      }
+      return res.status(400).json({ error: error.message });
+    }
+
+    const normalized = normalizeInvoiceListLines(list.lines);
+    if ("error" in normalized) {
+      return res.status(500).json({ error: normalized.error });
+    }
+    const items = await enrichInvoiceListLines(tenantId, normalized);
+    const { data: site } = await supabase
+      .from("delivery_sites")
+      .select("id, name, email")
+      .eq("id", list.delivery_site_id)
+      .maybeSingle();
+
+    res.json({
+      list: { ...list, lines: normalized },
+      items,
+      delivery_site: site ?? null,
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /invoicing/lists/:id
+ */
+router.delete("/lists/:id", async (req, res) => {
+  try {
+    const listId = req.params.id?.trim();
+    if (!listId) return res.status(400).json({ error: "id is required" });
+
+    const { data: existing, error: fetchErr } = await withTenantFilter(
+      supabase.from("invoice_lists").select("id").eq("id", listId),
+      req,
+    ).maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!existing) return res.status(404).json({ error: "List not found" });
+
+    const { error } = await withTenantFilter(
+      supabase.from("invoice_lists").delete().eq("id", listId),
+      req,
+    );
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(204).send();
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/lists/:id/costs
+ */
+router.get("/lists/:id/costs", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const listId = req.params.id?.trim();
+    if (!listId) return res.status(400).json({ error: "id is required" });
+
+    const { data: list, error: listErr } = await withTenantFilter(
+      supabase.from("invoice_lists").select("lines").eq("id", listId),
+      req,
+    ).maybeSingle();
+    if (listErr) return res.status(500).json({ error: listErr.message });
+    if (!list) return res.status(404).json({ error: "List not found" });
+
+    const normalized = normalizeInvoiceListLines(list.lines);
+    if ("error" in normalized) {
+      return res.status(500).json({ error: normalized.error });
+    }
+
+    const itemIds = normalized.map((l) => l.item_id);
+    const costs = await computeScopedBreakdownCosts(tenantId, itemIds);
+    res.json({ costs });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+function parseOptionalIsoDate(
+  value: unknown,
+  field: string,
+): string | null | { error: string } {
+  if (value == null || value === "") return null;
+  const s = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return { error: `${field} must be YYYY-MM-DD` };
+  }
+  return s;
+}
+
+function parseRequiredIsoDate(
+  value: unknown,
+  field: string,
+): string | { error: string } {
+  if (value == null || value === "") {
+    return { error: `${field} is required` };
+  }
+  const s = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return { error: `${field} must be YYYY-MM-DD` };
+  }
+  return s;
+}
+
+async function validateBoxInvoiceAmounts(
+  tenantId: string,
+  lines: InvoiceBoxLineJson[],
+  totalAmount: number,
+): Promise<string | null> {
+  if (!Array.isArray(lines) || lines.length === 0) {
+    return "At least one line is required";
+  }
+  const itemIds = lines.map((l) => l.item_id);
+  const eachGrams = await fetchEffectiveEachGramsByItemIds(tenantId, itemIds);
+  let sum = 0;
+  for (const line of lines) {
+    const expected = computeInvoicingSubTotal(
+      line.unit_size,
+      line.unit_size_unit,
+      line.units,
+      line.cost,
+      eachGrams.get(line.item_id) ?? null,
+    );
+    if (!subTotalsMatch(expected, line.sub_total)) {
+      return `sub_total mismatch for "${line.name}"`;
+    }
+    sum += line.sub_total;
+  }
+  if (!subTotalsMatch(sum, totalAmount)) {
+    return "total_amount does not match sum of line sub_totals";
+  }
+  return null;
+}
+
+/**
+ * GET /invoicing/invoices
+ */
+router.get("/invoices", async (req, res) => {
+  try {
+    const { data, error } = await withTenantFilter(
+      supabase
+        .from("invoice_box_invoices")
+        .select(
+          "id, invoice_number, invoice_date, total_amount, delivery_site_name, sent_at, created_at",
+        )
+        .order("created_at", { ascending: false }),
+      req,
+    );
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ invoices: data ?? [] });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/invoices/:id
+ */
+router.get("/invoices/:id", async (req, res) => {
+  try {
+    const invoiceId = req.params.id?.trim();
+    if (!invoiceId) return res.status(400).json({ error: "id is required" });
+
+    const { data: invoice, error } = await withTenantFilter(
+      supabase.from("invoice_box_invoices").select(INVOICE_COLUMNS).eq("id", invoiceId),
+      req,
+    ).maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+
+    const normalized = normalizeInvoiceBoxLines(invoice.lines);
+    if ("error" in normalized) {
+      return res.status(500).json({ error: normalized.error });
+    }
+
+    res.json({ invoice: { ...invoice, lines: normalized } });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /invoicing/invoices
+ * Save or Save and Send from Generation preview.
+ */
+router.post("/invoices", async (req, res) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const userId = req.user!.id;
+
+    const listId = String(req.body?.list_id ?? "").trim();
+    const deliverySiteId = String(req.body?.delivery_site_id ?? "").trim();
+    const send = Boolean(req.body?.send);
+    const pdfBase64 =
+      typeof req.body?.pdf_base64 === "string"
+        ? req.body.pdf_base64.trim()
+        : "";
+
+    if (!listId) return res.status(400).json({ error: "list_id is required" });
+    if (!deliverySiteId) {
+      return res.status(400).json({ error: "delivery_site_id is required" });
+    }
+    if (send && !pdfBase64) {
+      return res.status(400).json({ error: "pdf_base64 is required when send is true" });
+    }
+
+    const invoiceDateParsed = parseRequiredIsoDate(
+      req.body?.invoice_date,
+      "invoice_date",
+    );
+    if (typeof invoiceDateParsed === "object" && "error" in invoiceDateParsed) {
+      return res.status(400).json({ error: invoiceDateParsed.error });
+    }
+    const invoiceDate = invoiceDateParsed as string;
+
+    const orderReceivedParsed = parseOptionalIsoDate(
+      req.body?.order_received_date,
+      "order_received_date",
+    );
+    if (
+      typeof orderReceivedParsed === "object" &&
+      orderReceivedParsed !== null &&
+      "error" in orderReceivedParsed
+    ) {
+      return res.status(400).json({ error: orderReceivedParsed.error });
+    }
+    const deliveryDateParsed = parseOptionalIsoDate(
+      req.body?.delivery_date,
+      "delivery_date",
+    );
+    if (
+      typeof deliveryDateParsed === "object" &&
+      deliveryDateParsed !== null &&
+      "error" in deliveryDateParsed
+    ) {
+      return res.status(400).json({ error: deliveryDateParsed.error });
+    }
+
+    const totalAmount = Number(req.body?.total_amount);
+    if (!Number.isFinite(totalAmount) || totalAmount < 0) {
+      return res.status(400).json({ error: "total_amount must be >= 0" });
+    }
+
+    const normalizedLines = normalizeInvoiceBoxLines(req.body?.lines);
+    if ("error" in normalizedLines) {
+      return res.status(400).json({ error: normalizedLines.error });
+    }
+
+    const amountError = await validateBoxInvoiceAmounts(
+      tenantId,
+      normalizedLines,
+      totalAmount,
+    );
+    if (amountError) {
+      return res.status(400).json({ error: amountError });
+    }
+
+    const { data: list, error: listErr } = await withTenantFilter(
+      supabase.from("invoice_lists").select(LIST_COLUMNS).eq("id", listId),
+      req,
+    ).maybeSingle();
+    if (listErr) return res.status(500).json({ error: listErr.message });
+    if (!list) return res.status(404).json({ error: "List not found" });
+
+    if (list.delivery_site_id !== deliverySiteId) {
+      return res.status(400).json({ error: "delivery_site_id does not match list" });
+    }
+
+    const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
+    if (!siteOk) {
+      return res.status(400).json({ error: "Invalid delivery_site_id" });
+    }
+
+    const { data: site, error: siteErr } = await supabase
+      .from("delivery_sites")
+      .select("id, name, email")
+      .eq("tenant_id", tenantId)
+      .eq("id", deliverySiteId)
+      .maybeSingle();
+    if (siteErr) return res.status(500).json({ error: siteErr.message });
+    if (!site) return res.status(400).json({ error: "Delivery site not found" });
+
+    const listLines = normalizeInvoiceListLines(list.lines);
+    if ("error" in listLines) {
+      return res.status(500).json({ error: listLines.error });
+    }
+
+    const coverageError = validateBoxLinesCoverAllListLines(
+      listLines,
+      normalizedLines,
+    );
+    if (coverageError) {
+      return res.status(400).json({ error: coverageError });
+    }
+
+    const itemIds = normalizedLines.map((l) => l.item_id);
+    const rpcCosts = await computeScopedBreakdownCosts(tenantId, itemIds);
+    const costError = validateBoxLineCostsAgainstRpc(normalizedLines, rpcCosts);
+    if (costError) {
+      return res.status(400).json({ error: costError });
+    }
+
+    const invoiceNumber = await allocateInvoiceNumber(
+      tenantId,
+      site.name,
+      invoiceDate,
+      async (prefix) => {
+        const { data, error: numErr } = await supabase
+          .from("invoice_box_invoices")
+          .select("invoice_number")
+          .eq("tenant_id", tenantId)
+          .like("invoice_number", `${prefix}%`);
+        if (numErr) throw new Error(numErr.message);
+        return (data ?? []).map((r) => r.invoice_number);
+      },
+    );
+
+    const updatedListLines = mergeUnitSizesIntoListLines(
+      listLines,
+      normalizedLines,
+    );
+
+    const { data: invoiceRow, error: saveErr } = await supabase.rpc(
+      "save_invoicing_box_invoice_atomic",
+      {
+        p_tenant_id: tenantId,
+        p_user_id: userId,
+        p_list_id: listId,
+        p_delivery_site_id: deliverySiteId,
+        p_invoice_number: invoiceNumber,
+        p_delivery_site_name: site.name,
+        p_delivery_email: site.email,
+        p_order_received_date: orderReceivedParsed,
+        p_delivery_date: deliveryDateParsed,
+        p_invoice_date: invoiceDate,
+        p_total_amount: totalAmount,
+        p_lines: normalizedLines,
+        p_updated_list_lines: updatedListLines,
+      },
+    );
+
+    if (saveErr) {
+      if (saveErr.code === "23505") {
+        return res.status(409).json({ error: "Invoice number conflict; retry" });
+      }
+      return res.status(400).json({ error: saveErr.message });
+    }
+
+    const invoice = invoiceRow as Record<string, unknown>;
+    const invoiceId = String(invoice.id ?? "");
+
+    let sentAt: string | null = null;
+    let emailSent = false;
+    let emailError: string | undefined;
+
+    if (send) {
+      try {
+        await sendInvoiceEmail({
+          to: site.email,
+          deliverySiteName: site.name,
+          invoiceNumber,
+          invoiceDate,
+          totalAmount,
+          pdfBase64,
+        });
+        emailSent = true;
+        const now = new Date().toISOString();
+        const { data: sentRow, error: sentErr } = await supabase
+          .from("invoice_box_invoices")
+          .update({ sent_at: now })
+          .eq("id", invoiceId)
+          .eq("tenant_id", tenantId)
+          .select(INVOICE_COLUMNS)
+          .single();
+        if (sentErr) {
+          console.error("Invoice saved but sent_at update failed:", sentErr);
+          emailError = "Email sent but failed to record Sent status";
+        } else {
+          sentAt = sentRow.sent_at;
+        }
+      } catch (emailErr: unknown) {
+        emailError =
+          emailErr instanceof Error ? emailErr.message : String(emailErr);
+      }
+    }
+
+    res.status(201).json({
+      invoice: {
+        ...invoice,
+        lines: normalizedLines,
+        sent_at: sentAt ?? invoice.sent_at ?? null,
+      },
+      email_sent: send ? emailSent : undefined,
+      email_error: emailError,
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /invoicing/invoices/:id/send
+ */
+router.post("/invoices/:id/send", async (req, res) => {
+  try {
+    const invoiceId = req.params.id?.trim();
+    if (!invoiceId) return res.status(400).json({ error: "id is required" });
+
+    const pdfBase64 =
+      typeof req.body?.pdf_base64 === "string"
+        ? req.body.pdf_base64.trim()
+        : "";
+    if (!pdfBase64) {
+      return res.status(400).json({ error: "pdf_base64 is required" });
+    }
+
+    const { data: invoice, error: fetchErr } = await withTenantFilter(
+      supabase.from("invoice_box_invoices").select(INVOICE_COLUMNS).eq("id", invoiceId),
+      req,
+    ).maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+
+    const invoiceDate = invoice.invoice_date ?? "";
+    if (!invoiceDate) {
+      return res.status(400).json({ error: "Invoice has no invoice_date" });
+    }
+
+    try {
+      await sendInvoiceEmail({
+        to: invoice.delivery_email,
+        deliverySiteName: invoice.delivery_site_name,
+        invoiceNumber: invoice.invoice_number,
+        invoiceDate,
+        totalAmount: Number(invoice.total_amount),
+        pdfBase64,
+      });
+    } catch (emailErr: unknown) {
+      const message =
+        emailErr instanceof Error ? emailErr.message : String(emailErr);
+      return res.status(502).json({ error: `Email failed: ${message}` });
+    }
+
+    const now = new Date().toISOString();
+    const { data: updated, error: updateErr } = await withTenantFilter(
+      supabase
+        .from("invoice_box_invoices")
+        .update({ sent_at: now })
+        .eq("id", invoiceId)
+        .select(INVOICE_COLUMNS),
+      req,
+    ).single();
+    if (updateErr) return res.status(500).json({ error: updateErr.message });
+
+    const normalized = normalizeInvoiceBoxLines(updated.lines);
+    if ("error" in normalized) {
+      return res.status(500).json({ error: normalized.error });
+    }
+
+    res.json({ invoice: { ...updated, lines: normalized } });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+export default router;

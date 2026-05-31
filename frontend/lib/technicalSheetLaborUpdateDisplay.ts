@@ -1,4 +1,8 @@
-import type { StandardRecipeDiff, StandardSheetApplyMode } from "@/lib/api";
+import type {
+  StandardRecipeDiff,
+  StandardSheetApplyMode,
+  StandardSheetSaveMode,
+} from "@/lib/api";
 import type { PuChoice } from "@/lib/technicalSheetUpdateDisplay";
 
 export type LaborUpdateRowChoices = {
@@ -338,24 +342,143 @@ export function laborRowDiffersFromVersions(
   return false;
 }
 
+export function laborMatchesCurrentVersion(
+  meta: LaborUpdateRowMeta,
+  row: { labor_role: string; minutes: number },
+): boolean {
+  return (
+    roleMatchesSheet(meta, row.labor_role) &&
+    minutesMatchesSheet(meta, row.minutes)
+  );
+}
+
+export function laborMatchesRecipeDatabase(
+  meta: LaborUpdateRowMeta,
+  row: { labor_role: string; minutes: number },
+): boolean {
+  return (
+    roleMatchesLive(meta, row.labor_role) &&
+    minutesMatchesLive(meta, row.minutes)
+  );
+}
+
+export type LaborApplyAvailability = {
+  inactive: boolean;
+  showOverride: boolean;
+  showOverwrite: boolean;
+  defaultMode: StandardSheetApplyMode;
+};
+
+function laborApplyAvailabilityBase(
+  meta: LaborUpdateRowMeta | undefined,
+  row: { labor_role: string; minutes: number },
+  opts?: { isNew?: boolean },
+): LaborApplyAvailability {
+  if (opts?.isNew || meta == null) {
+    return {
+      inactive: false,
+      showOverride: true,
+      showOverwrite: true,
+      defaultMode: "overwrite",
+    };
+  }
+
+  const matchesCurrent = laborMatchesCurrentVersion(meta, row);
+  const matchesLive = laborMatchesRecipeDatabase(meta, row);
+
+  if (matchesCurrent && matchesLive) {
+    return {
+      inactive: true,
+      showOverride: false,
+      showOverwrite: false,
+      defaultMode: "override",
+    };
+  }
+
+  if (matchesLive && !matchesCurrent) {
+    return {
+      inactive: false,
+      showOverride: true,
+      showOverwrite: false,
+      defaultMode: "override",
+    };
+  }
+
+  if (matchesCurrent && !matchesLive) {
+    return {
+      inactive: false,
+      showOverride: true,
+      showOverwrite: true,
+      defaultMode: "overwrite",
+    };
+  }
+
+  return {
+    inactive: false,
+    showOverride: true,
+    showOverwrite: true,
+    defaultMode: "overwrite",
+  };
+}
+
+export function resolveLaborApplyAvailabilityForDisplay(
+  meta: LaborUpdateRowMeta | undefined,
+  row: { labor_role: string; minutes: number },
+  opts?: { isNew?: boolean },
+): LaborApplyAvailability {
+  return laborApplyAvailabilityBase(meta, row, opts);
+}
+
+export function resolveLaborApplyAvailabilityForSave(
+  meta: LaborUpdateRowMeta | undefined,
+  row: { labor_role: string; minutes: number },
+  saveMode: StandardSheetSaveMode,
+  opts?: { isNew?: boolean },
+): LaborApplyAvailability {
+  const base = laborApplyAvailabilityBase(meta, row, opts);
+
+  if (
+    saveMode === "this_version" &&
+    base.showOverride &&
+    base.showOverwrite &&
+    !base.inactive &&
+    meta != null
+  ) {
+    const matchesCurrent = laborMatchesCurrentVersion(meta, row);
+    const matchesLive = laborMatchesRecipeDatabase(meta, row);
+    if (matchesCurrent && !matchesLive) {
+      return {
+        inactive: false,
+        showOverride: false,
+        showOverwrite: true,
+        defaultMode: "overwrite",
+      };
+    }
+  }
+
+  return base;
+}
+
+/** @deprecated Use resolveLaborApplyAvailabilityForDisplay().inactive */
 export function isLaborApplyChoiceNeeded(
   diffType: LaborUpdateDiffType | undefined,
   meta: LaborUpdateRowMeta | undefined,
   row: { labor_role: string; minutes: number },
   opts?: { isNew?: boolean },
 ): boolean {
-  if (opts?.isNew || meta == null) return true;
-  if (diffType !== "unchanged") return true;
-  return laborRowDiffersFromVersions(meta, row);
+  void diffType;
+  return !resolveLaborApplyAvailabilityForDisplay(meta, row, opts).inactive;
 }
 
 export function resolveLaborApplyMode(
   rowKey: string,
-  choiceNeeded: boolean,
+  availability: LaborApplyAvailability,
   modes: Map<string, StandardSheetApplyMode> | undefined,
 ): StandardSheetApplyMode {
-  if (!choiceNeeded) return "override";
-  return modes?.get(rowKey) ?? "overwrite";
+  if (availability.inactive) return "override";
+  if (!availability.showOverwrite) return "override";
+  if (!availability.showOverride) return "overwrite";
+  return modes?.get(rowKey) ?? availability.defaultMode;
 }
 
 export function resolveEditMinutesRadios(

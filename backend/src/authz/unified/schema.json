@@ -148,6 +148,20 @@
           "principalTypes": ["Principal"]
         }
       },
+      "company::read_invoicing": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "company::manage_invoicing": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
       "tenant::TenantRead": {
         "memberOf": [],
         "appliesTo": {
@@ -312,6 +326,20 @@
         }
       },
       "tenant::manage_recipe_cost_report": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::read_invoicing": {
+        "memberOf": [],
+        "appliesTo": {
+          "resourceTypes": ["Tenant"],
+          "principalTypes": ["Principal"]
+        }
+      },
+      "tenant::manage_invoicing": {
         "memberOf": [],
         "appliesTo": {
           "resourceTypes": ["Tenant"],

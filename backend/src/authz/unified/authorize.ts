@@ -51,6 +51,8 @@ export const UnifiedCompanyAction = {
   manage_tenant_team: "company::manage_tenant_team",
   read_recipe_cost_report: "company::read_recipe_cost_report",
   manage_recipe_cost_report: "company::manage_recipe_cost_report",
+  read_invoicing: "company::read_invoicing",
+  manage_invoicing: "company::manage_invoicing",
 } as const;
 
 /** Tenant スコープ Action（計画書 2.2） */
@@ -68,6 +70,8 @@ export const UnifiedTenantAction = {
   manage_members: "tenant::manage_members",
   read_recipe_cost_report: "tenant::read_recipe_cost_report",
   manage_recipe_cost_report: "tenant::manage_recipe_cost_report",
+  read_invoicing: "tenant::read_invoicing",
+  manage_invoicing: "tenant::manage_invoicing",
 } as const;
 
 /** company::* で Tenant リソースを対象にする Action（manage_tenant_team と同様に company_role を解決） */
@@ -75,6 +79,8 @@ const COMPANY_ACTIONS_ON_TENANT: ReadonlySet<string> = new Set([
   UnifiedCompanyAction.manage_tenant_team,
   UnifiedCompanyAction.read_recipe_cost_report,
   UnifiedCompanyAction.manage_recipe_cost_report,
+  UnifiedCompanyAction.read_invoicing,
+  UnifiedCompanyAction.manage_invoicing,
 ]);
 
 type LegacyCrudAction = "read" | "create" | "update" | "delete";
@@ -654,6 +660,43 @@ export async function authorizeRecipeCostReportAccess(
     mode === "read"
       ? UnifiedTenantAction.read_recipe_cost_report
       : UnifiedTenantAction.manage_recipe_cost_report;
+
+  return authorizeUnified(userId, tenantAction, resource, undefined, {
+    tenantId,
+    tenantRole,
+  });
+}
+
+export type InvoicingAuthMode = "read" | "manage";
+
+/**
+ * Invoicing: Pricing（Recipe Cost Report）と同一 — 会社オフィサーまたはテナント admin/director。
+ */
+export async function authorizeInvoicingAccess(
+  userId: string,
+  tenantId: string,
+  mode: InvoicingAuthMode,
+  rolesMap: Map<string, string>,
+): Promise<boolean> {
+  const resource: UnifiedResource = { type: "Tenant", id: tenantId };
+  const companyAction =
+    mode === "read"
+      ? UnifiedCompanyAction.read_invoicing
+      : UnifiedCompanyAction.manage_invoicing;
+
+  if (await authorizeUnified(userId, companyAction, resource)) {
+    return true;
+  }
+
+  const tenantRole = rolesMap.get(tenantId);
+  if (!tenantRole) {
+    return false;
+  }
+
+  const tenantAction =
+    mode === "read"
+      ? UnifiedTenantAction.read_invoicing
+      : UnifiedTenantAction.manage_invoicing;
 
   return authorizeUnified(userId, tenantAction, resource, undefined, {
     tenantId,
