@@ -2423,7 +2423,7 @@ export default function CompanyRequirementsPage() {
                                 isDark ? "text-slate-400" : "text-gray-600"
                               }`}
                             >
-                              From Uploaded Document Box
+                              From Upload Box
                             </label>
                             {detailInboxPicksLoading ? (
                               <p
@@ -2479,7 +2479,7 @@ export default function CompanyRequirementsPage() {
                               >
                                 {detailInboxPicks.find(
                                   (p) => p.id === detailSelectedInboxId,
-                                )?.file_name ?? "Uploaded Document Box item"}
+                                )?.file_name ?? "Upload Box item"}
                               </span>
                               <button
                                 type="button"

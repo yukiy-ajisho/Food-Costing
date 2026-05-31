@@ -1,0 +1,11 @@
+{
+  "name": "food-costing-supabase-test",
+  "private": true,
+  "description": "Local cost RPC integration verify (see run-cost-rpc-verify.sh)",
+  "scripts": {
+    "verify": "node verify-cost-rpc.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}

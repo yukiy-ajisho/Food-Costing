@@ -1,0 +1,284 @@
+================================================================================
+  STANDARD TECHNICAL SHEET — ネストウィンドウ & Prepped ドリルダウン 計画
+  対象: food_costing プロジェクト
+  作成日: 2026-05-29
+  ステータス: 実装済み（2026-05-29）
+================================================================================
+
+本書は、Standard Technical Sheet（以下 TS）について会話で合意した
+「Prepped 材料のドリルダウン」「デスクトップ風ウィンドウ」「子孫変更時の親 PU/PT 更新」
+を一括でまとめたものである。
+
+関連ドキュメント:
+- docs/technical-sheet-plan.txt … Standard TS 全体設計
+- docs/standard-technical-sheet-edit-update-revision.txt … Edit/Update・Save モード（実装済み）
+
+既存実装の参照:
+- frontend/components/StandardTechnicalSheetView.tsx
+- frontend/components/RecipeSummaryPanel.tsx
+- frontend/lib/recipeCostReportRealtime.ts … Realtime（本機能では v1 未使用）
+
+
+================================================================================
+1. 背景・課題
+================================================================================
+
+1-1. Costing の制約（現状・変更しない前提）
+
+- レシピ（recipe_lines）はアイテムごとに1本。parent_item_id = そのアイテム自身。
+- メニュー A の行に Prepped B がある場合、A の画面で編集できるのは
+  「B を何 g 使うか」などの参照。B の中身（B の recipe_lines）は
+  Costing で B を開かないと編集できない。
+- これは DB 設計として正しい。本改修は Costing の構造を変えない。
+
+1-2. TS で解決したいこと
+
+- TS 上で Prepped 材料の「中身」にもたどり着き、Recipe Summary の View と
+  同じ StandardTechnicalSheetView（閲覧・Edit/Update・Save 含む）で作業したい。
+- 孫・曾孫を変更したら、親ウィンドウの PU / PT / 合計が追従して変わるべき。
+- 親の変更が孫のレシピ内容を変えることはない（コスト伝播は下→上のみ）。
+
+
+================================================================================
+2. 目標（確定）
+================================================================================
+
+2-1. Prepped ドリルダウン
+
+- TS の View（sheet モード）および Edit/Update 表示で、材料行の **Nature** が
+  Prepped アイテムを指す場合、クリック可能にする。
+- クリック → その Prepped の **source_item_id** で、Recipe Summary の
+  **View** ボタンと同じ TS を開く（同一コンポーネント・同一機能）。
+- 開いた TS にさらに Prepped 材料があれば、同様にクリックで子ウィンドウを開く。
+  （例: A → B,C / B → D,E / D → F まで辿れる）
+
+2-2. デスクトップ風ウィンドウ（外枠のみ変更）
+
+- 現行: 全画面1枚 + 背面 dim（fixed inset-0, 100vh × 100vw）。
+- 変更後:
+  - **1枚あたりのサイズは現行と同じ**（100vh × 100vw 相当。枚数で縮小しない）。
+  - **中身（StandardTechnicalSheetView の表・Edit/Update・Save 等）は一切変えない。**
+  - 複数枚を重ねて表示可能。
+  - **クリックしたウィンドウが最前面**（z-index）。
+  - **タイトルバーをドラッグ**して移動（パネル全体が動く）。
+  - 新規オープン時は位置だけ少しずらす（カスケード。サイズは不変）。
+
+2-3. 子孫保存後の親の金額更新
+
+- 子・孫でレシピ / TS を Save しコスト木が変わったら、
+  スタック上の **親ウィンドウ** の該当行 PU・PT・材料合計を更新する。
+- 価格表示モード:
+  - **Current（latest）** … 再取得して動的更新
+  - **Snapshot** … 版に凍結した値のまま（更新しない）
+  - **Current(snapshot)** … Current 列のみ更新
+- 伝播方向: **下→上のみ**（親が孫の recipe_lines を書き換えることはない）。
+
+
+================================================================================
+3. 明示的に「やらない」こと（v1）
+================================================================================
+
+3-1. 親子の Save / Cancel ロック
+
+- 子ウィンドウが開いている間、親の Save を禁止する等の制限は **不要**。
+- 理由: 各ウィンドウは別 source_item_id。DB 上は独立した保存。
+  フルサイズ重ね UI では最前面だけ操作するのが自然。
+
+3-2. Supabase Realtime（v1）
+
+- 現状 Realtime が publication に入っているのは
+  wholesale_list_lines（Recipe Cost Report）のみ。Pricing 専用ではない。
+- recipe_lines / コスト計算結果は Realtime 未配信。
+- v1 は **子 TS で Save 成功 → 親へコールバック** で PU 再取得で足りる。
+- 別タブ・別ユーザー同期が必要になったら v2 で publication 追加を検討。
+
+3-3. リサイズ
+
+- ウィンドウのリサイズハンドルは付けない（現行サイズ固定）。
+
+3-4. Costing 本体の変更
+
+- recipe_lines の親子モデル、Costing 一覧での編集フローは変更しない。
+
+
+================================================================================
+4. 技術方針（確定）
+================================================================================
+
+4-1. 依存ライブラリ
+
+- **react-draggable** を追加（ドラッグ専用）。
+- **react-rnd は使わない**（リサイズ不要・フル画面パネルと相性が余計）。
+- z-index スタック・Nature クリック・Save 後コールバックは **自前**。
+
+4-2. コンポーネント構成（案）
+
+- **TechnicalSheetWindowStack**（新規）
+  - state: WindowEntry[] = { windowId, sourceItemId, baseRecipeName, x, y, zIndex }
+  - 薄い backdrop は共有1枚、または最下層のみ（要実装時調整）
+  - 各 entry を react-draggable でラップし、中に既存 StandardTechnicalSheetView を配置
+
+- **StandardTechnicalSheetView**（既存・中身維持）
+  - 追加 props（案）:
+    - stackDepth?: number
+    - onOpenPreppedSheet?: (sourceItemId: string, name: string) => void
+    - onDescendantSaved?: (changedItemId: string) => void
+    - onCloseWindow?: () => void  … 単一ウィンドウ閉じ（×）
+  - 外側の fixed inset-0 ラッパーは Stack 側に移し、View は「中身」に寄せる
+
+- **RecipeSummaryPanel**
+  - 現行 setStandardView(null) の1枚表示を WindowStack に差し替え
+
+4-3. Nature クリック（Prepped）
+
+- itemById で item_kind === "prepped" かつ **同一テナント** のみリンク。
+- **cross-tenant で共有された材料**（他テナントの item_id）は Nature を
+  クリック不可（通常テキスト）。中身の TS は見せない（仕様・運用上も不要）。
+- **スタック循環ガード（UI のみ）**: すでに開いている sourceItemId を
+  再度 Nature から開かない。目的は無限ドリルダウン防止。
+  ※ レシピ木の A→B→A 自体は保存時に拒否される想定（§10 参照）。
+  正常データでは「メニューが自分を材料に戻る」ことはない。
+
+4-4. 親 PU / PT 更新（Save コールバック）
+
+- 子で saveStandardSheetVersion 成功後、changedSourceItemId を親へ通知。
+- 親は自分の sheet / edit 行のうち、child item_id が
+  変更ツリーに含まれる Prepped 行について:
+  - costAPI.getCostsBreakdownMissing([itemId]) で PU 再取得
+  - applyPuToRow / recomputeTotals または loadDetail（priceMode が latest 時）
+- 多段スタック: 通知を **全ての下位から上位へバブル**（F 保存 → D,B,A が該当行を更新）。
+
+4-5. ドラッグ実装メモ
+
+- handle: ModalHeader 相当（タイトルバーのみ）。
+- cancel: 表内 input / button / select はドラッグ開始しない。
+- bounds: ビューポート内にクランプ（react-draggable の bounds オプション）。
+- defaultPosition: 新規は (24 * stackIndex, 24 * stackIndex) など。
+
+
+================================================================================
+5. UX 仕様まとめ
+================================================================================
+
+| 操作 | 挙動 |
+|------|------|
+| Recipe Summary → View | 第1ウィンドウを開く（従来どおり） |
+| Nature（Prepped）クリック | 子ウィンドウを1枚追加 |
+| ウィンドウクリック | 最前面へ |
+| ヘッダードラッグ | 位置移動（サイズ不変） |
+| × / Close | そのウィンドウのみ閉じる |
+| 子で Save | 子の TS + 子の overwrite 行は既存ロジック。親は PU/PT 更新 |
+| 親で Save | 親のみ。子のレコードを上書きしない |
+
+Save as new version / Save this version / Override・Overwrite の意味は
+standard-technical-sheet-edit-update-revision.txt のまま。
+
+
+================================================================================
+6. 実装タスク（チェックリスト）
+================================================================================
+
+[x] frontend: react-draggable 追加
+[x] TechnicalSheetWindowStack 新規（frontend/components/TechnicalSheetWindowStack.tsx）
+[x] StandardTechnicalSheetView: 外枠分離 + props（open prepped / descendant saved / close）
+[x] Ingredient 表: Nature の Prepped リンク UI（sheet + editUpdate）
+[x] RecipeSummaryPanel: Stack 接続
+[x] Save 成功時 onSheetSaved → costRefreshGeneration で全ウィンドウ通知
+[x] 親の PU/PT・total 再計算（latest / both の Current 側）
+[x] スタック循環ガード（同一 sourceItemId は前面へフォーカスのみ）
+[x] cross-tenant 行は Nature リンクにしない
+[ ] 手動 QA: A→B→D→F ドリル、F Save 後 A の B 行 PU 変化、ドラッグ・前面・閉じる
+
+
+================================================================================
+7. テスト・受け入れ基準
+================================================================================
+
+7-1. ウィンドウ
+
+- 3枚以上開いても各パネルサイズが現行フル画面と同じであること。
+- ドラッグでずらし、クリックで前面に出ること。
+- 表の入力・スクロールがドラッグと干渉しないこと。
+
+7-2. ドリルダウン
+
+- Prepped の Nature から子 TS が開き、Edit/Update・Save が使えること。
+- Raw の Nature はリンクにならないこと。
+
+7-3. コスト伝播
+
+- 孫 F を Save（overwrite 含む）後、親 D・曾孫 B・A の **Current** PU/PT が
+  再取得結果と一致すること（Snapshot 列は変わらないこと）。
+
+7-4. 独立性
+
+- 子を開いたまま親を Save できること（エラーにならないこと）。
+- 子 Save が親の snapshot 行を直接書き換えないこと（親の Save 操作時のみ）。
+
+
+================================================================================
+8. 将来（v2 以降・任意）
+================================================================================
+
+- Supabase Realtime: recipe_lines の UPDATE を publication に追加し、
+  他タブ編集時も親 PU を自動更新。
+- 「このアイテムをメインウィンドウにする」（スタックを1枚に置き換え）。
+- ウィンドウ一覧 / 最小化（タスクバー風）。
+
+
+================================================================================
+10. 循環参照（Costing / TS 既存・今回 UI との関係）
+================================================================================
+
+10-1. レシピに A→B→A は「普通は存在しない」
+
+- Prepped の材料は recipe_lines の DAG。A が（直接・間接的に）自分を
+  子にすると循環になり、コスト計算も破綻する。
+- ユーザー指摘どおり、**正しく保存されたデータに A→B→A のメニューはない**
+  のが正常。
+
+10-2. +Add ingredients のとき、いつ cycle を見るか
+
+【Costing】
+- フロントの cycle-detection.ts による保存前チェックは **コメントアウト済み**
+  （バックエンドに依存）。
+- **Save 時** recipeLinesAPI.batch が走り、バックエンドで
+  checkCycleCrossTenant を実行。循環があれば **400 + エラーメッセージ**、
+  フロントは alert で保存失敗（DB には書き込まれない）。
+- **材料をプルダウンで選んだ瞬間**にはブロックしない（保存まで許す UI）。
+
+【Standard TS】
+- saveStandardSheetVersion の前に validateSheetEditsNoCycle
+  （overwrite で recipe_lines に反映する行をシミュレートして検査）。
+- 循環なら RecipeDependencyCycleError → API 400、保存不可。
+
+10-3. 計画の「スタック循環」との違い
+
+- あれは **レシピが循環しているか** ではなく、
+  「TS ウィンドウで同じアイテムを何度も開いてモーダルが増え続ける」
+  UI 事故の防止。データが健全なら通常は発動しない。
+
+
+================================================================================
+11. Cross-tenant 材料（確定・2026-05-29 追記）
+================================================================================
+
+- 共有された他テナントの Prepped を Nature から辿って子 TS を開かない。
+- クリック不可（リンクにしない）。技術的に API で取れる場合でも v1 では
+  ナビゲーション対象外。
+- 同一テナントの Prepped のみドリルダウン可。
+
+
+================================================================================
+9. 合意経緯（簡記）
+================================================================================
+
+- Costing では Prepped 中身は当該アイテムでしか編集できない → TS で辿れるようにする。
+- View 専用ではなく、Recipe Summary の View と同じ TS（編集可）を重ねる。
+- 親子 Save ロックは不要（別 item_id）。
+- Realtime は v1 では使わず Save コールバックで親 PU 更新。
+- ライブラリは react-draggable。中身・サイズは現行モーダルと同一維持。
+
+================================================================================
+  END
+================================================================================

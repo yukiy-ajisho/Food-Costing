@@ -1,11 +1,10 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { canAccessRecipeCostReport } from "@/lib/recipeCostReportAccess";
 import { RecipeCostReportListPage } from "@/components/recipe-cost-report/RecipeCostReportListPage";
 
 type ReportTab = "wholesale" | "menu";
@@ -19,22 +18,8 @@ function RecipeCostReportPageContent() {
   const isDark = theme === "dark";
   const router = useRouter();
   const searchParams = useSearchParams();
-  const {
-    companies,
-    selectedCompanyId,
-    loading: companyLoading,
-  } = useCompany();
-  const { selectedTenantId, tenants, loading: tenantLoading } = useTenant();
-  const canAccess = useMemo(
-    () =>
-      canAccessRecipeCostReport(
-        selectedCompanyId,
-        selectedTenantId,
-        companies,
-        tenants,
-      ),
-    [selectedCompanyId, selectedTenantId, companies, tenants],
-  );
+  const { loading: companyLoading } = useCompany();
+  const { loading: tenantLoading } = useTenant();
   const activeTab = tabFromSearchParams(searchParams);
 
   const setActiveTab = (tab: ReportTab) => {
@@ -48,20 +33,6 @@ function RecipeCostReportPageContent() {
     return (
       <div className={`flex h-full items-center justify-center p-12 text-sm ${textMuted}`}>
         Loading…
-      </div>
-    );
-  }
-
-  if (!canAccess) {
-    return (
-      <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
-        <div className="mx-auto max-w-lg rounded-lg border border-red-200 bg-red-50 p-6 text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
-          <h1 className="mb-2 text-lg font-semibold">Pricing</h1>
-          <p className="text-sm">
-            Pricing is available to company administrators and directors,
-            or tenant administrators and directors only.
-          </p>
-        </div>
       </div>
     );
   }

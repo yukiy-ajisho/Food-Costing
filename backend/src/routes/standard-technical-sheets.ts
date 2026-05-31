@@ -15,12 +15,82 @@ import {
   insertStandardVersion,
   listVersionsForSource,
   saveStandardSheetEdits,
+  saveStandardSheetVersion,
+  type ApplyMode,
+  type SaveMode,
   type StandardSheetEditPayload,
+  type StandardSheetSavePayload,
 } from "../services/standard-technical-sheet";
 import type { StandardSnapshot } from "../services/technical-sheet-builder";
 import { RecipeDependencyCycleError } from "../services/cycle-detection-cross-tenant";
 
 const router = Router();
+
+function parseApplyMode(raw: unknown): ApplyMode {
+  const v = String(raw ?? "overwrite").trim().toLowerCase();
+  if (v === "override") return "override";
+  return "overwrite";
+}
+
+function parseSaveMode(raw: unknown): SaveMode {
+  const v = String(raw ?? "").trim().toLowerCase();
+  if (v === "this_version" || v === "this") return "this_version";
+  return "new_version";
+}
+
+function parseSheetSavePayload(body: unknown): StandardSheetSavePayload {
+  const raw = body as Record<string, unknown>;
+  const base = parseSheetEditPayload(body);
+  const rawIngRows = Array.isArray(raw?.ingredient_rows)
+    ? (raw.ingredient_rows as Record<string, unknown>[])
+    : [];
+  const applyByItemId = new Map<string, ApplyMode>();
+  for (const src of rawIngRows) {
+    const id = String(src.item_id ?? "").trim();
+    if (id) applyByItemId.set(id, parseApplyMode(src.apply_mode));
+  }
+  const ingredient_rows = base.ingredient_rows.map((row) => ({
+    ...row,
+    apply_mode: applyByItemId.get(row.item_id) ?? "overwrite",
+  }));
+  const rawLaborRows = Array.isArray(raw?.labor_rows)
+    ? (raw.labor_rows as Record<string, unknown>[])
+    : [];
+  const applyByLaborKey = new Map<string, ApplyMode>();
+  for (const src of rawLaborRows) {
+    const key = String(src.row_key ?? "").trim();
+    if (key) applyByLaborKey.set(key, parseApplyMode(src.apply_mode));
+  }
+  const labor_rows = (base.labor_rows ?? []).map((row) => {
+    const key = row.row_key?.trim() ?? "";
+    return {
+      ...row,
+      apply_mode: key ? (applyByLaborKey.get(key) ?? "overwrite") : "overwrite",
+    };
+  });
+  const excluded_ingredients = Array.isArray(raw?.excluded_ingredients)
+    ? raw.excluded_ingredients
+        .map((e: Record<string, unknown>) => ({
+          item_id: String(e.item_id ?? "").trim(),
+          apply_mode: parseApplyMode(e.apply_mode),
+        }))
+        .filter((e) => e.item_id.length > 0)
+    : undefined;
+  const excluded_labor = Array.isArray(raw?.excluded_labor)
+    ? raw.excluded_labor
+        .map((e: Record<string, unknown>) => ({
+          row_key: String(e.row_key ?? "").trim(),
+          apply_mode: parseApplyMode(e.apply_mode),
+        }))
+        .filter((e) => e.row_key.length > 0)
+    : undefined;
+  return {
+    ingredient_rows,
+    labor_rows,
+    excluded_ingredients,
+    excluded_labor,
+  };
+}
 
 function parseSheetEditPayload(body: unknown): StandardSheetEditPayload {
   const raw = body as Record<string, unknown>;
@@ -242,13 +312,6 @@ router.get("/:id/recipe-diff", async (req, res) => {
       return res
         .status(404)
         .json({ error: "standard technical sheet not found" });
-    if (!row.is_latest) {
-      return res
-        .status(404)
-        .json({
-          error: "recipe diff is only available for the latest version",
-        });
-    }
 
     const snapshot = row.snapshot as StandardSnapshot;
     const diff = await getRecipeDiffForLatest(
@@ -263,7 +326,77 @@ router.get("/:id/recipe-diff", async (req, res) => {
   }
 });
 
-/** Edit save: apply sheet to recipe + new version */
+/** Save: Save this version or Save as new version */
+router.post("/:id/save", async (req, res) => {
+  try {
+    const tenantId = selectedTenantId(req);
+    const id = String(req.params.id ?? "").trim();
+    if (!id) return res.status(400).json({ error: "id is required" });
+
+    let query = supabase
+      .from("standard_technical_sheets")
+      .select("*")
+      .eq("id", id);
+    query = withTenantFilter(query, req);
+    const { data: row, error } = await query.maybeSingle();
+    if (error) return res.status(500).json({ error: error.message });
+    if (!row)
+      return res
+        .status(404)
+        .json({ error: "standard technical sheet not found" });
+
+    let payload: StandardSheetSavePayload;
+    try {
+      payload = parseSheetSavePayload(req.body);
+    } catch (parseErr: unknown) {
+      const message =
+        parseErr instanceof Error ? parseErr.message : String(parseErr);
+      return res.status(400).json({ error: message });
+    }
+    if (!payload.ingredient_rows.length) {
+      return res
+        .status(400)
+        .json({ error: "ingredient_rows must contain at least one row" });
+    }
+
+    const saveMode = parseSaveMode(
+      (req.body as Record<string, unknown>)?.save_mode,
+    );
+    const { description, procedure } = parseCreateVersionBody(req.body);
+
+    const saved = await saveStandardSheetVersion({
+      sheetId: row.id,
+      tenantId,
+      tenantIds: tenantIds(req),
+      sourceItemId: row.source_item_id,
+      createdBy: req.user!.id,
+      description:
+        description !== undefined ? description : (row.description ?? null),
+      procedure:
+        procedure !== undefined ? procedure : (row.procedure ?? null),
+      saveMode,
+      isLatest: row.is_latest === true,
+      payload,
+    });
+
+    return res.status(saveMode === "this_version" ? 200 : 201).json({
+      id: saved.id,
+      version_number: saved.version_number,
+      is_latest: saved.is_latest,
+    });
+  } catch (error: unknown) {
+    if (error instanceof RecipeDependencyCycleError) {
+      return res.status(400).json({ error: error.message });
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("only allowed on the latest version")) {
+      return res.status(400).json({ error: message });
+    }
+    return res.status(500).json({ error: message });
+  }
+});
+
+/** Edit save (legacy): apply sheet to recipe + new version */
 router.post("/:id/save-edits", async (req, res) => {
   try {
     const tenantId = selectedTenantId(req);
@@ -281,11 +414,6 @@ router.post("/:id/save-edits", async (req, res) => {
       return res
         .status(404)
         .json({ error: "standard technical sheet not found" });
-    if (!row.is_latest) {
-      return res
-        .status(400)
-        .json({ error: "only the latest version can be edited" });
-    }
 
     let payload: StandardSheetEditPayload;
     try {

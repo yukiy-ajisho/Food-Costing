@@ -48,6 +48,7 @@ import documentInboxRouter from "./routes/document-inbox";
 import recipeSummariesRouter from "./routes/recipe-summaries";
 import standardTechnicalSheetsRouter from "./routes/standard-technical-sheets";
 import recipeCostReportRouter from "./routes/recipe-cost-report";
+import invoicingRouter from "./routes/invoicing";
 import { getR2Client, getR2BucketName } from "./config/r2";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
@@ -158,6 +159,7 @@ app.use("/document-inbox", authMiddleware(), documentInboxRouter);
 app.use("/recipe-summaries", authMiddleware(), recipeSummariesRouter);
 app.use("/standard-technical-sheets", authMiddleware(), standardTechnicalSheetsRouter);
 app.use("/recipe-cost-report", authMiddleware(), recipeCostReportRouter);
+app.use("/invoicing", authMiddleware(), invoicingRouter);
 
 // ============================================
 // 認証が必要なルート（汎用パス - 最後に配置）

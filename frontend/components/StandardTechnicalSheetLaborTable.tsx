@@ -2,7 +2,7 @@
 
 import { CornerUpLeft, Loader2, Plus, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { LaborRole, RecipeSummaryTechnicalSheetLaborRow } from "@/lib/api";
+import type { LaborRole, RecipeSummaryTechnicalSheetLaborRow, StandardSheetApplyMode } from "@/lib/api";
 import {
   effectiveLaborChoice,
   formatLaborCost,
@@ -10,6 +10,8 @@ import {
   formatLaborWage,
   laborRoleForDisplay,
   resolveEditMinutesRadios,
+  resolveLaborApplyAvailabilityForDisplay,
+  resolveLaborApplyMode,
   showLaborMinutesVersionSplit,
   type LaborUpdateDiffType,
   type LaborUpdateRowChoices,
@@ -41,11 +43,11 @@ function UpdateTripleHeader({
       <div
         className={`grid ${showFinalColumn ? "grid-cols-3" : "grid-cols-2"} text-[10px] font-medium ${isDark ? "text-slate-300" : "text-gray-600"}`}
       >
-        <div className="border-r px-1 py-1">This version</div>
+        <div className="border-r px-1 py-1">Current version</div>
         <div className={`px-1 py-1 ${showFinalColumn ? "border-r" : ""}`}>
-          Current
+          Recipe database
         </div>
-        {showFinalColumn ? <div className="px-1 py-1">Final</div> : null}
+        {showFinalColumn ? <div className="px-1 py-1">New recipe</div> : null}
       </div>
     </div>
   );
@@ -55,85 +57,176 @@ function VersionTripleCell({
   rowKey,
   radioGroup,
   isDark,
-  showSplit,
   showFinalColumn = true,
   showRadios,
   effectiveChoice,
   onChoiceChange,
   sheetContent,
   liveContent,
-  mergedContent,
   finalContent,
 }: {
   rowKey: string;
   radioGroup: string;
   isDark: boolean;
-  showSplit: boolean;
   showFinalColumn?: boolean;
   showRadios: boolean;
   effectiveChoice: PuChoice;
   onChoiceChange?: (rowKey: string, choice: PuChoice) => void;
   sheetContent: ReactNode;
   liveContent: ReactNode;
-  mergedContent: ReactNode;
   finalContent: ReactNode;
 }) {
-  const cellClass = `flex items-center justify-end gap-0.5 border-r px-1 py-1 ${
+  const cellClass = `flex h-full items-center justify-end gap-0.5 border-r px-1 py-1 ${
     isDark ? "text-slate-200" : "text-gray-800"
   }`;
   const radioName = `labor-choice-${radioGroup}-${rowKey}`;
-  const mergedCellClass = `flex items-center justify-center px-1 py-1 ${
-    isDark ? "text-slate-200" : "text-gray-800"
-  }`;
+
   const gridCols = showFinalColumn ? "grid-cols-3" : "grid-cols-2";
   const liveCellClass = showFinalColumn
     ? cellClass
     : `${cellClass.replace(" border-r", "")} px-1 py-1`;
+  const finalCellClass = `flex h-full items-center justify-end px-1 py-1 text-right ${
+    isDark ? "text-slate-200" : "text-gray-800"
+  }`;
 
   return (
-    <div className={`grid ${gridCols} text-right`}>
-      {showSplit ? (
-        <>
-          <div className={cellClass}>
-            {showRadios ? (
-              <input
-                type="radio"
-                name={radioName}
-                checked={effectiveChoice === "sheet"}
-                onChange={() => onChoiceChange?.(rowKey, "sheet")}
-                className="h-3 w-3 shrink-0"
-              />
-            ) : null}
-            <span>{sheetContent}</span>
-          </div>
-          <div className={liveCellClass}>
-            {showRadios ? (
-              <input
-                type="radio"
-                name={radioName}
-                checked={effectiveChoice === "live"}
-                onChange={() => onChoiceChange?.(rowKey, "live")}
-                className="h-3 w-3 shrink-0"
-              />
-            ) : null}
-            <span>{liveContent}</span>
-          </div>
-          {showFinalColumn ? (
-            <div className="px-1 py-1 text-right">{finalContent}</div>
-          ) : null}
-        </>
-      ) : showFinalColumn ? (
-        <>
-          <div className={`col-span-2 border-r ${mergedCellClass}`}>
-            <span>{mergedContent}</span>
-          </div>
-          <div className="px-1 py-1 text-right">{finalContent}</div>
-        </>
-      ) : (
-        <div className={`col-span-2 ${mergedCellClass}`}>
-          <span>{mergedContent}</span>
-        </div>
-      )}
+    <div className={`grid h-full min-h-full ${gridCols} text-right`}>
+      <div className={cellClass}>
+        {showRadios ? (
+          <input
+            type="radio"
+            name={radioName}
+            checked={effectiveChoice === "sheet"}
+            onChange={() => onChoiceChange?.(rowKey, "sheet")}
+            className="h-3 w-3 shrink-0"
+          />
+        ) : null}
+        <span>{sheetContent}</span>
+      </div>
+      <div className={liveCellClass}>
+        {showRadios ? (
+          <input
+            type="radio"
+            name={radioName}
+            checked={effectiveChoice === "live"}
+            onChange={() => onChoiceChange?.(rowKey, "live")}
+            className="h-3 w-3 shrink-0"
+          />
+        ) : null}
+        <span>{liveContent}</span>
+      </div>
+      {showFinalColumn ? (
+        <div className={finalCellClass}>{finalContent}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ApplyModeRadios({
+  rowKey,
+  value,
+  isDark,
+  onChange,
+  showOverride = true,
+  showOverwrite = true,
+  inactive = false,
+}: {
+  rowKey: string;
+  value: StandardSheetApplyMode;
+  isDark: boolean;
+  onChange: (mode: StandardSheetApplyMode) => void;
+  showOverride?: boolean;
+  showOverwrite?: boolean;
+  /** No meaningful Apply choice for this row. */
+  inactive?: boolean;
+}) {
+  const name = `apply-mode-${rowKey}`;
+  const labelClass = `flex items-center gap-1 whitespace-nowrap text-xs ${
+    isDark ? "text-slate-200" : "text-gray-900"
+  }`;
+
+  if (inactive) {
+    return (
+      <div
+        className="mx-auto flex w-fit flex-col items-start gap-1"
+        title="No changes in New recipe — Apply not needed"
+      >
+        <label className={`${labelClass} cursor-default opacity-60`}>
+          <input
+            type="radio"
+            name={name}
+            checked={false}
+            disabled
+            readOnly
+            className="h-3 w-3 shrink-0 cursor-default"
+          />
+          <span>Override</span>
+        </label>
+        <label className={`${labelClass} cursor-default opacity-60`}>
+          <input
+            type="radio"
+            name={name}
+            checked={false}
+            disabled
+            readOnly
+            className="h-3 w-3 shrink-0 cursor-default"
+          />
+          <span>Overwrite</span>
+        </label>
+      </div>
+    );
+  }
+
+  const overrideLocked = !showOverride;
+  const overwriteLocked = !showOverwrite;
+  let effectiveValue = value;
+  if (overrideLocked && !overwriteLocked) {
+    effectiveValue = "overwrite";
+  } else if (overwriteLocked && !overrideLocked) {
+    effectiveValue = "override";
+  }
+
+  const containerTitle = overwriteLocked
+    ? showOverride
+      ? "Recipe has no line — TS only"
+      : undefined
+    : overrideLocked
+      ? "New recipe matches Current version — Overwrite only"
+      : undefined;
+
+  return (
+    <div
+      className="mx-auto flex w-fit flex-col items-start gap-1"
+      title={containerTitle}
+    >
+      <label
+        className={`${labelClass}${overrideLocked ? " cursor-default opacity-60" : ""}`}
+      >
+        <input
+          type="radio"
+          name={name}
+          checked={effectiveValue === "override"}
+          disabled={overrideLocked}
+          readOnly={overrideLocked}
+          onChange={() => onChange("override")}
+          className={`h-3 w-3 shrink-0${overrideLocked ? " cursor-default" : ""}`}
+        />
+        <span>Override</span>
+      </label>
+      <label
+        className={`${labelClass}${overwriteLocked ? " cursor-default opacity-60" : ""}`}
+      >
+        <input
+          type="radio"
+          name={name}
+          checked={effectiveValue === "overwrite"}
+          disabled={overwriteLocked}
+          readOnly={overwriteLocked}
+          onChange={() => onChange("overwrite")}
+          className={`h-3 w-3 shrink-0${overwriteLocked ? " cursor-default" : ""}`}
+        />
+        <span>Overwrite</span>
+      </label>
     </div>
   );
 }
@@ -152,6 +245,10 @@ function technicalSheetPanelBackgroundClass(isDark: boolean): string {
 
 function technicalSheetActionColumnCellClass(isDark: boolean): string {
   return `w-8 border-0 p-0 pl-1 align-middle text-center ${technicalSheetPanelBackgroundClass(isDark)}`;
+}
+
+function technicalSheetTripleCellTdClass(rowBgClass: string): string {
+  return `border p-0 h-px ${rowBgClass}`;
 }
 
 function laborRowClass(diffType: LaborUpdateDiffType, isDark: boolean): string {
@@ -191,6 +288,34 @@ function isRemovedLaborPendingRestore(
     diffType === "removed" &&
     !!restoredRemovedKeys &&
     !restoredRemovedKeys.has(rowKey)
+  );
+}
+
+function isRemovedLaborRestoredPendingTrash(
+  rowKey: string,
+  isPendingTrash: boolean,
+  restoredRemovedKeys?: ReadonlySet<string>,
+): boolean {
+  return (
+    isPendingTrash &&
+    !!restoredRemovedKeys &&
+    restoredRemovedKeys.has(rowKey)
+  );
+}
+
+function isLaborApplyModeLocked(
+  diffType: LaborUpdateDiffType | undefined,
+  rowKey: string,
+  isPendingTrash: boolean,
+  restoredRemovedKeys?: ReadonlySet<string>,
+): boolean {
+  return (
+    isRemovedLaborPendingRestore(diffType, rowKey, restoredRemovedKeys) ||
+    isRemovedLaborRestoredPendingTrash(
+      rowKey,
+      isPendingTrash,
+      restoredRemovedKeys,
+    )
   );
 }
 
@@ -265,12 +390,15 @@ export function StandardTechnicalSheetLaborTable({
   pairedRemovedKeys,
   restoredRemovedKeys,
   onRestoreRemoved,
+  pendingTrashKeys,
   updateRowChoices,
   onMinutesChoiceChange,
   onRoleChange,
   onMinutesChange,
   onRemoveRow,
   onAddLaborRow,
+  laborApplyModes,
+  onLaborApplyModeChange,
   priceMode = "latest",
   snapshotCostByRowKey,
   priceLoading,
@@ -285,12 +413,18 @@ export function StandardTechnicalSheetLaborTable({
   pairedRemovedKeys?: Set<string>;
   restoredRemovedKeys?: Set<string>;
   onRestoreRemoved?: (rowKey: string) => void;
+  pendingTrashKeys?: Set<string>;
   updateRowChoices?: Map<string, LaborUpdateRowChoices>;
   onMinutesChoiceChange?: (rowKey: string, choice: PuChoice) => void;
   onRoleChange?: (rowKey: string, role: string) => void;
   onMinutesChange?: (rowKey: string, minutes: number) => void;
   onRemoveRow?: (rowKey: string) => void;
   onAddLaborRow?: () => void;
+  laborApplyModes?: Map<string, StandardSheetApplyMode>;
+  onLaborApplyModeChange?: (
+    rowKey: string,
+    mode: StandardSheetApplyMode,
+  ) => void;
   priceMode?: "latest" | "snapshot" | "both";
   snapshotCostByRowKey?: Map<
     string,
@@ -302,6 +436,8 @@ export function StandardTechnicalSheetLaborTable({
   const showUpdateTriple =
     updateMode && updateMetaByRowKey && updateRowChoices;
   const showFinalColumn = !!updateEditMode;
+  const showApplyModeColumn =
+    !!updateEditMode && !!laborApplyModes && !!onLaborApplyModeChange;
   const updateCompareMinW = showFinalColumn ? "min-w-[220px]" : "min-w-[160px]";
   const showActionColumn =
     (!!editable && !!onRemoveRow) || (!!showUpdateTriple && !!onRestoreRemoved);
@@ -332,21 +468,25 @@ export function StandardTechnicalSheetLaborTable({
               </th>
               <th className="border px-2 py-1 text-right">Hourly Wage</th>
               <th className="border px-2 py-1 text-right">Cost</th>
+              {showApplyModeColumn ? (
+                <th className="border px-2 py-1 text-center min-w-[88px]">
+                  Apply
+                </th>
+              ) : null}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, rowIndex) => {
               const rowKey = row.row_key;
+              const reactKey = `${rowKey}@${rowIndex}`;
               const meta = updateMetaByRowKey?.get(rowKey);
               const diffType = meta?.diffType ?? "unchanged";
+              const isPendingTrash = pendingTrashKeys?.has(rowKey) ?? false;
               const storedChoices = updateRowChoices?.get(rowKey);
               const effectiveMinutesChoice = effectiveLaborChoice(
                 diffType,
                 storedChoices?.minutes,
               );
-              const showMinutesSplit = meta
-                ? showLaborMinutesVersionSplit(diffType, meta)
-                : false;
               const minutesRadioResolve =
                 updateEditMode &&
                 meta &&
@@ -371,6 +511,35 @@ export function StandardTechnicalSheetLaborTable({
                 rowKey,
                 restoredRemovedKeys,
               );
+              const isApplyModeLocked = isLaborApplyModeLocked(
+                diffType,
+                rowKey,
+                isPendingTrash,
+                restoredRemovedKeys,
+              );
+              const applyAvailability = resolveLaborApplyAvailabilityForDisplay(
+                meta,
+                row,
+                { isNew: row.isNew },
+              );
+              const isApplyInactive =
+                !!updateEditMode &&
+                !isApplyModeLocked &&
+                applyAvailability.inactive;
+              const showApplyOverride = isApplyModeLocked
+                ? true
+                : applyAvailability.showOverride;
+              const showApplyOverwrite = isApplyModeLocked
+                ? false
+                : applyAvailability.showOverwrite;
+              const applyModeValue = isApplyModeLocked
+                ? "override"
+                : resolveLaborApplyMode(
+                    rowKey,
+                    applyAvailability,
+                    laborApplyModes!,
+                  );
+              const isRowLockedForEdit = isRemovedPendingRestore || isPendingTrash;
               const canRestoreRemoved =
                 !!onRestoreRemoved &&
                 meta != null &&
@@ -390,17 +559,20 @@ export function StandardTechnicalSheetLaborTable({
                 updateEditMode &&
                 editable &&
                 onMinutesChange &&
-                !isRemovedPendingRestore;
+                !isRowLockedForEdit;
 
               const showRoleEdit =
-                editable && onRoleChange && !isRemovedPendingRestore;
+                editable && onRoleChange && !isRowLockedForEdit;
 
               const roleDisplay = displayRole?.trim() || "—";
               const minutesDisplay = formatLaborMinutes(finalMinutes);
               const wageDisplay = formatLaborWage(row.hourly_wage);
               const costDisplay = formatLaborCost(row.cost);
 
-              const minutesFinalContent = showMinutesFinalEdit ? (
+              const minutesFinalContent =
+                isPendingTrash || isRemovedPendingRestore ? (
+                  <span className="text-xs">—</span>
+                ) : showMinutesFinalEdit ? (
                 <MinutesEditor
                   minutes={row.minutes}
                   isDark={isDark}
@@ -422,13 +594,13 @@ export function StandardTechnicalSheetLaborTable({
 
               return (
                 <tr
-                  key={rowKey}
+                  key={reactKey}
                   className={isDark ? "text-slate-200" : "text-gray-900"}
                 >
                   <td className={`border px-2 py-1 align-top ${rowBgClass}`}>
                     {showRoleEdit ? (
                       <RoleEditor
-                        value={row.labor_role}
+                        value={row.labor_role ?? ""}
                         laborRoles={laborRoles}
                         isDark={isDark}
                         onChange={(r) => onRoleChange!(rowKey, r)}
@@ -440,36 +612,34 @@ export function StandardTechnicalSheetLaborTable({
                   <td
                     className={
                       useUpdateTriple
-                        ? `border px-0 py-0 align-middle ${rowBgClass}`
+                        ? technicalSheetTripleCellTdClass(rowBgClass)
                         : `border px-2 py-1 text-right ${rowBgClass}`
                     }
                   >
                     {useUpdateTriple ? (
-                      <VersionTripleCell
-                        rowKey={rowKey}
-                        radioGroup="minutes"
-                        isDark={isDark}
-                        showSplit={showMinutesSplit}
-                        showFinalColumn={showFinalColumn}
-                        showRadios={showMinutesRadios}
-                        effectiveChoice={minutesChoiceForRadios}
-                        onChoiceChange={onMinutesChoiceChange}
-                        sheetContent={
-                          <span className="text-xs">
-                            {formatLaborMinutes(meta?.sheetMinutes)}
-                          </span>
-                        }
-                        liveContent={
-                          <span className="text-xs">
-                            {formatLaborMinutes(meta?.liveMinutes)}
-                          </span>
-                        }
-                        mergedContent={
-                          <span className="text-xs">{minutesDisplay}</span>
-                        }
-                        finalContent={minutesFinalContent}
-                      />
-                    ) : editable && onMinutesChange && !isRemovedPendingRestore ? (
+                      <div className="h-full">
+                        <VersionTripleCell
+                          rowKey={rowKey}
+                          radioGroup="minutes"
+                          isDark={isDark}
+                          showFinalColumn={showFinalColumn}
+                          showRadios={showMinutesRadios}
+                          effectiveChoice={minutesChoiceForRadios}
+                          onChoiceChange={onMinutesChoiceChange}
+                          sheetContent={
+                            <span className="text-xs">
+                              {formatLaborMinutes(meta?.sheetMinutes)}
+                            </span>
+                          }
+                          liveContent={
+                            <span className="text-xs">
+                              {formatLaborMinutes(meta?.liveMinutes)}
+                            </span>
+                          }
+                          finalContent={minutesFinalContent}
+                        />
+                      </div>
+                    ) : editable && onMinutesChange && !isRowLockedForEdit ? (
                       <MinutesEditor
                         minutes={row.minutes}
                         isDark={isDark}
@@ -503,6 +673,23 @@ export function StandardTechnicalSheetLaborTable({
                       costDisplay
                     )}
                   </td>
+                  {showApplyModeColumn ? (
+                    <td
+                      className={`border px-2 py-1 text-center align-middle ${rowBgClass}`}
+                    >
+                      <ApplyModeRadios
+                        rowKey={rowKey}
+                        value={applyModeValue}
+                        isDark={isDark}
+                        inactive={isApplyInactive}
+                        showOverride={showApplyOverride}
+                        showOverwrite={showApplyOverwrite}
+                        onChange={(mode) =>
+                          onLaborApplyModeChange!(rowKey, mode)
+                        }
+                      />
+                    </td>
+                  ) : null}
                   {showActionColumn ? (
                     <td className={technicalSheetActionColumnCellClass(isDark)}>
                       {canRestoreRemoved ? (
@@ -523,9 +710,22 @@ export function StandardTechnicalSheetLaborTable({
                         <button
                           type="button"
                           onClick={() => onRemoveRow(rowKey)}
-                          className="text-red-500 hover:text-red-600"
-                          title="Remove row"
-                          aria-label="Remove row"
+                          className={
+                            isPendingTrash
+                              ? "rounded p-1 bg-red-600 text-white hover:bg-red-700"
+                              : "text-red-500 hover:text-red-600"
+                          }
+                          title={
+                            isPendingTrash
+                              ? "Marked for removal — click to undo"
+                              : "Mark for removal"
+                          }
+                          aria-label={
+                            isPendingTrash
+                              ? "Undo mark for removal"
+                              : "Mark for removal"
+                          }
+                          aria-pressed={isPendingTrash}
                         >
                           <Trash2 className="mx-auto h-4 w-4" />
                         </button>

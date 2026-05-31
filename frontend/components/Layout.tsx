@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronRight,
   Inbox,
+  Receipt,
 } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { UserProfile } from "./UserProfile";
@@ -25,7 +26,6 @@ import { useState, useEffect, useMemo } from "react";
 import { apiRequest } from "@/lib/api";
 import { documentInboxAPI } from "@/lib/api/document-inbox";
 import { useCompany } from "@/contexts/CompanyContext";
-import { canAccessRecipeCostReport } from "@/lib/recipeCostReportAccess";
 import { useTenant } from "@/contexts/TenantContext";
 import { userRequirementsAPI } from "@/lib/api/reminder/user-requirements";
 import { mappingUserRequirementsAPI } from "@/lib/api/reminder/mapping-user-requirements";
@@ -45,13 +45,16 @@ const SIDEBAR_NAV_ROW_MIN = "min-h-14";
 const SIDEBAR_NAV_ROW_ALIGN = `${SIDEBAR_NAV_ROW_MIN} flex items-center gap-2`;
 const SIDEBAR_TEAM_NAV_ROW_ALIGN = "min-h-9 flex items-center gap-2";
 
-/** Food costing / License 直下のサブリンク用（親より詰めて同じ密度に揃える） */
+/** Food costing / Documents 直下のサブリンク用（親より詰めて同じ密度に揃える） */
 const SIDEBAR_SUB_NAV_ROW_MIN = "min-h-11";
 const SIDEBAR_SUB_NAV_ROW_ALIGN = `${SIDEBAR_SUB_NAV_ROW_MIN} flex items-center gap-2`;
 const FOOD_COSTING_SUB_NAV_ROW_ALIGN = "min-h-8 flex items-center gap-2";
+/** 親行: ラベル直後に chevron（flex-1 で右端に押し出さない） */
+const SIDEBAR_NAV_LABEL_CHEVRON = "flex min-w-0 items-center gap-0.5";
 
 /** 外側クリップ用の幅（内側レイアウト幅と一致） */
 const SIDEBAR_COLLAPSED_PX = 64;
+/** 親行ラベル「Food Costing」を1行で収める最小幅（icon+gap+chevron+px-3 込み） */
 const SIDEBAR_EXPANDED_PX = 178;
 
 const SIDEBAR_MODE_STORAGE_KEY = "food_costing_sidebar_mode";
@@ -96,6 +99,10 @@ function isFoodCostingPath(pathname: string): boolean {
 
 function isDashboardPath(pathname: string): boolean {
   return pathname.startsWith("/dashboard");
+}
+
+function isInvoicingPath(pathname: string): boolean {
+  return pathname.startsWith("/invoicing");
 }
 
 // Food costing サブメニュー
@@ -152,7 +159,7 @@ const teamNavItem = {
   icon: Users,
 } as const;
 
-// License & certification のサブメニュー
+// Documents のサブメニュー
 const licenseSubItems = [
   {
     id: "employee-requirements",
@@ -179,22 +186,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
     selectedCompanyId,
     loading: companyLoading,
   } = useCompany();
-  const { selectedTenantId, tenants } = useTenant();
+  const { selectedTenantId, tenants, loading: tenantLoading } = useTenant();
   const canAccessDocumentBox = useMemo(() => {
     if (!selectedCompanyId) return false;
     const role = companies.find((c) => c.id === selectedCompanyId)?.role;
     return role === "company_admin" || role === "company_director";
   }, [companies, selectedCompanyId]);
-  const canAccessRecipeCostReportNav = useMemo(
-    () =>
-      canAccessRecipeCostReport(
-        selectedCompanyId,
-        selectedTenantId,
-        companies,
-        tenants,
-      ),
-    [selectedCompanyId, selectedTenantId, companies, tenants],
-  );
+  const canAccessInvoicing = useMemo(() => {
+    if (!selectedCompanyId) return false;
+    const companyRole = companies.find((c) => c.id === selectedCompanyId)?.role;
+    if (companyRole === "company_admin" || companyRole === "company_director") {
+      return true;
+    }
+    if (!selectedTenantId) return false;
+    const tenantRole = tenants.find((t) => t.id === selectedTenantId)?.role;
+    return tenantRole === "admin" || tenantRole === "director";
+  }, [companies, selectedCompanyId, selectedTenantId, tenants]);
   const { theme, toggleTheme } = useTheme();
   const [sidebarMode, setSidebarMode] = useState<"compact" | "full">("compact");
   const [isHovered, setIsHovered] = useState(false);
@@ -212,6 +219,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const isFoodCostingSectionActive = isFoodCostingPath(pathname);
   const isDashboardActive = isDashboardPath(pathname);
+  const isInvoicingActive = isInvoicingPath(pathname);
 
   const isLicenseSectionActive =
     pathname.startsWith("/employee-requirements") ||
@@ -301,7 +309,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       });
   }, [pathname, canAccessDocumentBox]);
 
-  // License & certification: overdue counts for sidebar indicators
+  // Documents: overdue counts for sidebar indicators
   useEffect(() => {
     if (pathname === "/join") return;
     let cancelled = false;
@@ -615,7 +623,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
       return "Tenant Requirements";
     if (pathname.startsWith("/company-requirements"))
       return "Company Requirements";
-    if (pathname.startsWith("/document-box")) return "Uploaded Document Box";
+    if (pathname.startsWith("/document-box")) return "Upload Box";
+    if (pathname.startsWith("/invoicing")) return "Invoicing";
     if (pathname.startsWith("/dashboard")) return "Dashboard";
     if (pathname.startsWith("/settings")) return "Settings";
     if (pathname.startsWith("/cost/recipe-cost-report")) return "Pricing";
@@ -655,6 +664,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     licenseOverdueCounts.company;
   const showSidebarAlerts = sidebarAlertsEnabled;
   const showDocumentBoxNav = companyLoading || canAccessDocumentBox;
+  const showInvoicingNav = companyLoading || tenantLoading || canAccessInvoicing;
 
   // 外側だけ幅アニメ。内側は常に SIDEBAR_EXPANDED_PX でレイアウトし overflow で切る
   const sidebarWidth = isSidebarExpanded
@@ -898,29 +908,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   >
                     <Utensils className="h-5 w-5 shrink-0" />
                     {isSidebarExpanded && (
-                      <>
-                        <span className="text-sm leading-tight text-left flex-1 min-w-0">
-                          Food
-                          <br />
-                          Costing
+                      <span className={SIDEBAR_NAV_LABEL_CHEVRON}>
+                        <span className="text-sm whitespace-nowrap">
+                          Food Costing
                         </span>
                         {foodCostingExpanded ? (
                           <ChevronDown className="h-4 w-4 shrink-0" />
                         ) : (
                           <ChevronRight className="h-4 w-4 shrink-0" />
                         )}
-                      </>
+                      </span>
                     )}
                   </button>
                   {isSidebarExpanded &&
                     foodCostingExpanded &&
                     foodCostingSubItems.map((sub) => {
-                      if (
-                        sub.id === "recipe-cost-report" &&
-                        !canAccessRecipeCostReportNav
-                      ) {
-                        return null;
-                      }
                       const isActive = isFoodCostingSubItemActive(
                         sub.href,
                         pathname,
@@ -1026,8 +1028,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   >
                     <TeamNavIcon className="h-5 w-5 shrink-0" />
                     {isSidebarExpanded && (
-                      <>
-                        <span className="text-sm whitespace-nowrap flex-1 min-w-0">
+                      <span className={SIDEBAR_NAV_LABEL_CHEVRON}>
+                        <span className="text-sm whitespace-nowrap">
                           {teamNavItem.label}
                         </span>
                         {teamExpanded ? (
@@ -1035,7 +1037,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         ) : (
                           <ChevronRight className="h-4 w-4 shrink-0" />
                         )}
-                      </>
+                      </span>
                     )}
                   </button>
                   {isSidebarExpanded &&
@@ -1098,6 +1100,66 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     })}
                 </div>
 
+                {showInvoicingNav ? (
+                  <Link
+                    href={canAccessInvoicing ? "/invoicing" : "#"}
+                    className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 no-underline rounded-md ${
+                      isInvoicingActive
+                        ? isDark
+                          ? "text-blue-400 font-semibold"
+                          : "text-blue-700 font-semibold"
+                        : isDark
+                          ? "text-slate-300 hover:text-blue-400"
+                          : "text-black hover:text-blue-900"
+                    }`}
+                    style={{
+                      backgroundColor: isDark ? "#1e293b" : "white",
+                      transition:
+                        "background-color 0.2s ease, border-radius 0.2s ease, color 0.2s ease",
+                      color: isInvoicingActive
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#000000",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!canAccessInvoicing) return;
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#334155"
+                        : "#dbeafe";
+                      e.currentTarget.style.color = isDark
+                        ? "#60a5fa"
+                        : "#1d4ed8";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!canAccessInvoicing) return;
+                      e.currentTarget.style.backgroundColor = isDark
+                        ? "#1e293b"
+                        : "white";
+                      e.currentTarget.style.color = isInvoicingActive
+                        ? isDark
+                          ? "#60a5fa"
+                          : "#1d4ed8"
+                        : isDark
+                          ? "#cbd5e1"
+                          : "#000000";
+                    }}
+                    onClick={(e) => {
+                      if (!canAccessInvoicing) e.preventDefault();
+                    }}
+                    aria-disabled={!canAccessInvoicing}
+                  >
+                    <Receipt className="h-5 w-5 shrink-0" />
+                    {isSidebarExpanded && (
+                      <span className="text-sm whitespace-nowrap">
+                        Invoicing
+                      </span>
+                    )}
+                  </Link>
+                ) : null}
+
                 {showDocumentBoxNav ? (
                   <Link
                     href={canAccessDocumentBox ? "/document-box" : "#"}
@@ -1150,16 +1212,14 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       )}
                     </div>
                     {isSidebarExpanded && (
-                      <span className="text-sm leading-tight text-left">
-                        Uploaded
-                        <br />
-                        Document Box
+                      <span className="text-sm whitespace-nowrap">
+                        Upload Box
                       </span>
                     )}
                   </Link>
                 ) : null}
 
-                {/* License & certification（クリックで開閉、サブの Requirements で遷移） */}
+                {/* Documents（クリックで開閉、サブの Requirements で遷移） */}
                 <div className="flex flex-col gap-0">
                   <button
                     type="button"
@@ -1211,18 +1271,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       )}
                     </span>
                     {isSidebarExpanded && (
-                      <>
-                        <span className="text-sm leading-tight text-left flex-1 min-w-0">
-                          <span className="whitespace-nowrap">License &</span>
-                          <br />
-                          Certification
+                      <span className={SIDEBAR_NAV_LABEL_CHEVRON}>
+                        <span className="text-sm whitespace-nowrap">
+                          Documents
                         </span>
                         {licenseExpanded ? (
                           <ChevronDown className="h-4 w-4 shrink-0" />
                         ) : (
                           <ChevronRight className="h-4 w-4 shrink-0" />
                         )}
-                      </>
+                      </span>
                     )}
                   </button>
                   {isSidebarExpanded &&

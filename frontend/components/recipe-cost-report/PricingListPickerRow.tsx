@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { MoreHorizontal } from "lucide-react";
 
 type Props = {
@@ -25,11 +26,26 @@ export function PricingListPickerRow({
   onDelete,
 }: Props) {
   const rowRef = useRef<HTMLLIElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<{
+    top: number;
+    left: number;
+    minWidth: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) return;
     const onDoc = (e: MouseEvent) => {
-      if (rowRef.current && !rowRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const inRow = !!rowRef.current?.contains(target);
+      const inMenu = !!menuRef.current?.contains(target);
+      if (!inRow && !inMenu) {
         onCloseMenu();
       }
     };
@@ -37,14 +53,68 @@ export function PricingListPickerRow({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [menuOpen, onCloseMenu]);
 
-  const rowShell = `flex items-center rounded-lg transition-colors ${
+  useLayoutEffect(() => {
+    if (!menuOpen || !triggerRef.current) return;
+
+    const GAP_PX = 4;
+    const SAFE_PX = 8;
+    const getBodyCssZoom = () => {
+      const raw = Number(window.getComputedStyle(document.body).zoom);
+      return Number.isFinite(raw) && raw > 0 ? raw : 1;
+    };
+
+    const updateMenuPosition = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const bodyZoom = getBodyCssZoom();
+      const rect = trigger.getBoundingClientRect();
+      const menuHeight = menuRef.current?.offsetHeight ?? 0;
+      const vv = window.visualViewport;
+      const viewportH = (vv?.height ?? window.innerHeight) / bodyZoom;
+
+      // Position values for a fixed element inside zoomed body.
+      const triggerTop = rect.top / bodyZoom;
+      const triggerBottom = rect.bottom / bodyZoom;
+      const triggerRight = rect.right / bodyZoom;
+
+      let top = triggerBottom + GAP_PX;
+      if (menuHeight > 0 && top + menuHeight > viewportH - SAFE_PX) {
+        top = Math.max(SAFE_PX, triggerTop - GAP_PX - menuHeight);
+      }
+
+      setMenuStyle({
+        top: Math.max(SAFE_PX, top),
+        left: Math.max(SAFE_PX, triggerRight),
+        minWidth: rect.width,
+      });
+    };
+
+    // Initial measurement and a post-paint measurement for menu height.
+    updateMenuPosition();
+    const raf = window.requestAnimationFrame(updateMenuPosition);
+
+    window.addEventListener("resize", updateMenuPosition);
+    // capture=true catches scroll from nested scroll containers.
+    window.addEventListener("scroll", updateMenuPosition, true);
+    window.visualViewport?.addEventListener("resize", updateMenuPosition);
+    window.visualViewport?.addEventListener("scroll", updateMenuPosition);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+      window.visualViewport?.removeEventListener("resize", updateMenuPosition);
+      window.visualViewport?.removeEventListener("scroll", updateMenuPosition);
+    };
+  }, [menuOpen]);
+
+  const rowShell = `flex items-center rounded-lg border transition-colors ${
     active
       ? isDark
-        ? "bg-blue-600/20 text-blue-300 ring-1 ring-blue-500/50"
-        : "bg-blue-50 text-blue-800 ring-1 ring-blue-200"
+        ? "border-blue-500/50 bg-blue-600/20 text-blue-300"
+        : "border-blue-200 bg-blue-50 text-blue-800"
       : isDark
-        ? "text-slate-300 hover:bg-slate-700/80"
-        : "text-gray-700 hover:bg-gray-100"
+        ? "border-transparent text-slate-300 hover:bg-slate-700/80"
+        : "border-transparent text-gray-700 hover:bg-gray-100"
   }`;
 
   return (
@@ -58,6 +128,7 @@ export function PricingListPickerRow({
           <span className="line-clamp-2">{name}</span>
         </button>
         <button
+          ref={triggerRef}
           type="button"
           onClick={(e) => {
             e.stopPropagation();
@@ -75,33 +146,44 @@ export function PricingListPickerRow({
           <MoreHorizontal className="h-4 w-4 -translate-y-px" strokeWidth={2} />
         </button>
       </div>
-      {menuOpen && (
-        <div
-          role="menu"
-          className={`absolute right-0 top-full z-30 mt-1 min-w-[7.5rem] overflow-hidden rounded-lg border py-1 shadow-lg ${
-            isDark
-              ? "border-slate-600 bg-slate-800"
-              : "border-gray-200 bg-white"
-          }`}
-        >
-          <button
-            type="button"
-            role="menuitem"
-            className={`block w-full px-3 py-2 text-left text-sm transition-colors ${
+      {menuOpen &&
+        mounted &&
+        menuStyle &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            className={`fixed z-[80] overflow-hidden rounded-lg border py-1 shadow-lg ${
               isDark
-                ? "text-red-400 hover:bg-slate-700"
-                : "text-red-600 hover:bg-red-50"
+                ? "border-slate-600 bg-slate-800"
+                : "border-gray-200 bg-white"
             }`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onCloseMenu();
-              onDelete();
+            style={{
+              top: `${menuStyle.top}px`,
+              left: `${menuStyle.left}px`,
+              transform: "translateX(-100%)",
+              minWidth: `${Math.max(96, Math.round(menuStyle.minWidth))}px`,
             }}
           >
-            Delete
-          </button>
-        </div>
-      )}
+            <button
+              type="button"
+              role="menuitem"
+              className={`block w-full px-3 text-left text-sm transition-colors ${
+                isDark
+                  ? "text-red-400 hover:bg-slate-700"
+                  : "text-red-600 hover:bg-red-50"
+              }`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCloseMenu();
+                onDelete();
+              }}
+            >
+              Delete
+            </button>
+          </div>,
+          document.body,
+        )}
     </li>
   );
 }

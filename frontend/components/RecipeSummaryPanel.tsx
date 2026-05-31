@@ -16,7 +16,10 @@ import {
   standardTechnicalSheetsAPI,
   type StandardBaseRecipeRow,
 } from "@/lib/api";
-import { StandardTechnicalSheetView } from "@/components/StandardTechnicalSheetView";
+import {
+  TechnicalSheetWindowStack,
+  useTechnicalSheetWindows,
+} from "@/components/TechnicalSheetWindowStack";
 import { formatPtDollars, formatPuPerKg } from "@/lib/technicalSheetFormat";
 
 type PreppedItemLite = {
@@ -140,10 +143,17 @@ export function RecipeSummaryPanel({
   const [technicalSheetLoading, setTechnicalSheetLoading] = useState(false);
 
   const [baseRecipes, setBaseRecipes] = useState<StandardBaseRecipeRow[]>([]);
-  const [standardView, setStandardView] = useState<{
-    sourceItemId: string;
-    name: string;
-  } | null>(null);
+  const {
+    windows: standardWindows,
+    openSourceItemIds: standardOpenSourceItemIds,
+    costRefreshGeneration: standardCostRefreshGeneration,
+    openWindow: openStandardWindow,
+    openPreppedChild: openStandardPreppedChild,
+    focusWindow: focusStandardWindow,
+    closeWindow: closeStandardWindow,
+    updateWindowPosition: updateStandardWindowPosition,
+    notifySheetSaved: notifyStandardSheetSaved,
+  } = useTechnicalSheetWindows();
   const showCreateSummaryUi = false;
 
   const itemMap = useMemo(() => {
@@ -815,10 +825,10 @@ export function RecipeSummaryPanel({
                           type="button"
                           aria-label={`View standard sheet for ${row.name ?? "base recipe"}`}
                           onClick={() =>
-                            setStandardView({
-                              sourceItemId: row.source_item_id,
-                              name: row.name ?? "—",
-                            })
+                            openStandardWindow(
+                              row.source_item_id,
+                              row.name ?? "—",
+                            )
                           }
                           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                             isDark
@@ -1197,9 +1207,9 @@ export function RecipeSummaryPanel({
                             </tr>
                           </thead>
                           <tbody>
-                            {technicalSheet.ingredient_rows.map((row) => (
+                            {technicalSheet.ingredient_rows.map((row, rowIndex) => (
                               <tr
-                                key={row.item_id}
+                                key={`${row.item_id}@${rowIndex}`}
                                 className={
                                   isDark ? "bg-slate-800" : "bg-gray-50"
                                 }
@@ -1251,14 +1261,17 @@ export function RecipeSummaryPanel({
         </div>
       )}
 
-      {standardView ? (
-        <StandardTechnicalSheetView
-          isDark={isDark}
-          sourceItemId={standardView.sourceItemId}
-          baseRecipeName={standardView.name}
-          onClose={() => setStandardView(null)}
-        />
-      ) : null}
+      <TechnicalSheetWindowStack
+        isDark={isDark}
+        windows={standardWindows}
+        openSourceItemIds={standardOpenSourceItemIds}
+        costRefreshGeneration={standardCostRefreshGeneration}
+        onOpenPreppedChild={openStandardPreppedChild}
+        onFocusWindow={focusStandardWindow}
+        onCloseWindow={closeStandardWindow}
+        onPositionChange={updateStandardWindowPosition}
+        onSheetSaved={notifyStandardSheetSaved}
+      />
     </>
   );
 }

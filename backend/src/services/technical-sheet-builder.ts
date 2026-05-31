@@ -1,6 +1,7 @@
 import { supabase } from "../config/supabase";
 import { convertToGrams } from "./units";
 import {
+  clearCostCache,
   getBaseItemsMap,
   getCost,
   getItemsMap,
@@ -331,6 +332,7 @@ async function puPerGramForIngredientRow(
 export async function buildTechnicalSheet(
   options: BuildTechnicalSheetOptions,
 ): Promise<TechnicalSheetPayload> {
+  clearCostCache();
   const { sourceItemId, tenantIds, expandItemIds = new Set<string>() } = options;
 
   const itemMap = new Map<string, Item>();
@@ -711,23 +713,34 @@ export async function compareIngredientSnapshotsAsync(
   return false;
 }
 
+/** Match labor by role + minutes (recipe line ids can change across save). */
+export function laborSnapshotSemanticKey(line: LaborSnapshotLine): string {
+  return `${(line.labor_role ?? "").trim()}|${line.minutes}`;
+}
+
+function indexLaborBySemantic(
+  lines: LaborSnapshotLine[],
+): Map<string, LaborSnapshotLine> {
+  const map = new Map<string, LaborSnapshotLine>();
+  for (const line of lines) {
+    map.set(laborSnapshotSemanticKey(line), line);
+  }
+  return map;
+}
+
 export function compareLaborSnapshots(
   saved: LaborSnapshotLine[],
   live: LaborSnapshotLine[],
 ): boolean {
-  const savedByKey = new Map(saved.map((l) => [l.row_key, l]));
-  const liveByKey = new Map(live.map((l) => [l.row_key, l]));
-  const keys = new Set([...savedByKey.keys(), ...liveByKey.keys()]);
-  for (const key of keys) {
-    const s = savedByKey.get(key);
-    const l = liveByKey.get(key);
-    if (!s && l) return true;
-    if (s && !l) return true;
+  const savedBySem = indexLaborBySemantic(saved);
+  const liveBySem = indexLaborBySemantic(live);
+  if (savedBySem.size !== liveBySem.size) return true;
+  for (const [sem, s] of savedBySem) {
+    const l = liveBySem.get(sem);
+    if (!l) return true;
     if (
-      s &&
-      l &&
-      (s.labor_role !== l.labor_role ||
-        Math.abs(s.minutes - l.minutes) > 0.001)
+      s.labor_role !== l.labor_role ||
+      Math.abs(s.minutes - l.minutes) > 0.001
     ) {
       return true;
     }
@@ -936,14 +949,12 @@ export function buildLaborDiffLines(
   saved: LaborSnapshotLine[],
   live: LaborSnapshotLine[],
 ): LaborDiffLine[] {
-  const savedByKey = new Map(saved.map((l) => [l.row_key, l]));
-  const liveByKey = new Map(live.map((l) => [l.row_key, l]));
-  const keys = [...new Set([...savedByKey.keys(), ...liveByKey.keys()])].sort(
+  const savedBySem = indexLaborBySemantic(saved);
+  const liveBySem = indexLaborBySemantic(live);
+  const semKeys = [...new Set([...savedBySem.keys(), ...liveBySem.keys()])].sort(
     (a, b) => {
-      const roleA =
-        savedByKey.get(a)?.labor_role ?? liveByKey.get(a)?.labor_role ?? a;
-      const roleB =
-        savedByKey.get(b)?.labor_role ?? liveByKey.get(b)?.labor_role ?? b;
+      const roleA = a.split("|")[0] ?? a;
+      const roleB = b.split("|")[0] ?? b;
       const byRole = roleA.localeCompare(roleB);
       if (byRole !== 0) return byRole;
       return a.localeCompare(b);
@@ -951,13 +962,14 @@ export function buildLaborDiffLines(
   );
 
   const result: LaborDiffLine[] = [];
-  for (const key of keys) {
-    const s = savedByKey.get(key);
-    const l = liveByKey.get(key);
+  for (const sem of semKeys) {
+    const s = savedBySem.get(sem);
+    const l = liveBySem.get(sem);
+    const rowKey = l?.row_key ?? s?.row_key ?? sem;
     if (!s && l) {
       result.push({
         type: "added",
-        row_key: key,
+        row_key: rowKey,
         saved_labor_role: null,
         live_labor_role: l.labor_role,
         saved_minutes: null,
@@ -966,7 +978,7 @@ export function buildLaborDiffLines(
     } else if (s && !l) {
       result.push({
         type: "removed",
-        row_key: key,
+        row_key: rowKey,
         saved_labor_role: s.labor_role,
         live_labor_role: null,
         saved_minutes: s.minutes,
@@ -980,7 +992,7 @@ export function buildLaborDiffLines(
     ) {
       result.push({
         type: "changed",
-        row_key: key,
+        row_key: rowKey,
         saved_labor_role: s.labor_role,
         live_labor_role: l.labor_role,
         saved_minutes: s.minutes,
@@ -1001,6 +1013,7 @@ export async function applyLatestPricesToSheet(
   total_labor_cost: number | null;
   has_unpriced_lines: boolean;
 }> {
+  clearCostCache();
   const rows = sheet.ingredient_rows.map((row) => ({
     ...row,
     step_quantities: { ...row.step_quantities },

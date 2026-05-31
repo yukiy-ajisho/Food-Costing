@@ -4,7 +4,10 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { useCompany } from "@/contexts/CompanyContext";
-import { documentInboxAPI, type DocumentBoxRow } from "@/lib/api/document-inbox";
+import {
+  documentInboxAPI,
+  type DocumentBoxRow,
+} from "@/lib/api/document-inbox";
 import {
   vendorsAPI,
   baseItemsAPI,
@@ -37,8 +40,11 @@ const TYPE_LABELS: Record<DocumentInboxDocumentType, string> = {
 export default function DocumentBoxPage() {
   const { theme } = useTheme();
   const { selectedTenantId, loading: tenantLoading } = useTenant();
-  const { companies, selectedCompanyId, loading: companyLoading } =
-    useCompany();
+  const {
+    companies,
+    selectedCompanyId,
+    loading: companyLoading,
+  } = useCompany();
   const canAccessDocumentBox = useMemo(() => {
     if (!selectedCompanyId) return false;
     const role = companies.find((c) => c.id === selectedCompanyId)?.role;
@@ -66,7 +72,9 @@ export default function DocumentBoxPage() {
   const [pendingTypeDrafts, setPendingTypeDrafts] = useState<
     Record<string, DocumentInboxDocumentType>
   >({});
-  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(new Set());
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   const border = isDark ? "border-slate-700" : "border-gray-200";
   const bg = isDark ? "bg-slate-800" : "bg-white";
@@ -83,9 +91,7 @@ export default function DocumentBoxPage() {
       const data = await documentInboxAPI.forDocumentBox();
       setRows(data);
     } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Failed to load documents",
-      );
+      setError(e instanceof Error ? e.message : "Failed to load documents");
     } finally {
       setLoading(false);
     }
@@ -101,9 +107,7 @@ export default function DocumentBoxPage() {
       ]);
       setVendors(v);
       setBaseItems(b);
-      setVendorProducts(
-        vp.map((p) => ({ ...p, base_item_id: "" })),
-      );
+      setVendorProducts(vp.map((p) => ({ ...p, base_item_id: "" })));
     } catch {
       /* non-critical */
     }
@@ -156,7 +160,9 @@ export default function DocumentBoxPage() {
   const pendingRows = useMemo(
     () =>
       rows.filter((r) =>
-        REQUIREMENT_TYPES.includes(r.document_type as DocumentInboxDocumentType),
+        REQUIREMENT_TYPES.includes(
+          r.document_type as DocumentInboxDocumentType,
+        ),
       ),
     [rows],
   );
@@ -176,11 +182,13 @@ export default function DocumentBoxPage() {
 
   if (!canAccessDocumentBox) {
     return (
-      <div className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}>
+      <div
+        className={`min-h-full p-6 ${isDark ? "bg-slate-900" : "bg-gray-50"}`}
+      >
         <div className="max-w-lg mx-auto rounded-lg border border-red-200 bg-red-50 p-6 text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
-          <h1 className="text-lg font-semibold mb-2">Uploaded Document Box</h1>
+          <h1 className="text-lg font-semibold mb-2">Upload Box</h1>
           <p className="text-sm">
-            Uploaded Document Box is available to company administrators and directors
+            Upload Box is available to company administrators and directors
             only. Use Items → Import invoice for tenant-level imports.
           </p>
         </div>
@@ -228,7 +236,9 @@ export default function DocumentBoxPage() {
 
         <div className={`rounded-lg border ${border} ${bg} overflow-hidden`}>
           {loading ? (
-            <div className={`flex items-center justify-center h-40 ${textMuted}`}>
+            <div
+              className={`flex items-center justify-center h-40 ${textMuted}`}
+            >
               Loading…
             </div>
           ) : error ? (
@@ -298,11 +308,14 @@ export default function DocumentBoxPage() {
                         className={`transition-colors ${rowHover}`}
                       >
                         <td className={`px-4 py-3 ${textMuted}`}>
-                          {new Date(doc.created_at).toLocaleDateString("en-US", {
-                            month: "2-digit",
-                            day: "2-digit",
-                            year: "numeric",
-                          })}
+                          {new Date(doc.created_at).toLocaleDateString(
+                            "en-US",
+                            {
+                              month: "2-digit",
+                              day: "2-digit",
+                              year: "numeric",
+                            },
+                          )}
                         </td>
                         <td className={`px-4 py-3 ${textPrimary}`}>
                           {doc.sent_by_name ?? "—"}
@@ -404,10 +417,13 @@ export default function DocumentBoxPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          const drafts: Record<string, DocumentInboxDocumentType> =
-                            {};
+                          const drafts: Record<
+                            string,
+                            DocumentInboxDocumentType
+                          > = {};
                           visiblePendingRows.forEach((r) => {
-                            drafts[r.id] = r.document_type as DocumentInboxDocumentType;
+                            drafts[r.id] =
+                              r.document_type as DocumentInboxDocumentType;
                           });
                           setPendingTypeDrafts(drafts);
                           setPendingDeleteIds(new Set());
@@ -472,11 +488,14 @@ export default function DocumentBoxPage() {
                           className={`transition-colors ${rowHover}`}
                         >
                           <td className={`px-4 py-3 ${textMuted}`}>
-                            {new Date(doc.created_at).toLocaleDateString("en-US", {
-                              month: "2-digit",
-                              day: "2-digit",
-                              year: "numeric",
-                            })}
+                            {new Date(doc.created_at).toLocaleDateString(
+                              "en-US",
+                              {
+                                month: "2-digit",
+                                day: "2-digit",
+                                year: "numeric",
+                              },
+                            )}
                           </td>
                           <td
                             className={`px-4 py-3 truncate ${textMuted}`}
@@ -514,10 +533,12 @@ export default function DocumentBoxPage() {
                               </select>
                             ) : (
                               <span className={textPrimary}>
-                                {TYPE_LABELS[
-                                  doc.document_type as DocumentInboxDocumentType
-                                ]}
-		                              </span>
+                                {
+                                  TYPE_LABELS[
+                                    doc.document_type as DocumentInboxDocumentType
+                                  ]
+                                }
+                              </span>
                             )}
                           </td>
                           <td className="px-4 py-3 text-right">

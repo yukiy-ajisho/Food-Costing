@@ -1,0 +1,386 @@
+================================================================================
+  STANDARD TECHNICAL SHEET — Edit/Update 改修 要件書
+  対象: food_costing プロジェクト
+  作成日: 2026-05-29
+  ステータス: 要件確定（実装前）
+================================================================================
+
+本書は、Standard Technical Sheet の UX 改修・新機能・ロジック変更を
+会話で合意した内容を一括でまとめたものである。
+
+関連ドキュメント:
+- docs/technical-sheet-plan.txt … 初版設計（Standard 全体像）
+- docs/recipe-summary-plan.txt … Custom（将来）向け旧 Recipe Summary
+
+既存実装の参照:
+- frontend/components/StandardTechnicalSheetView.tsx
+- backend/src/services/standard-technical-sheet.ts
+- backend/src/services/technical-sheet-builder.ts
+
+
+================================================================================
+0. 既に実装済みのバグ修正（2026-05-29）
+================================================================================
+
+0-1. 労務バグ（has_recipe_diff の誤検知）
+
+【現象】
+- 材料・労務がレシピと一致しているのに、黄色バナー
+  「This technical sheet differs from the current recipe.」のみ表示。
+- Update 画面では差分なし（行の色付けなし、This version / Current が同一表示）。
+
+【原因】
+- バナー用: computeHasRecipeDiff が「いまのレシピ」の材料行だけ取得し、
+  労務行を空として比較 → 保存済み snapshot に労務があると常に「違う」。
+- Update 用: getRecipeDiffForLatest は材料＋労務を正しく比較。
+
+【修正】（実装済み）
+- snapshotVsLiveRecipeDiff を共通化し、computeHasRecipeDiff と
+  getRecipeDiffForLatest が同じ材料＋労務ルールを使う。
+- backend/tests/unit/technical-sheet-snapshot-diff.test.ts に回帰テストあり。
+
+
+================================================================================
+1. 改修の目的
+================================================================================
+
+1-1. 課題（現行 UI）
+- Update 押下後に Create new version / Edit / Cancel が並び、役割が分かりにくい。
+- Update 画面と Edit 画面の二段階が冗長。
+- 「This version / Current / Final」などの用語が直感的でない。
+- レシピに反映するかどうかがボタン単位ではなく、フロー全体で暗黙。
+
+1-2. 目標
+- **Edit/Update** 1 操作で編集画面に入る。
+- **Save this version** / **Save as new version** で保存意図を明示。
+- 行ごとに **Override / Overwrite** で「TS のみ」か「TS＋レシピ」を選べる。
+- 用語・列名を product 向けに整理。
+- UI の大規模レイアウト変更は最小。ロジック・フロー・API が主な変更。
+
+
+================================================================================
+2. 用語・ラベル変更（確定）
+================================================================================
+
+2-1. 画面・テーブル
+
+| 現行 | 変更後 |
+|------|--------|
+| Labors（セクション名） | **Labor** |
+| Total（列名） | **Net Weight** |
+| Update（ボタン） | **Edit/Update** |
+
+2-2. 3 列比較（Edit/Update 画面）
+
+| 現行 | 変更後 | 意味 |
+|------|--------|------|
+| This version | **Current version** | 表示中の版（例: v2）に保存されている内容 |
+| Current | **Recipe database** | いまの Costing レシピ（recipe_lines） |
+| Final | **New recipe** | 保存後に確定する値（編集・ラジオの結果） |
+
+2-3. 行ごとの新列
+
+| 値 | 意味 |
+|----|------|
+| **Override** | **Technical Sheet（当該版）のみ**更新。レシピ（Recipe database）は変更しない。 |
+| **Overwrite** | **Technical Sheet とレシピの両方**に、選んだ値（New recipe 列）を反映する。 |
+
+※英語の override/overwrite は直感と逆になりうるが、上記の意味で固定する。
+
+
+================================================================================
+3. レシピと版（TS）の関係 — 前提知識
+================================================================================
+
+3-1. マスタと版
+
+- **レシピ（Recipe database）** … Costing 上の常に1本の正（recipe_lines 等）。
+- **版（v0, v1, …, latest）** … ある時点の Technical Sheet を固定した記録。
+  1 版 = standard_technical_sheets の 1 行 + snapshot JSONB。
+
+3-2. snapshot（アプリ内の技術用語）
+
+版ごとに凍結した JSONB パッケージ。主に:
+- **sheet** … 画面上の帳票（材料 g、PU/PT、労務、合計 等）
+- **recipe_snapshot** … 差分比較用のレシピ構成写し
+- **cost_inputs** … 版保存時の単価（価格トグル Snapshot 側）
+
+「snapshot」は金額だけではなく **版全体の記録** を指す。
+
+3-3. 「レシピはどれかの版の TS と一致しているか」
+
+【通常】
+- Costing でレシピだけ直していない限り、**いまのレシピ** は
+  **いずれか1つの版（多くは latest）の TS 内容（材料・労務など）と一致**している、
+  という運用前提でよい。
+
+【一致しなくなる瞬間】
+- **Costing だけ直した**（TS の新版も Save this version もしていない）
+  → レシピは進むが latest の版は古い → latest でバナー。
+
+【過去版を見ているだけ】
+- レシピは変わらない。レシピが一致している版（例: v3）は **見ている版（v2）とは別**。
+  「画面に v2 を出している」≠「レシピが v2 と一致」。
+
+【過去版で Override / Overwrite を混在して Save this version】
+- レシピには Overwrite 行だけ反映 → **レシピがどの版の TS とも丸ごと一致しない**
+  状態になりうる。ロジックとしては壊れていないが、latest でバナーが出うる。
+
+3-4. 差分バナー
+
+- 文言例: **This technical sheet differs from the current recipe.**
+- **latest 版**を表示中に、latest の recipe_snapshot（または同等比較）と
+  **いまのレシピ**がずれたときに表示。
+- §0 の労務バグ修正後は、Update 画面の差分表示と整合する。
+
+
+================================================================================
+4. 画面フロー（新）
+================================================================================
+
+4-1. 入口（変更なし）
+
+- Costing 画面 → **Technical Sheet** タブ
+- base recipe 一覧 → **View** → Standard Technical Sheet モーダル
+- Version プルダウンで v0 … latest を選択（通常閲覧時）
+
+4-2. 通常閲覧（sheet モード）
+
+- 価格トグル: Current / Snapshot / Current(snapshot)（現行維持）
+- ボタン: **Edit/Update**（**差分の有無に関係なく常に押せる**）
+- 過去版でも Edit/Update は開ける（保存ルールは §5 で制限）
+
+4-3. Edit/Update モード（新・一本化）
+
+【旧フロー】
+  Update →（比較のみ）→ Edit → Save / Create new version
+
+【新フロー】
+  **Edit/Update** 1 回 → 即 **旧 Update→Edit 相当の画面**
+  - 3 列ヘッダー（Current version | Recipe database | New recipe）
+  - 行ごと Override / Overwrite 列
+  - 差分行は色付け（§6）
+  - ラジオで Current version / Recipe database を選択（New recipe に反映）
+  - 材料・労務の編集可（現行 Edit 試算ロジック継承）
+
+【このモード中の制限】
+- **Version プルダウンは変更不可**（固定）。
+  ※現行も update/edit 中は disabled。新フローでも同様。
+
+【上部ボタン（旧 Create new version / Edit / Cancel を置換）】
+- **Save this version**
+- **Save as new version**
+- （Cancel は要検討 — 現行同様キャンセルで通常閲覧へ）
+
+4-4. 中間の「Update のみ」画面は廃止
+
+- 比較専用ステップは設けない。Edit/Update で比較＋編集を同時に行う。
+
+
+================================================================================
+5. 保存操作（新ロジック）
+================================================================================
+
+5-1. Save this version
+
+【意味】
+- **新しい版番号は作らない**（v2 のまま v2）。
+- 表示中の版の DB 行（snapshot 等）を **上書き更新**。
+- 行ごとの **Override / Overwrite** に従い、レシピを変えるか決める。
+
+【Override 行】
+- 当該版の TS 記録のみ更新。レシピは変更しない。
+
+【Overwrite 行】
+- 当該版の TS 記録を更新し、**レシピ（Recipe database）にも**反映。
+
+【latest / 過去版】
+- **latest でも過去版でも使用可**。
+- **過去版では Save as new version は不可**（§5-2）のため、
+  過去の記録を直す・レシピを戻す用途は主に Save this version。
+
+【確認ダイアログ】
+- **過去版**で **Overwrite が 1 行でもある** Save this version のとき表示推奨。
+- 趣旨例:
+  - 過去の版の内容に基づき、**いまのレシピが変わる**可能性がある。
+  - **latest の TS とは一致しなくなる**ことがある。よろしいですか？
+- Override のみの場合はレシピを触らないため、不要でもよい。
+
+5-2. Save as new version
+
+【意味】
+- **version_number を +1** した新版を作成（例: v3 → v4）。
+- 行ごとの Override / Overwrite に従いレシピを更新するか決める。
+- 旧「Create new version（レシピのみから）」＋ 旧「Edit→Save（新版）」を統合。
+
+【latest のみ有効】
+- **表示中が latest でないときは押せない**（非表示または disabled）。
+
+【理由（具体）】
+- すでに v3 が latest がある状態で、v2 画面から Save as new version すると、
+  「本流 v3 を飛ばした別タイムラインの版」ができ、版の意味が壊れる。
+- 新しい版を本流に足す操作は **いまの latest にいるときだけ** が合理。
+
+5-3. 旧操作との手動対応（参考）
+
+旧ボタンは廃止する。同じ結果が必要なときは、ユーザが行ごとに設定して Save する。
+
+| 旧操作 | 新 UI での相当操作（手動） |
+|--------|---------------------------|
+| Create new version（レシピから、レシピ不変） | 全行 **Override**、ラジオ **Recipe database**、**Save as new version**（latest のみ） |
+| Edit → Save（レシピ＋新版） | 全行 **Overwrite**、ラジオ自由、**Save as new version**（latest） |
+
+5-4. 具体例（クイズ・合意済み）
+
+前提: v3 = latest。v2 表示。レシピと v3 の構成は一致（バナーなし）。
+操作: 全行ラジオ **Recipe database**、全行 **Overwrite**、**Save this version**。
+
+| 対象 | 結果 |
+|------|------|
+| レシピ | **変わらない**（すでに Recipe database と同じ） |
+| v2 の版 | **v3 と同じ内容**（Description / Procedure **以外**） |
+| v3 | 行は触らない（v3 の中身はそのまま） |
+
+5-5. 具体例（過去版・混在）
+
+v2 表示。塩: **Override** + Current version（v2=10g）。労務: **Overwrite** + Current version（v2=30分）。
+Save this version 後:
+
+- レシピ: 塩は旧値のまま、労務だけ 30分 → **どの版の TS とも全体一致しない**。
+- v2 の版: 一貫した記録（10g, 30分）。
+- v3: 古いまま → **latest でバナー**。
+→ ロジック上許容（ユーザー合意: 「壊れていない」）。
+
+
+================================================================================
+6. 差分表示（色・列の見え方）
+================================================================================
+
+6-1. いつ出るか
+
+- **Edit/Update モードに入った時点**から、recipe-diff に基づき行メタを表示。
+- 旧「Update のみ」段階は廃止するため、**Edit/Update 直後から**色・3 列が有効。
+
+6-2. 行の背景色
+
+| 色 | 意味 |
+|----|------|
+| 緑 | 追加（Recipe database 側にあって Current version にない等） |
+| 赤 | 削除 |
+| 黄（amber） | 変更・仕入先差し替え |
+
+6-3. セルの見え方
+
+- 列ヘッダーは常に 3 段: Current version | Recipe database | New recipe。
+- **Current version と Recipe database は常に別セル**で表示する（マージしない）。
+- **差分がない行**でも 2 セルに分け、**同じ値をそれぞれのセルに入れる**。
+  （現行は差分なしで 1 セルに統合しているが、改修で廃止する。）
+- **その行に差分がある** → 上記 2 セルに加え、必要な箇所にラジオを表示。
+
+6-4. ラジオ
+
+- Edit/Update 画面で **行ごと**に Current version / Recipe database を選択。
+- 選択結果は **New recipe** 列に反映され、保存時に使う。
+
+
+================================================================================
+7. UI 細部（確定）
+================================================================================
+
+7-1. 単位プルダウンの幅
+
+- 非質量単位（gallon 等）用に広い幅になっている。
+- 質量のみの行（g / kg / each）は狭い。
+- **すべて広い幅に統一**する（長い単位名に合わせる）。
+
+7-2. Version プルダウン
+
+- Edit/Update モード中は **変更不可**（現行同様）。
+
+7-3. Custom / Create Summary
+
+- 本改修のスコープ外。現行どおり Custom は Coming soon、+ Create Summary 非表示。
+
+
+================================================================================
+8. 版・保存の制約まとめ
+================================================================================
+
+| 表示中の版 | Edit/Update | Save this version | Save as new version | Overwrite |
+|------------|-------------|-------------------|---------------------|-----------|
+| **latest** | 可 | 可 | 可 | 可 |
+| **過去版** | 可 | 可 | **不可** | 可（確認推奨） |
+
+【Save as new version を過去版で禁止する理由】
+- すでに新しい版（例: v3）があるのに、古い版（v2）から「新版」を作る操作は、
+  本流の版序列と矛盾し、ユーザーに説明できない。
+
+【過去版で Overwrite を許す理由】
+- 「レシピを過去の版の内容に戻したい」需要がある。
+- Save this version + Overwrite + Current version 選択でロールバックしうる。
+- その結果 latest（v3）とレシピがずれれば **バナーは v3 で出る**（想定内）。
+
+
+================================================================================
+9. API / バックエンド（実装時の論点）
+================================================================================
+
+※パス・名称は実装時に確定。ここでは必要な能力のみ列挙。
+
+9-1. 新規・変更が必要な能力
+
+| 能力 | 説明 |
+|------|------|
+| **版の上書き更新** | Save this version: 同一 version_number の行の snapshot を UPDATE（append-only 方針の例外として product 合意）。 |
+| **保存ペイロード拡張** | 行ごと override \| overwrite、ラジオ選択、ingredient / labor / description / procedure。 |
+| **Save as new version** | 現行 insert_standard_technical_sheet_version_atomic 流用可。latest ガードを API で enforce。 |
+| **過去版 Save as new version 拒否** | 400 等で明示。 |
+| **has_recipe_diff** | §0 修正済み。維持。 |
+
+9-2. 廃止・縮小しうるエンドポイント／フロー
+
+- フロントの **update** 専用モードと **Create new version** ツールバー（プレビューモーダルは
+  Save as new version 前確認として残すかは実装時決定）。
+- **POST from-latest-recipe** は Save as new version の裏側として継続しうる。
+
+9-3. トランザクション
+
+- Save this version（Overwrite 含む）:
+  1. 行ごとに recipe_lines 等を更新（Overwrite 行のみ）
+  2. 当該版 snapshot を再構築して同一 version 行を UPDATE
+- Save as new version:
+  1. 同上（Overwrite 行）
+  2. 新版 INSERT（現行 save-edits / from-latest-recipe と整合）
+
+
+================================================================================
+10. 実装フェーズ案
+================================================================================
+
+Phase 1: 用語・UI ラベル・Net Weight・単位幅・Edit/Update ボタン名
+Phase 2: フロー統合（Edit/Update 直行、Version 固定、旧 Update モード削除）
+Phase 3: Override / Overwrite 列＋Save this version / Save as new version
+Phase 4: API（版上書き、latest ガード、確認ダイアログ）
+Phase 5: テスト・既存 save-edits / preview の整理
+
+
+================================================================================
+11. 現行実装との差分チェックリスト（実装者向け）
+================================================================================
+
+[ ] Labors → Labor
+[ ] Total → Net Weight
+[ ] Update → Edit/Update
+[ ] This version / Current / Final → §2-2
+[ ] 中間 update モード削除、edit/update 一本化
+[ ] Save this version（版上書き API）
+[ ] Save as new version（過去版 disabled）
+[ ] 行ごと Override / Overwrite
+[ ] 過去版 Overwrite 時の確認ダイアログ
+[ ] 単位 select 幅の統一
+[ ] 差分なし行でも Current version / Recipe database を別セル表示（§6-3）
+[ ] computeHasRecipeDiff 共通化（§0 済）
+
+================================================================================
+  END OF DOCUMENT
+================================================================================

@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { CornerUpLeft, Edit, Loader2, Plus, Trash2 } from "lucide-react";
+import { CornerUpLeft, Loader2, Plus, Trash2 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { useTenant } from "@/contexts/TenantContext";
 import {
@@ -32,6 +32,8 @@ import {
   type RecipeSummaryTechnicalSheetIngredientRow,
   type RecipeSummaryTechnicalSheetLaborRow,
   standardTechnicalSheetsAPI,
+  type StandardSheetApplyMode,
+  type StandardSheetSaveMode,
   type StandardRecipeDiff,
   type StandardRecipeSnapshotDisplayLine,
   type StandardTechnicalSheetDetail,
@@ -42,6 +44,7 @@ import {
 import {
   convertIngredientToGrams,
   getAvailableUnitsForItem,
+  ensureUnitInList,
 } from "@/lib/ingredientUnits";
 import {
   buildIngredientItemSelectOptions,
@@ -58,12 +61,15 @@ import {
 import {
   buildUpdateDisplayPlan,
   buildUpdateMetaByRowKey,
+  defaultIngredientApplyModes,
   defaultUpdateRowChoices,
   effectivePuChoice,
   finalGramsForChoice,
-  mergedVersionAmountDisplay,
+  resolveIngredientApplyAvailabilityForDisplay,
+  resolveIngredientApplyAvailabilityForSave,
   resolveEditTotalRadios,
   resolveEditVendorRadios,
+  resolveIngredientApplyMode,
   resolvePuForUpdateRow,
   resolveSnapshotKeysForChoice,
   showTotalVersionSplit,
@@ -87,11 +93,14 @@ import {
 import {
   buildLaborUpdateDisplayPlan,
   buildLaborUpdateMetaByRowKey,
+  defaultLaborApplyModes,
   defaultLaborUpdateRowChoices,
   laborRoleForDisplay,
   effectiveLaborChoice,
   laborCostFromWage,
   resolveEditMinutesRadios,
+  resolveLaborApplyAvailabilityForSave,
+  resolveLaborApplyMode,
   resolveLaborSnapshotKeysForChoice,
   type LaborUpdateRowChoices,
   type LaborUpdateRowMeta,
@@ -109,13 +118,20 @@ type StandardTechnicalSheetViewProps = {
   sourceItemId: string;
   baseRecipeName: string;
   onClose: () => void;
+  /** Stacked desktop-style window (no full-screen backdrop wrapper). */
+  windowMode?: boolean;
+  zIndex?: number;
+  openSourceItemIds?: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
+  costRefreshGeneration?: number;
+  onSheetSaved?: (savedSourceItemId: string) => void;
 };
 
 type SheetData = Omit<
   RecipeSummaryTechnicalSheet,
   "summary_id" | "summary_name"
 >;
-type ViewMode = "sheet" | "update" | "edit";
+type ViewMode = "sheet" | "editUpdate";
 type DraftRow = RecipeSummaryTechnicalSheetIngredientRow & {
   row_key: string;
   puLoading?: boolean;
@@ -127,6 +143,57 @@ type DraftRow = RecipeSummaryTechnicalSheetIngredientRow & {
 function ptFromRow(grams: number, pu: number | null): number | null {
   if (pu == null || !Number.isFinite(pu) || grams <= 0) return null;
   return grams * pu;
+}
+
+function canLinkNatureToPreppedSheet(
+  itemId: string,
+  itemById: Map<string, Item>,
+  crossTenantItemIds: ReadonlySet<string>,
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void,
+): boolean {
+  if (!onOpenPreppedSheet || !itemId) return false;
+  if (crossTenantItemIds.has(itemId)) return false;
+  const item = itemById.get(itemId);
+  return !!item && item.item_kind === "prepped";
+}
+
+function NatureCell({
+  row,
+  itemById,
+  crossTenantItemIds,
+  onOpenPreppedSheet,
+  isDark,
+}: {
+  row: { item_id: string; nature: string };
+  itemById: Map<string, Item>;
+  crossTenantItemIds: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
+  isDark: boolean;
+}) {
+  const link = canLinkNatureToPreppedSheet(
+    row.item_id,
+    itemById,
+    crossTenantItemIds,
+    onOpenPreppedSheet,
+  );
+  if (!link) {
+    return <span>{row.nature}</span>;
+  }
+  const linkClass = isDark
+    ? "text-blue-300 hover:text-blue-200 hover:underline"
+    : "text-blue-700 hover:text-blue-900 hover:underline";
+  return (
+    <button
+      type="button"
+      className={`ts-window-no-drag text-left ${linkClass}`}
+      title="Open standard technical sheet for this prepped item"
+      onClick={() =>
+        onOpenPreppedSheet!(row.item_id, row.nature || "Prepped item")
+      }
+    >
+      {row.nature}
+    </button>
+  );
 }
 
 function puCacheKey(itemId: string, specificChild?: string | null): string {
@@ -197,6 +264,10 @@ function technicalSheetActionColumnCellClass(isDark: boolean): string {
   return `w-8 border-0 p-0 pl-1 align-middle text-center ${technicalSheetPanelBackgroundClass(isDark)}`;
 }
 
+function technicalSheetTripleCellTdClass(rowBgClass: string): string {
+  return `border p-0 h-px ${rowBgClass}`;
+}
+
 function updateRowClass(diffType: UpdateDiffType, isDark: boolean): string {
   if (diffType === "added") return isDark ? "bg-green-950/40" : "bg-green-50";
   if (diffType === "removed") return isDark ? "bg-red-950/40" : "bg-red-50";
@@ -234,6 +305,31 @@ function isRemovedRowPendingRestore(
     diffType === "removed" &&
     !!restoredRemovedKeys &&
     !restoredRemovedKeys.has(rowKey)
+  );
+}
+
+/** Restored removed row + trash: recipe has no line — same Apply lock as pre-Restore. */
+function isRemovedRestoredPendingTrash(
+  rowKey: string,
+  isPendingTrash: boolean,
+  restoredRemovedKeys?: ReadonlySet<string>,
+): boolean {
+  return (
+    isPendingTrash &&
+    !!restoredRemovedKeys &&
+    restoredRemovedKeys.has(rowKey)
+  );
+}
+
+function isIngredientApplyModeLocked(
+  diffType: UpdateDiffType | undefined,
+  rowKey: string,
+  isPendingTrash: boolean,
+  restoredRemovedKeys?: ReadonlySet<string>,
+): boolean {
+  return (
+    isRemovedRowPendingRestore(diffType, rowKey, restoredRemovedKeys) ||
+    isRemovedRestoredPendingTrash(rowKey, isPendingTrash, restoredRemovedKeys)
   );
 }
 
@@ -283,6 +379,48 @@ function formatUpdateAmount(
     return formatQuantityUnit(gramsFallback, "g");
   }
   return "—";
+}
+
+function formatUpdateVendorLabel(
+  label: string | null | undefined,
+  diffType: UpdateDiffType | undefined,
+  column: "sheet" | "live",
+  fallback: string,
+  isManualNewRow = false,
+): string {
+  if (isManualNewRow) return "—";
+  if (column === "sheet" && diffType === "added") return "—";
+  if (column === "live" && diffType === "removed") return "—";
+  const trimmed = label?.trim();
+  if (trimmed) return trimmed;
+  // Recipe database: never fall back to draft/sheet values when live has no vendor
+  if (column === "live") return "—";
+  return fallback;
+}
+
+function migrateRowKeyInSet(
+  keys: Set<string>,
+  oldKey: string,
+  newKey: string,
+): Set<string> {
+  if (oldKey === newKey || !keys.has(oldKey)) return keys;
+  const next = new Set(keys);
+  next.delete(oldKey);
+  next.add(newKey);
+  return next;
+}
+
+function migrateRowKeyInApplyModes(
+  modes: Map<string, StandardSheetApplyMode>,
+  oldKey: string,
+  newKey: string,
+): Map<string, StandardSheetApplyMode> {
+  if (oldKey === newKey || !modes.has(oldKey)) return modes;
+  const next = new Map(modes);
+  const mode = next.get(oldKey)!;
+  next.delete(oldKey);
+  next.set(newKey, mode);
+  return next;
 }
 
 function buildUpdateDisplayRows(
@@ -507,22 +645,38 @@ function cloneLaborRows(
   return rows.map((r) => ({ ...r }));
 }
 
+function defaultApplyModes(
+  keys: Iterable<string>,
+): Map<string, StandardSheetApplyMode> {
+  const m = new Map<string, StandardSheetApplyMode>();
+  for (const key of keys) {
+    m.set(key, "overwrite");
+  }
+  return m;
+}
+
 function clearUpdateSession(
   setters: {
     setRecipeDiff: (v: StandardRecipeDiff | null) => void;
-    setLivePreviewSheet: (v: SheetData | null) => void;
     setUpdateRowChoices: (v: Map<string, UpdateRowChoices>) => void;
     setRestoredRemovedKeys: (v: Set<string>) => void;
     setLaborUpdateRowChoices: (v: Map<string, LaborUpdateRowChoices>) => void;
     setRestoredRemovedLaborKeys: (v: Set<string>) => void;
+    setIngredientApplyModes: (v: Map<string, StandardSheetApplyMode>) => void;
+    setLaborApplyModes: (v: Map<string, StandardSheetApplyMode>) => void;
+    setPendingTrashIngredientKeys: (v: Set<string>) => void;
+    setPendingTrashLaborKeys: (v: Set<string>) => void;
   },
 ) {
   setters.setRecipeDiff(null);
-  setters.setLivePreviewSheet(null);
   setters.setUpdateRowChoices(new Map());
   setters.setRestoredRemovedKeys(new Set());
   setters.setLaborUpdateRowChoices(new Map());
   setters.setRestoredRemovedLaborKeys(new Set());
+  setters.setIngredientApplyModes(new Map());
+  setters.setLaborApplyModes(new Map());
+  setters.setPendingTrashIngredientKeys(new Set());
+  setters.setPendingTrashLaborKeys(new Set());
 }
 
 function formatSheetNumber(
@@ -683,11 +837,14 @@ function TechnicalSheetBody({
   pairedRemovedKeys,
   restoredRemovedKeys,
   onRestoreRemoved,
+  pendingTrashKeys,
   updateRowChoices,
   onVendorChoiceChange,
   onTotalChoiceChange,
   onFinalAmountChange,
   onVendorChange,
+  ingredientApplyModes,
+  onIngredientApplyModeChange,
   crossTenantAvailableItems,
   onAddIngredientRow,
   onNewRowPickerTypeChange,
@@ -706,14 +863,19 @@ function TechnicalSheetBody({
   pairedRemovedLaborKeys,
   restoredRemovedLaborKeys,
   onRestoreRemovedLabor,
+  pendingTrashLaborKeys,
   laborUpdateRowChoices,
   onLaborMinutesChoiceChange,
   onLaborRoleChange,
   onLaborMinutesChange,
   onRemoveLaborRow,
   onAddLaborRow,
+  laborApplyModes,
+  onLaborApplyModeChange,
   snapshotLaborCostByRowKey,
   snapshotLaborTotalCost,
+  crossTenantItemIds,
+  onOpenPreppedSheet,
 }: {
   sheet: SheetData;
   isDark: boolean;
@@ -741,6 +903,7 @@ function TechnicalSheetBody({
   pairedRemovedKeys?: Set<string>;
   restoredRemovedKeys?: Set<string>;
   onRestoreRemoved?: (rowKey: string) => void;
+  pendingTrashKeys?: Set<string>;
   updateRowChoices?: Map<string, UpdateRowChoices>;
   onVendorChoiceChange?: (rowKey: string, choice: PuChoice) => void;
   onTotalChoiceChange?: (rowKey: string, choice: PuChoice) => void;
@@ -748,6 +911,11 @@ function TechnicalSheetBody({
     rowKey: string,
     quantity: number,
     unit: string,
+  ) => void;
+  ingredientApplyModes?: Map<string, StandardSheetApplyMode>;
+  onIngredientApplyModeChange?: (
+    rowKey: string,
+    mode: StandardSheetApplyMode,
   ) => void;
   priceMode?: StandardTechnicalSheetPriceMode;
   onPriceModeChange?: (mode: StandardTechnicalSheetPriceMode) => void;
@@ -765,18 +933,27 @@ function TechnicalSheetBody({
   pairedRemovedLaborKeys?: Set<string>;
   restoredRemovedLaborKeys?: Set<string>;
   onRestoreRemovedLabor?: (rowKey: string) => void;
+  pendingTrashLaborKeys?: Set<string>;
   laborUpdateRowChoices?: Map<string, LaborUpdateRowChoices>;
   onLaborMinutesChoiceChange?: (rowKey: string, choice: PuChoice) => void;
   onLaborRoleChange?: (rowKey: string, role: string) => void;
   onLaborMinutesChange?: (rowKey: string, minutes: number) => void;
   onRemoveLaborRow?: (rowKey: string) => void;
   onAddLaborRow?: () => void;
+  laborApplyModes?: Map<string, StandardSheetApplyMode>;
+  onLaborApplyModeChange?: (
+    rowKey: string,
+    mode: StandardSheetApplyMode,
+  ) => void;
   snapshotLaborCostByRowKey?: Map<
     string,
     { hourly_wage: number | null; cost: number | null }
   >;
   snapshotLaborTotalCost?: number | null;
+  crossTenantItemIds?: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
 }) {
+  const crossTenantIds = crossTenantItemIds ?? new Set<string>();
   const rows = editRows ?? sheet.ingredient_rows;
   const laborRows = editLaborRows ?? sheet.labor_rows ?? [];
   const showBothPrices = priceMode === "both" && snapshotPriceByRowKey != null;
@@ -833,13 +1010,13 @@ function TechnicalSheetBody({
               rows={4}
               className={`w-full rounded border px-2 py-1 text-sm ${
                 isDark
-                  ? "border-slate-600 bg-slate-800 text-slate-100"
+                  ? "border-slate-600 bg-slate-900 text-slate-100"
                   : "border-gray-300 bg-white text-gray-900"
               }`}
             />
           ) : (
             <p
-              className={`whitespace-pre-wrap text-sm ${isDark ? "text-slate-300" : "text-gray-700"}`}
+              className={`whitespace-pre-wrap text-sm ${isDark ? "text-slate-200" : "text-gray-700"}`}
             >
               {procedure.trim() || "—"}
             </p>
@@ -886,13 +1063,18 @@ function TechnicalSheetBody({
               pairedRemovedKeys={pairedRemovedKeys}
               restoredRemovedKeys={restoredRemovedKeys}
               onRestoreRemoved={onRestoreRemoved}
+              pendingTrashKeys={pendingTrashKeys}
               updateRowChoices={updateRowChoices}
               onVendorChoiceChange={onVendorChoiceChange}
               onTotalChoiceChange={onTotalChoiceChange}
               onFinalAmountChange={onFinalAmountChange}
+              ingredientApplyModes={ingredientApplyModes}
+              onIngredientApplyModeChange={onIngredientApplyModeChange}
               priceMode={priceMode}
               snapshotPriceByRowKey={snapshotPriceByRowKey}
               priceLoading={priceLoading}
+              crossTenantItemIds={crossTenantIds}
+              onOpenPreppedSheet={onOpenPreppedSheet}
             />
               <div className="mt-3 flex justify-end text-right text-sm font-semibold">
                 {priceLoading ? (
@@ -913,7 +1095,7 @@ function TechnicalSheetBody({
 
       {hasUnpricedLines ? <UnpricedBanner isDark={isDark} /> : null}
 
-      <Panel title="Labors" isDark={isDark}>
+      <Panel title="Labor" isDark={isDark}>
         {updateLoading ? (
           <div className="flex justify-center py-10">
             <Loader2 className="h-6 w-6 animate-spin opacity-60" />
@@ -931,12 +1113,15 @@ function TechnicalSheetBody({
               pairedRemovedKeys={pairedRemovedLaborKeys}
               restoredRemovedKeys={restoredRemovedLaborKeys}
               onRestoreRemoved={onRestoreRemovedLabor}
+              pendingTrashKeys={pendingTrashLaborKeys}
               updateRowChoices={laborUpdateRowChoices}
               onMinutesChoiceChange={onLaborMinutesChoiceChange}
               onRoleChange={onLaborRoleChange}
               onMinutesChange={onLaborMinutesChange}
               onRemoveRow={onRemoveLaborRow}
               onAddLaborRow={onAddLaborRow}
+              laborApplyModes={laborApplyModes}
+              onLaborApplyModeChange={onLaborApplyModeChange}
               priceMode={priceMode}
               snapshotCostByRowKey={snapshotLaborCostByRowKey}
               priceLoading={priceLoading}
@@ -996,7 +1181,7 @@ function AmountEditor({
       <select
         value={unit}
         onChange={(e) => onChange(quantity, e.target.value)}
-        className={`max-w-[4.5rem] rounded border px-0.5 py-0.5 text-xs ${
+        className={`min-w-[5.5rem] rounded border px-0.5 py-0.5 text-xs ${
           isDark
             ? "border-slate-600 bg-slate-900 text-slate-100"
             : "border-gray-300 bg-white text-gray-900"
@@ -1224,11 +1409,11 @@ function UpdateTripleHeader({
       <div
         className={`grid ${showFinalColumn ? "grid-cols-3" : "grid-cols-2"} text-[10px] font-medium ${isDark ? "text-slate-300" : "text-gray-600"}`}
       >
-        <div className="border-r px-1 py-1">This version</div>
+        <div className="border-r px-1 py-1">Current version</div>
         <div className={`px-1 py-1 ${showFinalColumn ? "border-r" : ""}`}>
-          Current
+          Recipe database
         </div>
-        {showFinalColumn ? <div className="px-1 py-1">Final</div> : null}
+        {showFinalColumn ? <div className="px-1 py-1">New recipe</div> : null}
       </div>
     </div>
   );
@@ -1238,94 +1423,176 @@ function VersionTripleCell({
   rowKey,
   radioGroup,
   isDark,
-  showSplit,
-  mergeAll,
-  showFinalColumn = true,
   showRadios,
+  showFinalColumn = true,
   effectiveChoice,
   onChoiceChange,
   sheetContent,
   liveContent,
-  mergedContent,
   finalContent,
 }: {
   rowKey: string;
   radioGroup: string;
   isDark: boolean;
-  showSplit: boolean;
-  mergeAll?: boolean;
-  showFinalColumn?: boolean;
   showRadios: boolean;
+  showFinalColumn?: boolean;
   effectiveChoice: PuChoice;
   onChoiceChange?: (rowKey: string, choice: PuChoice) => void;
   sheetContent: ReactNode;
   liveContent: ReactNode;
-  mergedContent: ReactNode;
   finalContent: ReactNode;
 }) {
-  const cellClass = `flex items-center justify-end gap-0.5 border-r px-1 py-1 ${
+  const cellClass = `flex h-full items-center justify-end gap-0.5 border-r px-1 py-1 ${
     isDark ? "text-slate-200" : "text-gray-800"
   }`;
   const radioName = `version-choice-${radioGroup}-${rowKey}`;
-  const mergedCellClass = `flex items-center justify-center px-1 py-1 ${
-    isDark ? "text-slate-200" : "text-gray-800"
-  }`;
 
   const gridCols = showFinalColumn ? "grid-cols-3" : "grid-cols-2";
   const liveCellClass = showFinalColumn
     ? cellClass
     : `${cellClass.replace(" border-r", "")} px-1 py-1`;
+  const finalCellClass = `flex h-full items-center justify-end px-1 py-1 text-right ${
+    isDark ? "text-slate-200" : "text-gray-800"
+  }`;
 
   return (
-    <div className={`grid ${gridCols} text-right`}>
-      {showSplit ? (
-        <>
-          <div className={cellClass}>
-            {showRadios ? (
-              <input
-                type="radio"
-                name={radioName}
-                checked={effectiveChoice === "sheet"}
-                onChange={() => onChoiceChange?.(rowKey, "sheet")}
-                className="h-3 w-3 shrink-0"
-              />
-            ) : null}
-            <span>{sheetContent}</span>
-          </div>
-          <div className={liveCellClass}>
-            {showRadios ? (
-              <input
-                type="radio"
-                name={radioName}
-                checked={effectiveChoice === "live"}
-                onChange={() => onChoiceChange?.(rowKey, "live")}
-                className="h-3 w-3 shrink-0"
-              />
-            ) : null}
-            <span>{liveContent}</span>
-          </div>
-          {showFinalColumn ? (
-            <div className="px-1 py-1 text-right">{finalContent}</div>
-          ) : null}
-        </>
-      ) : mergeAll ? (
-        <div
-          className={`${showFinalColumn ? "col-span-3" : "col-span-2"} ${mergedCellClass}`}
-        >
-          <span>{mergedContent}</span>
-        </div>
-      ) : showFinalColumn ? (
-        <>
-          <div className={`col-span-2 border-r ${mergedCellClass}`}>
-            <span>{mergedContent}</span>
-          </div>
-          <div className="px-1 py-1 text-right">{finalContent}</div>
-        </>
-      ) : (
-        <div className={`col-span-2 ${mergedCellClass}`}>
-          <span>{mergedContent}</span>
-        </div>
-      )}
+    <div className={`grid h-full min-h-full ${gridCols} text-right`}>
+      <div className={cellClass}>
+        {showRadios ? (
+          <input
+            type="radio"
+            name={radioName}
+            checked={effectiveChoice === "sheet"}
+            onChange={() => onChoiceChange?.(rowKey, "sheet")}
+            className="h-3 w-3 shrink-0"
+          />
+        ) : null}
+        <span>{sheetContent}</span>
+      </div>
+      <div className={liveCellClass}>
+        {showRadios ? (
+          <input
+            type="radio"
+            name={radioName}
+            checked={effectiveChoice === "live"}
+            onChange={() => onChoiceChange?.(rowKey, "live")}
+            className="h-3 w-3 shrink-0"
+          />
+        ) : null}
+        <span>{liveContent}</span>
+      </div>
+      {showFinalColumn ? (
+        <div className={finalCellClass}>{finalContent}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function ApplyModeRadios({
+  rowKey,
+  value,
+  isDark,
+  onChange,
+  showOverride = true,
+  showOverwrite = true,
+  inactive = false,
+}: {
+  rowKey: string;
+  value: StandardSheetApplyMode;
+  isDark: boolean;
+  onChange: (mode: StandardSheetApplyMode) => void;
+  showOverride?: boolean;
+  showOverwrite?: boolean;
+  /** No meaningful Apply choice for this row. */
+  inactive?: boolean;
+}) {
+  const name = `apply-mode-${rowKey}`;
+  const labelClass = `flex items-center gap-1 whitespace-nowrap text-xs ${
+    isDark ? "text-slate-200" : "text-gray-900"
+  }`;
+
+  if (inactive) {
+    return (
+      <div
+        className="mx-auto flex w-fit flex-col items-start gap-1"
+        title="No changes in New recipe — Apply not needed"
+      >
+        <label className={`${labelClass} cursor-default opacity-60`}>
+          <input
+            type="radio"
+            name={name}
+            checked={false}
+            disabled
+            readOnly
+            className="h-3 w-3 shrink-0 cursor-default"
+          />
+          <span>Override</span>
+        </label>
+        <label className={`${labelClass} cursor-default opacity-60`}>
+          <input
+            type="radio"
+            name={name}
+            checked={false}
+            disabled
+            readOnly
+            className="h-3 w-3 shrink-0 cursor-default"
+          />
+          <span>Overwrite</span>
+        </label>
+      </div>
+    );
+  }
+
+  const overrideLocked = !showOverride;
+  const overwriteLocked = !showOverwrite;
+  let effectiveValue = value;
+  if (overrideLocked && !overwriteLocked) {
+    effectiveValue = "overwrite";
+  } else if (overwriteLocked && !overrideLocked) {
+    effectiveValue = "override";
+  }
+
+  const containerTitle = overwriteLocked
+    ? showOverride
+      ? "Recipe has no line — TS only"
+      : undefined
+    : overrideLocked
+      ? "New recipe matches Current version — Overwrite only"
+      : undefined;
+
+  return (
+    <div
+      className="mx-auto flex w-fit flex-col items-start gap-1"
+      title={containerTitle}
+    >
+      <label
+        className={`${labelClass}${overrideLocked ? " cursor-default opacity-60" : ""}`}
+      >
+        <input
+          type="radio"
+          name={name}
+          checked={effectiveValue === "override"}
+          disabled={overrideLocked}
+          readOnly={overrideLocked}
+          onChange={() => onChange("override")}
+          className={`h-3 w-3 shrink-0${overrideLocked ? " cursor-default" : ""}`}
+        />
+        <span>Override</span>
+      </label>
+      <label
+        className={`${labelClass}${overwriteLocked ? " cursor-default opacity-60" : ""}`}
+      >
+        <input
+          type="radio"
+          name={name}
+          checked={effectiveValue === "overwrite"}
+          disabled={overwriteLocked}
+          readOnly={overwriteLocked}
+          onChange={() => onChange("overwrite")}
+          className={`h-3 w-3 shrink-0${overwriteLocked ? " cursor-default" : ""}`}
+        />
+        <span>Overwrite</span>
+      </label>
     </div>
   );
 }
@@ -1352,13 +1619,18 @@ function IngredientTable({
   pairedRemovedKeys,
   restoredRemovedKeys,
   onRestoreRemoved,
+  pendingTrashKeys,
   updateRowChoices,
   onVendorChoiceChange,
   onTotalChoiceChange,
   onFinalAmountChange,
+  ingredientApplyModes,
+  onIngredientApplyModeChange,
   priceMode = "latest",
   snapshotPriceByRowKey,
   priceLoading,
+  crossTenantItemIds = new Set<string>(),
+  onOpenPreppedSheet,
 }: {
   rows: (RecipeSummaryTechnicalSheetIngredientRow & { row_key?: string })[];
   isDark: boolean;
@@ -1381,6 +1653,7 @@ function IngredientTable({
   pairedRemovedKeys?: Set<string>;
   restoredRemovedKeys?: Set<string>;
   onRestoreRemoved?: (rowKey: string) => void;
+  pendingTrashKeys?: Set<string>;
   updateRowChoices?: Map<string, UpdateRowChoices>;
   onVendorChoiceChange?: (rowKey: string, choice: PuChoice) => void;
   onTotalChoiceChange?: (rowKey: string, choice: PuChoice) => void;
@@ -1389,16 +1662,27 @@ function IngredientTable({
     quantity: number,
     unit: string,
   ) => void;
+  ingredientApplyModes?: Map<string, StandardSheetApplyMode>;
+  onIngredientApplyModeChange?: (
+    rowKey: string,
+    mode: StandardSheetApplyMode,
+  ) => void;
   priceMode?: StandardTechnicalSheetPriceMode;
   snapshotPriceByRowKey?: Map<
     string,
     { pu: number | null; pt: number | null }
   >;
   priceLoading?: boolean;
+  crossTenantItemIds?: ReadonlySet<string>;
+  onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
 }) {
   const showBothPrices = priceMode === "both" && snapshotPriceByRowKey != null;
   const showUpdateTotal = updateMode && updateMetaByRowKey && updateRowChoices;
   const showFinalColumn = !!updateEditMode;
+  const showApplyModeColumn =
+    !!updateEditMode &&
+    !!ingredientApplyModes &&
+    !!onIngredientApplyModeChange;
   const updateCompareMinW = showFinalColumn ? "min-w-[260px]" : "min-w-[180px]";
   const showActionColumn =
     (!!editable && !!onRemoveRow) || (!!showUpdateTotal && !!onRestoreRemoved);
@@ -1411,7 +1695,11 @@ function IngredientTable({
   }, [pickerItems, crossTenantAvailableItems]);
 
   const unitsForRow = (itemId: string) =>
-    getAvailableUnitsForItem(itemById.get(itemId), baseItems);
+    getAvailableUnitsForItem(
+      itemById.get(itemId),
+      baseItems,
+      vendorProducts,
+    );
 
   const rowKeyOf = (row: (typeof rows)[number]) =>
     row.row_key ?? rowKeyForIngredientRow(row, itemById);
@@ -1445,26 +1733,35 @@ function IngredientTable({
                 className={`border px-0 py-0 text-center align-bottom ${updateCompareMinW}`}
               >
                 <UpdateTripleHeader
-                  title="Total"
+                  title="Net Weight"
                   isDark={isDark}
                   showFinalColumn={showFinalColumn}
                 />
               </th>
             ) : (
-              <th className="border px-2 py-1 text-right">Total</th>
+              <th className="border px-2 py-1 text-right">Net Weight</th>
             )}
             <th className="border px-2 py-1 text-right">PU (kg)</th>
             <th className="border px-2 py-1 text-right">PT</th>
+            {showApplyModeColumn ? (
+              <th className="border px-2 py-1 text-center min-w-[88px]">
+                Apply
+              </th>
+            ) : null}
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => {
+          {rows.map((row, rowIndex) => {
             const draft = row as DraftRow;
             const stableRowKey = draft.row_key;
             const rowKey = stableRowKey || rowKeyOf(row);
+            const reactKey = `${rowKey}@${rowIndex}`;
             const meta = updateMetaByRowKey?.get(rowKey);
             const diffType = meta?.diffType ?? "unchanged";
             const isPendingNew = editable && !row.item_id;
+            const isManualNewRow =
+              (draft.isNew || isPendingNew) && meta == null;
+            const isPendingTrash = pendingTrashKeys?.has(rowKey) ?? false;
             const storedChoices = updateRowChoices?.get(rowKey);
             const effectiveVendorChoice = effectivePuChoice(
               diffType,
@@ -1474,12 +1771,6 @@ function IngredientTable({
               diffType,
               storedChoices?.total,
             );
-            const showTotalSplit = meta
-              ? showTotalVersionSplit(diffType, meta)
-              : false;
-            const showVendorTriple = meta
-              ? showVendorVersionSplit(diffType)
-              : false;
             const vendorRadioResolve =
               updateEditMode && meta && showVendorVersionSplit(diffType)
                 ? resolveEditVendorRadios(
@@ -1517,6 +1808,13 @@ function IngredientTable({
               rowKey,
               restoredRemovedKeys,
             );
+            const isApplyModeLocked = isIngredientApplyModeLocked(
+              diffType,
+              rowKey,
+              isPendingTrash,
+              restoredRemovedKeys,
+            );
+            const isRowLockedForEdit = isRemovedPendingRestore || isPendingTrash;
             const canRestoreRemoved =
               !!onRestoreRemoved &&
               meta != null &&
@@ -1525,9 +1823,32 @@ function IngredientTable({
             const rowUnits = row.item_id
               ? unitsForRow(row.item_id)
               : ["g"];
+            const item = row.item_id ? itemById.get(row.item_id) : undefined;
+            const applyAvailability = resolveIngredientApplyAvailabilityForDisplay(
+              meta,
+              row,
+              item,
+              { isManualNewRow, isPendingNew },
+            );
+            const isApplyInactive =
+              !!updateEditMode &&
+              !isApplyModeLocked &&
+              applyAvailability.inactive;
+            const showApplyOverride = isApplyModeLocked
+              ? true
+              : applyAvailability.showOverride;
+            const showApplyOverwrite = isApplyModeLocked
+              ? false
+              : applyAvailability.showOverwrite;
+            const applyModeValue = isApplyModeLocked
+              ? "override"
+              : resolveIngredientApplyMode(
+                  rowKey,
+                  applyAvailability,
+                  ingredientApplyModes,
+                );
             const qty = rowQuantity(row);
             const unit = row.unit?.trim() || "g";
-            const item = row.item_id ? itemById.get(row.item_id) : undefined;
             const amountChangeHandler =
               updateEditMode && onFinalAmountChange
                 ? onFinalAmountChange
@@ -1535,7 +1856,7 @@ function IngredientTable({
             const showVendorFinalEdit =
               updateEditMode &&
               editable &&
-              !isRemovedPendingRestore &&
+              !isRowLockedForEdit &&
               onVendorChange &&
               !!item &&
               item.item_kind === "raw" &&
@@ -1559,9 +1880,6 @@ function IngredientTable({
               vendorLabelFromMeta ?? row.vendor_item,
             );
 
-            const vendorMergeAll =
-              !!item && (item.item_kind === "prepped" || item.is_menu_item);
-
             const finalDisplay =
               meta != null
                 ? formatUpdateAmount(
@@ -1576,11 +1894,14 @@ function IngredientTable({
                 : formatRowAmount(row);
 
             const finalAmountEditor =
-              updateEditMode && amountChangeHandler && !isRemovedPendingRestore ? (
+              updateEditMode && amountChangeHandler && !isRowLockedForEdit ? (
                 <AmountEditor
                   quantity={qty}
                   unit={unit}
-                  units={rowUnits.length > 0 ? rowUnits : [unit || "g"]}
+                  units={ensureUnitInList(
+                    rowUnits.length > 0 ? rowUnits : [unit || "g"],
+                    unit,
+                  )}
                   isDark={isDark}
                   compact={!!useUpdateTriple}
                   onChange={(q, u) => amountChangeHandler(rowKey, q, u)}
@@ -1601,11 +1922,12 @@ function IngredientTable({
 
             return (
               <tr
-                key={stableRowKey || rowKey}
+                key={reactKey}
                 className={isDark ? "text-slate-200" : "text-gray-900"}
               >
                 <td className={`border px-2 py-1 align-top ${rowBgClass}`}>
                   {isPendingNew &&
+                  !isPendingTrash &&
                   onNewRowItemSelect &&
                   onNewRowPickerTypeChange &&
                   onNewRowCrossTenantFilterChange ? (
@@ -1621,13 +1943,19 @@ function IngredientTable({
                       onItemSelect={onNewRowItemSelect}
                     />
                   ) : (
-                    <span>{row.nature}</span>
+                    <NatureCell
+                      row={draft}
+                      itemById={itemById}
+                      crossTenantItemIds={crossTenantItemIds}
+                      onOpenPreppedSheet={onOpenPreppedSheet}
+                      isDark={isDark}
+                    />
                   )}
                 </td>
                 <td
                   className={
                     useUpdateTriple
-                      ? `border px-0 py-0 align-middle ${rowBgClass}`
+                      ? technicalSheetTripleCellTdClass(rowBgClass)
                       : `border px-2 py-1 align-top ${rowBgClass}`
                   }
                 >
@@ -1643,97 +1971,123 @@ function IngredientTable({
                       onChange={(sc) => onVendorChange(stableRowKey || rowKey, sc)}
                     />
                   ) : useUpdateTriple ? (
-                    <VersionTripleCell
-                      rowKey={rowKey}
-                      radioGroup="vendor"
-                      isDark={isDark}
-                      showSplit={showVendorTriple}
-                      mergeAll={vendorMergeAll}
-                      showFinalColumn={showFinalColumn}
-                      showRadios={showVendorRadios}
-                      effectiveChoice={vendorChoiceForRadios}
-                      onChoiceChange={onVendorChoiceChange}
-                      sheetContent={
-                        <span className="text-xs">
-                          {meta?.sheetVendorLabel ?? "—"}
-                        </span>
-                      }
-                      liveContent={
-                        <span className="text-xs">
-                          {meta?.liveVendorLabel ?? "—"}
-                        </span>
-                      }
-                      mergedContent={
-                        <span className="text-xs">{vendorDisplay}</span>
-                      }
-                      finalContent={
-                        showVendorFinalEdit ? (
-                          <VendorEditor
-                            row={draft}
-                            item={item}
-                            vendorProducts={vendorProducts}
-                            vendors={vendors}
-                            pickerItems={pickerItems}
-                            baseItems={baseItems}
-                            isDark={isDark}
-                            compact
-                            onChange={(sc) => onVendorChange!(stableRowKey || rowKey, sc)}
-                          />
-                        ) : (
-                          <span className="text-xs">{vendorDisplay}</span>
-                        )
-                      }
-                    />
+                    <div className="h-full">
+                      <VersionTripleCell
+                        rowKey={rowKey}
+                        radioGroup="vendor"
+                        isDark={isDark}
+                        showFinalColumn={showFinalColumn}
+                        showRadios={showVendorRadios}
+                        effectiveChoice={vendorChoiceForRadios}
+                        onChoiceChange={onVendorChoiceChange}
+                        sheetContent={
+                          <span className="text-xs">
+                            {formatUpdateVendorLabel(
+                              meta?.sheetVendorLabel,
+                              meta?.diffType,
+                              "sheet",
+                              vendorDisplay,
+                              isManualNewRow,
+                            )}
+                          </span>
+                        }
+                        liveContent={
+                          <span className="text-xs">
+                            {formatUpdateVendorLabel(
+                              meta?.liveVendorLabel,
+                              meta?.diffType,
+                              "live",
+                              vendorDisplay,
+                              isManualNewRow,
+                            )}
+                          </span>
+                        }
+                        finalContent={
+                          isPendingTrash || isRemovedPendingRestore ? (
+                            <span className="text-xs">—</span>
+                          ) : showVendorFinalEdit ? (
+                            <VendorEditor
+                              row={draft}
+                              item={item}
+                              vendorProducts={vendorProducts}
+                              vendors={vendors}
+                              pickerItems={pickerItems}
+                              baseItems={baseItems}
+                              isDark={isDark}
+                              compact
+                              onChange={(sc) =>
+                                onVendorChange!(stableRowKey || rowKey, sc)
+                              }
+                            />
+                          ) : (
+                            <span className="text-xs">{vendorDisplay}</span>
+                          )
+                        }
+                      />
+                    </div>
                   ) : (
                     <span className="text-xs">{vendorDisplay}</span>
                   )}
                 </td>
                 {useUpdateTriple ? (
-                  <td className={`border px-0 py-0 align-middle ${rowBgClass}`}>
-                    <VersionTripleCell
-                      rowKey={rowKey}
-                      radioGroup="total"
-                      isDark={isDark}
-                      showSplit={meta ? showTotalSplit : false}
-                      showFinalColumn={showFinalColumn}
-                      showRadios={showTotalRadios}
-                      effectiveChoice={totalChoiceForRadios}
-                      onChoiceChange={onTotalChoiceChange}
-                      sheetContent={
-                        meta
-                          ? formatUpdateAmount(
+                  <td className={technicalSheetTripleCellTdClass(rowBgClass)}>
+                    <div className="h-full">
+                      <VersionTripleCell
+                        rowKey={rowKey}
+                        radioGroup="total"
+                        isDark={isDark}
+                        showFinalColumn={showFinalColumn}
+                        showRadios={showTotalRadios}
+                        effectiveChoice={totalChoiceForRadios}
+                        onChoiceChange={onTotalChoiceChange}
+                        sheetContent={
+                          isManualNewRow ? (
+                            <span className="text-xs">—</span>
+                          ) : meta ? (
+                            formatUpdateAmount(
                               meta.sheetQuantity,
                               meta.sheetUnit,
                               meta.sheetGrams,
                             )
-                          : "—"
-                      }
-                      liveContent={
-                        meta
-                          ? formatUpdateAmount(
+                          ) : (
+                            formatRowAmount(row)
+                          )
+                        }
+                        liveContent={
+                          isManualNewRow ? (
+                            <span className="text-xs">—</span>
+                          ) : meta ? (
+                            formatUpdateAmount(
                               meta.liveQuantity,
                               meta.liveUnit,
                               meta.liveGrams,
                             )
-                          : "—"
-                      }
-                      mergedContent={
-                        meta
-                          ? mergedVersionAmountDisplay(meta, diffType)
-                          : "—"
-                      }
-                      finalContent={finalCellContent}
-                    />
+                          ) : (
+                            formatRowAmount(row)
+                          )
+                        }
+                        finalContent={
+                          isPendingTrash || isRemovedPendingRestore ? (
+                            <span className="text-xs">—</span>
+                          ) : (
+                            finalCellContent
+                          )
+                        }
+                      />
+                    </div>
                   </td>
                 ) : (
                   <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
                     {editable &&
                     amountChangeHandler &&
-                    !isRemovedPendingRestore ? (
+                    !isRowLockedForEdit ? (
                       <AmountEditor
                         quantity={qty}
                         unit={unit}
-                        units={rowUnits.length > 0 ? rowUnits : [unit || "g"]}
+                        units={ensureUnitInList(
+                    rowUnits.length > 0 ? rowUnits : [unit || "g"],
+                    unit,
+                  )}
                         isDark={isDark}
                         onChange={(q, u) =>
                           amountChangeHandler(rowKey, q, u)
@@ -1769,6 +2123,23 @@ function IngredientTable({
                     formatPtDollars(row.pt)
                   )}
                 </td>
+                {showApplyModeColumn ? (
+                  <td
+                    className={`border px-2 py-1 text-center align-middle ${rowBgClass}`}
+                  >
+                    <ApplyModeRadios
+                      rowKey={rowKey}
+                      value={applyModeValue}
+                      isDark={isDark}
+                      inactive={isApplyInactive}
+                      showOverride={showApplyOverride}
+                      showOverwrite={showApplyOverwrite}
+                      onChange={(mode) =>
+                        onIngredientApplyModeChange!(rowKey, mode)
+                      }
+                    />
+                  </td>
+                ) : null}
                 {showActionColumn ? (
                   <td className={technicalSheetActionColumnCellClass(isDark)}>
                     {canRestoreRemoved ? (
@@ -1789,9 +2160,22 @@ function IngredientTable({
                       <button
                         type="button"
                         onClick={() => onRemoveRow(rowKey)}
-                        className="text-red-500 hover:text-red-600"
-                        title="Remove row"
-                        aria-label="Remove row"
+                        className={
+                          isPendingTrash
+                            ? "rounded p-1 bg-red-600 text-white hover:bg-red-700"
+                            : "text-red-500 hover:text-red-600"
+                        }
+                        title={
+                          isPendingTrash
+                            ? "Marked for removal — click to undo"
+                            : "Mark for removal"
+                        }
+                        aria-label={
+                          isPendingTrash
+                            ? "Undo mark for removal"
+                            : "Mark for removal"
+                        }
+                        aria-pressed={isPendingTrash}
                       >
                         <Trash2 className="mx-auto h-4 w-4" />
                       </button>
@@ -1828,6 +2212,10 @@ export function StandardTechnicalSheetView({
   sourceItemId,
   baseRecipeName,
   onClose,
+  windowMode = false,
+  onOpenPreppedSheet,
+  costRefreshGeneration = 0,
+  onSheetSaved,
 }: StandardTechnicalSheetViewProps) {
   const [versions, setVersions] = useState<StandardTechnicalSheetVersionMeta[]>(
     [],
@@ -1841,20 +2229,13 @@ export function StandardTechnicalSheetView({
   const [loading, setLoading] = useState(true);
   const [sheetLoading, setSheetLoading] = useState(false);
   const [priceLoading, setPriceLoading] = useState(false);
-  const [createPending, setCreatePending] = useState(false);
   const [savePending, setSavePending] = useState(false);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewSheet, setPreviewSheet] = useState<SheetData | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
 
   const [priceMode, setPriceMode] =
     useState<StandardTechnicalSheetPriceMode>("latest");
   const prevPriceModeRef = useRef<StandardTechnicalSheetPriceMode | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("sheet");
   const [recipeDiff, setRecipeDiff] = useState<StandardRecipeDiff | null>(null);
-  const [livePreviewSheet, setLivePreviewSheet] = useState<SheetData | null>(
-    null,
-  );
   const [updateRowChoices, setUpdateRowChoices] = useState<
     Map<string, UpdateRowChoices>
   >(new Map());
@@ -1868,7 +2249,17 @@ export function StandardTechnicalSheetView({
     Set<string>
   >(() => new Set());
   const [updateLoading, setUpdateLoading] = useState(false);
-  const [editReturnMode, setEditReturnMode] = useState<ViewMode | null>(null);
+  const [ingredientApplyModes, setIngredientApplyModes] = useState<
+    Map<string, StandardSheetApplyMode>
+  >(() => new Map());
+  const [laborApplyModes, setLaborApplyModes] = useState<
+    Map<string, StandardSheetApplyMode>
+  >(() => new Map());
+  const [pendingTrashIngredientKeys, setPendingTrashIngredientKeys] =
+    useState<Set<string>>(() => new Set());
+  const [pendingTrashLaborKeys, setPendingTrashLaborKeys] = useState<
+    Set<string>
+  >(() => new Set());
 
   const [editRows, setEditRows] = useState<DraftRow[] | null>(null);
   const [editLaborRows, setEditLaborRows] = useState<LaborDraftRow[] | null>(
@@ -1876,8 +2267,6 @@ export function StandardTechnicalSheetView({
   );
   const [editLaborHasUnpriced, setEditLaborHasUnpriced] = useState(false);
   const [laborRoles, setLaborRoles] = useState<LaborRole[]>([]);
-  const [updateDescription, setUpdateDescription] = useState("");
-  const [updateProcedure, setUpdateProcedure] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editProcedure, setEditProcedure] = useState("");
   const [editHasUnpriced, setEditHasUnpriced] = useState(false);
@@ -1973,6 +2362,11 @@ export function StandardTechnicalSheetView({
       }));
   }, [crossTenantShareRows, contextTenants]);
 
+  const crossTenantItemIds = useMemo(
+    () => new Set(crossTenantAvailableItems.map((entry) => entry.item.id)),
+    [crossTenantAvailableItems],
+  );
+
   const loadDetail = useCallback(
     async (versionId: string, mode: StandardTechnicalSheetPriceMode) => {
       const apiMode = mode === "both" ? "latest" : mode;
@@ -2055,25 +2449,20 @@ export function StandardTechnicalSheetView({
     setEditLaborRows(null);
     setEditHasUnpriced(false);
     setEditLaborHasUnpriced(false);
-    setEditReturnMode(null);
-    setUpdateDescription("");
-    setUpdateProcedure("");
+    setEditDescription("");
+    setEditProcedure("");
     clearUpdateSession({
       setRecipeDiff,
-      setLivePreviewSheet,
       setUpdateRowChoices,
       setRestoredRemovedKeys,
       setLaborUpdateRowChoices,
       setRestoredRemovedLaborKeys,
+      setIngredientApplyModes,
+      setLaborApplyModes,
+      setPendingTrashIngredientKeys,
+      setPendingTrashLaborKeys,
     });
   }, [selectedVersionId]);
-
-  const canOpenUpdate = detail?.is_latest === true;
-  const updateTextChanged =
-    (updateDescription.trim() || null) !== (detail?.description?.trim() || null) ||
-    (updateProcedure.trim() || null) !== (detail?.procedure?.trim() || null);
-  const canCreateVersionFromRecipe =
-    detail?.has_recipe_diff === true || updateTextChanged;
 
   const updateDisplayPlan = useMemo(
     () =>
@@ -2149,23 +2538,13 @@ export function StandardTechnicalSheetView({
   const snapshotLaborTotalCost =
     detail?.snapshot?.sheet?.total_labor_cost ?? null;
 
-  const isUpdateFlow =
-    viewMode === "update" || (viewMode === "edit" && editReturnMode === "update");
-  const showRestoreRemoved =
-    viewMode === "edit" && editReturnMode === "update";
+  const isEditUpdate = viewMode === "editUpdate";
+  const showRestoreRemoved = isEditUpdate;
 
   const displayDescription =
-    viewMode === "edit"
-      ? editDescription
-      : viewMode === "update"
-        ? updateDescription
-        : (detail?.description ?? "");
+    isEditUpdate ? editDescription : (detail?.description ?? "");
   const displayProcedure =
-    viewMode === "edit"
-      ? editProcedure
-      : viewMode === "update"
-        ? updateProcedure
-        : (detail?.procedure ?? "");
+    isEditUpdate ? editProcedure : (detail?.procedure ?? "");
 
   const displaySheet = useMemo((): SheetData | null => {
     if (!detail) return null;
@@ -2174,29 +2553,27 @@ export function StandardTechnicalSheetView({
       labor_rows: detail.sheet.labor_rows ?? [],
       total_labor_cost: detail.sheet.total_labor_cost ?? null,
     };
-    if (viewMode === "edit" && editRows) {
+    if (isEditUpdate && editRows) {
       const ingredientRowsForTotal =
-        editReturnMode === "update" && updateMetaByRowKey
+        updateMetaByRowKey
           ? editRows.filter((r) => {
               const key = r.row_key;
               if (!key) return true;
               const meta = updateMetaByRowKey.get(key);
               return !(
                 meta?.diffType === "removed" && !restoredRemovedKeys.has(key)
-              );
+              ) && !pendingTrashIngredientKeys.has(key);
             })
           : editRows;
       const { total } = recomputeTotals(ingredientRowsForTotal);
       const laborRowsForTotal =
-        editReturnMode === "update" &&
-        editLaborRows != null &&
-        laborUpdateMetaByRowKey
+        editLaborRows != null && laborUpdateMetaByRowKey
           ? editLaborRows.filter((r) => {
               const meta = laborUpdateMetaByRowKey.get(r.row_key);
               return !(
                 meta?.diffType === "removed" &&
                 !restoredRemovedLaborKeys.has(r.row_key)
-              );
+              ) && !pendingTrashLaborKeys.has(r.row_key);
             })
           : editLaborRows;
       const laborResult =
@@ -2214,155 +2591,23 @@ export function StandardTechnicalSheetView({
         total_labor_cost: laborResult.total,
       };
     }
-    if (
-      viewMode === "update" &&
-      livePreviewSheet &&
-      recipeDiff &&
-      updateMetaByRowKey &&
-      laborUpdateMetaByRowKey
-    ) {
-      const rows = buildUpdateDisplayRows(
-        detail.sheet,
-        livePreviewSheet,
-        recipeDiff,
-        updateMetaByRowKey,
-        updateRowChoices,
-        restoredRemovedKeys,
-        itemById,
-        catalogItems,
-        vendorProducts,
-        vendors,
-        baseItems,
-      );
-      let totalCost = 0;
-      let hasUnpriced = false;
-      for (const row of rows) {
-        if (row.pt == null || !Number.isFinite(row.pt)) hasUnpriced = true;
-        else totalCost += row.pt;
-      }
-      const laborRows = buildUpdateDisplayLaborRows(
-        detail.sheet,
-        livePreviewSheet,
-        recipeDiff,
-        laborUpdateMetaByRowKey,
-        laborUpdateRowChoices,
-        restoredRemovedLaborKeys,
-        laborRoles,
-      );
-      let laborTotalCost = 0;
-      let laborHasUnpriced = false;
-      for (const row of laborRows) {
-        if (row.cost == null || !Number.isFinite(row.cost)) {
-          laborHasUnpriced = true;
-        } else {
-          laborTotalCost += row.cost;
-        }
-      }
-      return {
-        ...baseSheet,
-        ingredient_rows: rows,
-        total_ingredient_cost:
-          hasUnpriced && totalCost === 0 ? null : totalCost,
-        labor_rows: laborRows,
-        total_labor_cost:
-          laborHasUnpriced && laborTotalCost === 0 ? null : laborTotalCost,
-      };
-    }
     return baseSheet;
   }, [
     detail,
-    viewMode,
-    editReturnMode,
+    isEditUpdate,
     editRows,
     editLaborRows,
     laborRoles,
     updateMetaByRowKey,
-    livePreviewSheet,
-    recipeDiff,
     laborUpdateMetaByRowKey,
-    updateRowChoices,
-    laborUpdateRowChoices,
     restoredRemovedKeys,
     restoredRemovedLaborKeys,
-    itemById,
-    catalogItems,
-    vendorProducts,
-    vendors,
-    baseItems,
+    pendingTrashIngredientKeys,
+    pendingTrashLaborKeys,
   ]);
 
-  const openCreatePreview = async () => {
-    setPreviewOpen(true);
-    setPreviewLoading(true);
-    setPreviewSheet(null);
-    try {
-      const sheet =
-        await standardTechnicalSheetsAPI.previewFromLatestRecipe(sourceItemId);
-      setPreviewSheet(sheet);
-    } catch (e) {
-      console.error(e);
-      alert("Failed to preview technical sheet");
-      setPreviewOpen(false);
-    } finally {
-      setPreviewLoading(false);
-    }
-  };
-
-  const confirmCreateVersion = async () => {
-    setCreatePending(true);
-    try {
-      const created = await standardTechnicalSheetsAPI.createFromLatestRecipe(
-        sourceItemId,
-        {
-          description: updateDescription.trim() ? updateDescription.trim() : null,
-          procedure: updateProcedure.trim() ? updateProcedure.trim() : null,
-        },
-      );
-      const v = await loadVersions();
-      const match = v.find((x) => x.id === created.id);
-      setSelectedVersionId(match?.id ?? created.id);
-      setPreviewOpen(false);
-      setViewMode("sheet");
-      setEditReturnMode(null);
-      setUpdateDescription("");
-      setUpdateProcedure("");
-      clearUpdateSession({
-        setRecipeDiff,
-        setLivePreviewSheet,
-        setUpdateRowChoices,
-        setRestoredRemovedKeys,
-        setLaborUpdateRowChoices,
-        setRestoredRemovedLaborKeys,
-      });
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e);
-      alert(
-        message.includes("no_recipe_diff") ||
-          message.includes("matches the latest")
-          ? "Current recipe matches the latest technical sheet."
-          : message,
-      );
-    } finally {
-      setCreatePending(false);
-    }
-  };
-
-  const cancelUpdate = () => {
-    setViewMode("sheet");
-    setUpdateDescription("");
-    setUpdateProcedure("");
-    clearUpdateSession({
-      setRecipeDiff,
-      setLivePreviewSheet,
-      setUpdateRowChoices,
-      setRestoredRemovedKeys,
-      setLaborUpdateRowChoices,
-      setRestoredRemovedLaborKeys,
-    });
-  };
-
-  const openUpdate = async () => {
-    if (!selectedVersionId || !canOpenUpdate) return;
+  const openEditUpdate = async () => {
+    if (!selectedVersionId || !detail?.sheet) return;
     setUpdateLoading(true);
     setPriceMode("latest");
     try {
@@ -2372,22 +2617,97 @@ export function StandardTechnicalSheetView({
         standardTechnicalSheetsAPI.previewFromLatestRecipe(sourceItemId),
       ]);
       setRecipeDiff(diff);
-      setLivePreviewSheet(live);
-      setUpdateDescription(d.description ?? "");
-      setUpdateProcedure(d.procedure ?? "");
+      setEditDescription(d.description ?? "");
+      setEditProcedure(d.procedure ?? "");
       setRestoredRemovedKeys(new Set());
       setRestoredRemovedLaborKeys(new Set());
       const plan = buildUpdateDisplayPlan(diff);
-      setUpdateRowChoices(defaultUpdateRowChoices(diff, plan));
+      const choices = defaultUpdateRowChoices(diff, plan);
       const laborPlan = buildLaborUpdateDisplayPlan(diff);
-      setLaborUpdateRowChoices(defaultLaborUpdateRowChoices(diff, laborPlan));
-      setViewMode("update");
+      const laborChoices = defaultLaborUpdateRowChoices(diff, laborPlan);
+      setUpdateRowChoices(choices);
+      setLaborUpdateRowChoices(laborChoices);
+      setIngredientApplyModes(defaultIngredientApplyModes(diff, plan));
+      setLaborApplyModes(defaultLaborApplyModes(diff, laborPlan));
+
+      const clonedRows = buildEditRowsFromChoices(
+        d.sheet,
+        live,
+        choices,
+        diff,
+        new Set(),
+        itemById,
+        catalogItems,
+        vendorProducts,
+        vendors,
+        baseItems,
+      );
+      const clonedLabor = buildEditLaborRowsFromChoices(
+        d.sheet,
+        live,
+        laborChoices,
+        diff,
+        new Set(),
+        laborRoles,
+      );
+      setEditRows(clonedRows);
+      setEditLaborRows(clonedLabor);
+      const cache = new Map<string, number | null>();
+      for (const row of clonedRows) {
+        cache.set(puCacheKey(row.item_id, row.specific_child), row.pu);
+      }
+      setCostCache(cache);
+      setEditHasUnpriced(recomputeTotals(clonedRows).hasUnpriced);
+      setEditLaborHasUnpriced(
+        recomputeLaborTotals(clonedLabor, laborRoles).hasUnpriced,
+      );
+      setViewMode("editUpdate");
+
+      try {
+        const [items, bases] = await Promise.all([
+          itemsAPI.getAll(),
+          baseItemsAPI.getAll(),
+        ]);
+        setPickerItems(
+          items.filter(
+            (i) =>
+              !i.deprecated &&
+              (i.item_kind === "raw" || i.item_kind === "prepped") &&
+              i.id !== sourceItemId,
+          ),
+        );
+        setBaseItems(bases);
+      } catch (e) {
+        console.error(e);
+      }
     } catch (e) {
       console.error(e);
-      alert("Failed to load update comparison");
+      alert("Failed to open Edit/Update");
     } finally {
       setUpdateLoading(false);
     }
+  };
+
+  const cancelEditUpdate = () => {
+    setViewMode("sheet");
+    setEditRows(null);
+    setEditLaborRows(null);
+    setEditHasUnpriced(false);
+    setEditLaborHasUnpriced(false);
+    setCostCache(new Map());
+    setEditDescription("");
+    setEditProcedure("");
+    clearUpdateSession({
+      setRecipeDiff,
+      setUpdateRowChoices,
+      setRestoredRemovedKeys,
+      setLaborUpdateRowChoices,
+      setRestoredRemovedLaborKeys,
+      setIngredientApplyModes,
+      setLaborApplyModes,
+      setPendingTrashIngredientKeys,
+      setPendingTrashLaborKeys,
+    });
   };
 
   const handleRestoreRemoved = (rowKey: string) => {
@@ -2441,11 +2761,7 @@ export function StandardTechnicalSheetView({
         return updated;
       }),
     );
-    if (
-      editReturnMode === "update" &&
-      updateMetaByRowKey &&
-      syncedTotalGrams != null
-    ) {
+    if (isEditUpdate && updateMetaByRowKey && syncedTotalGrams != null) {
       const meta = updateMetaByRowKey.get(rowKey);
       if (meta) {
         const resolved = resolveEditTotalRadios(
@@ -2544,7 +2860,7 @@ export function StandardTechnicalSheetView({
       return next;
     });
 
-    if (editReturnMode === "update" && updateMetaByRowKey) {
+    if (isEditUpdate && updateMetaByRowKey) {
       const meta = updateMetaByRowKey.get(rowKey);
       if (meta) {
         const resolved = resolveEditVendorRadios(
@@ -2590,92 +2906,6 @@ export function StandardTechnicalSheetView({
 
   const handleFinalAmountChange = handleAmountChange;
 
-  const startEdit = async () => {
-    if (!detail?.sheet) return;
-    const fromUpdate = viewMode === "update";
-    const live = livePreviewSheet;
-    if (fromUpdate) {
-      if (!live || !recipeDiff) return;
-      setEditReturnMode("update");
-    } else if (!detail.is_latest) {
-      return;
-    } else {
-      setEditReturnMode(null);
-    }
-
-    let clonedRows: DraftRow[];
-    let clonedLabor: LaborDraftRow[];
-    if (fromUpdate) {
-      clonedRows = buildEditRowsFromChoices(
-        detail.sheet,
-        live!,
-        updateRowChoices,
-        recipeDiff!,
-        restoredRemovedKeys,
-        itemById,
-        catalogItems,
-        vendorProducts,
-        vendors,
-        baseItems,
-      );
-      clonedLabor = buildEditLaborRowsFromChoices(
-        detail.sheet,
-        live!,
-        laborUpdateRowChoices,
-        recipeDiff!,
-        restoredRemovedLaborKeys,
-        laborRoles,
-      );
-    } else {
-      clonedRows = cloneIngredientRows(detail.sheet.ingredient_rows, itemById);
-      clonedLabor = cloneLaborRows(detail.sheet.labor_rows ?? []);
-    }
-    setEditRows(clonedRows);
-    setEditLaborRows(clonedLabor);
-    const cache = new Map<string, number | null>();
-    for (const row of clonedRows) {
-      cache.set(puCacheKey(row.item_id, row.specific_child), row.pu);
-    }
-    setCostCache(cache);
-    setEditHasUnpriced(recomputeTotals(clonedRows).hasUnpriced);
-    setEditLaborHasUnpriced(recomputeLaborTotals(clonedLabor, laborRoles).hasUnpriced);
-    setEditDescription(
-      fromUpdate ? updateDescription : (detail.description ?? ""),
-    );
-    setEditProcedure(fromUpdate ? updateProcedure : (detail.procedure ?? ""));
-    setViewMode("edit");
-    try {
-      const [items, bases] = await Promise.all([
-        itemsAPI.getAll(),
-        baseItemsAPI.getAll(),
-      ]);
-      setPickerItems(
-        items.filter(
-          (i) =>
-            !i.deprecated &&
-            (i.item_kind === "raw" || i.item_kind === "prepped") &&
-            i.id !== sourceItemId,
-        ),
-      );
-      setBaseItems(bases);
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const cancelEdit = () => {
-    const returnMode = editReturnMode;
-    setEditRows(null);
-    setEditLaborRows(null);
-    setEditHasUnpriced(false);
-    setEditLaborHasUnpriced(false);
-    setCostCache(new Map());
-    setEditReturnMode(null);
-    setEditDescription("");
-    setEditProcedure("");
-    setViewMode(returnMode === "update" ? "update" : "sheet");
-  };
-
   const updateEditRows = (updater: (prev: DraftRow[]) => DraftRow[]) => {
     setEditRows((prev) => {
       if (!prev) return prev;
@@ -2687,7 +2917,12 @@ export function StandardTechnicalSheetView({
   };
 
   const handleRemoveRow = (rowKey: string) => {
-    updateEditRows((prev) => prev.filter((r) => r.row_key !== rowKey));
+    setPendingTrashIngredientKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
+      return next;
+    });
   };
 
   const updateEditLaborRows = (updater: (prev: LaborDraftRow[]) => LaborDraftRow[]) => {
@@ -2719,7 +2954,7 @@ export function StandardTechnicalSheetView({
         };
       }),
     );
-    if (editReturnMode === "update" && laborUpdateMetaByRowKey) {
+    if (isEditUpdate && laborUpdateMetaByRowKey) {
       const meta = laborUpdateMetaByRowKey.get(rowKey);
       if (meta) {
         const resolved = resolveEditMinutesRadios(
@@ -2750,7 +2985,7 @@ export function StandardTechnicalSheetView({
       next.set(rowKey, { ...current, vendor: choice });
       return next;
     });
-    if (editReturnMode !== "update") return;
+    if (!isEditUpdate) return;
     const meta = updateMetaByRowKey?.get(rowKey);
     if (!meta) return;
     const sc =
@@ -2765,7 +3000,7 @@ export function StandardTechnicalSheetView({
       next.set(rowKey, { ...current, total: choice });
       return next;
     });
-    if (editReturnMode !== "update") return;
+    if (!isEditUpdate) return;
     const meta = updateMetaByRowKey?.get(rowKey);
     if (!meta) return;
     const row = editRows?.find((r) => r.row_key === rowKey);
@@ -2794,7 +3029,7 @@ export function StandardTechnicalSheetView({
       next.set(rowKey, { ...current, minutes: choice });
       return next;
     });
-    if (editReturnMode !== "update") return;
+    if (!isEditUpdate) return;
     const meta = laborUpdateMetaByRowKey?.get(rowKey);
     if (!meta) return;
     const minutes =
@@ -2803,7 +3038,12 @@ export function StandardTechnicalSheetView({
   };
 
   const handleRemoveLaborRow = (rowKey: string) => {
-    updateEditLaborRows((prev) => prev.filter((r) => r.row_key !== rowKey));
+    setPendingTrashLaborKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(rowKey)) next.delete(rowKey);
+      else next.add(rowKey);
+      return next;
+    });
   };
 
   const handleAddLaborRow = () => {
@@ -2817,6 +3057,21 @@ export function StandardTechnicalSheetView({
       isNew: true,
     };
     updateEditLaborRows((prev) => [...prev, newRow]);
+    setLaborApplyModes((prev) => new Map(prev).set(rowKey, "overwrite"));
+  };
+
+  const handleIngredientApplyModeChange = (
+    rowKey: string,
+    mode: StandardSheetApplyMode,
+  ) => {
+    setIngredientApplyModes((prev) => new Map(prev).set(rowKey, mode));
+  };
+
+  const handleLaborApplyModeChange = (
+    rowKey: string,
+    mode: StandardSheetApplyMode,
+  ) => {
+    setLaborApplyModes((prev) => new Map(prev).set(rowKey, mode));
   };
 
   const fetchPuForItem = async (
@@ -2881,6 +3136,7 @@ export function StandardTechnicalSheetView({
       pickerType: "raw",
     };
     updateEditRows((prev) => [...prev, newRow]);
+    setIngredientApplyModes((prev) => new Map(prev).set(rowKey, "overwrite"));
   };
 
   const handleNewRowPickerTypeChange = (
@@ -2967,6 +3223,12 @@ export function StandardTechnicalSheetView({
         };
       }),
     );
+    setPendingTrashIngredientKeys((prev) =>
+      migrateRowKeyInSet(prev, rowKey, newRowKey),
+    );
+    setIngredientApplyModes((prev) =>
+      migrateRowKeyInApplyModes(prev, rowKey, newRowKey),
+    );
 
     const grams = editRows?.find((r) => r.row_key === rowKey)?.total ?? 0;
     if (grams > 0) {
@@ -2987,14 +3249,28 @@ export function StandardTechnicalSheetView({
     void applyItemToDraftRow(rowKey, itemId);
   };
 
-  const handleSaveEdit = async () => {
-    if (!selectedVersionId || !editRows) return;
+  const handleSave = async (saveMode: StandardSheetSaveMode) => {
+    if (!selectedVersionId || !editRows || !detail) return;
+
+    const hasOverwrite =
+      [...ingredientApplyModes.values()].some((m) => m === "overwrite") ||
+      [...laborApplyModes.values()].some((m) => m === "overwrite");
+
+    if (saveMode === "this_version" && !detail.is_latest && hasOverwrite) {
+      const ok = window.confirm(
+        "Saving will update the current recipe based on this past version's content. " +
+          "The latest technical sheet may no longer match the recipe. Continue?",
+      );
+      if (!ok) return;
+    }
+
     setSavePending(true);
     try {
       const includeIngredientRow = (r: DraftRow) => {
         if (!r.item_id || r.total <= 0) return false;
-        if (editReturnMode === "update" && updateMetaByRowKey) {
-          const key = r.row_key;
+        const key = r.row_key;
+        if (key && pendingTrashIngredientKeys.has(key)) return false;
+        if (updateMetaByRowKey) {
           if (!key) return true;
           const meta = updateMetaByRowKey.get(key);
           if (meta?.diffType === "removed" && !restoredRemovedKeys.has(key)) {
@@ -3005,7 +3281,8 @@ export function StandardTechnicalSheetView({
       };
       const includeLaborRow = (r: LaborDraftRow) => {
         if (!r.labor_role.trim() || r.minutes <= 0) return false;
-        if (editReturnMode === "update" && laborUpdateMetaByRowKey) {
+        if (pendingTrashLaborKeys.has(r.row_key)) return false;
+        if (laborUpdateMetaByRowKey) {
           const meta = laborUpdateMetaByRowKey.get(r.row_key);
           if (
             meta?.diffType === "removed" &&
@@ -3016,57 +3293,229 @@ export function StandardTechnicalSheetView({
         }
         return true;
       };
-      const created = await standardTechnicalSheetsAPI.saveEdits(
+
+      const excluded_ingredients: Array<{
+        item_id: string;
+        apply_mode: StandardSheetApplyMode;
+      }> = [];
+      if (updateMetaByRowKey) {
+        for (const [rowKey, meta] of updateMetaByRowKey) {
+          if (
+            meta.diffType === "removed" &&
+            !restoredRemovedKeys.has(rowKey)
+          ) {
+            excluded_ingredients.push({
+              item_id: meta.child_item_id,
+              apply_mode: "override",
+            });
+          }
+        }
+      }
+
+      const liveIngredientChildIds = new Set(
+        (recipeDiff?.live ?? []).map((line) => line.child_item_id),
+      );
+      for (const rowKey of pendingTrashIngredientKeys) {
+        const row = editRows.find((r) => r.row_key === rowKey);
+        if (!row?.item_id || !liveIngredientChildIds.has(row.item_id)) continue;
+        if (excluded_ingredients.some((e) => e.item_id === row.item_id)) continue;
+        excluded_ingredients.push({
+          item_id: row.item_id,
+          apply_mode: ingredientApplyModes.get(rowKey) ?? "overwrite",
+        });
+      }
+
+      const excluded_labor: Array<{
+        row_key: string;
+        apply_mode: StandardSheetApplyMode;
+      }> = [];
+      if (laborUpdateMetaByRowKey) {
+        for (const [rowKey, meta] of laborUpdateMetaByRowKey) {
+          if (
+            meta.diffType === "removed" &&
+            !restoredRemovedLaborKeys.has(rowKey)
+          ) {
+            excluded_labor.push({
+              row_key: rowKey,
+              apply_mode: "override",
+            });
+          }
+        }
+      }
+
+      const liveLaborRowKeys = new Set(
+        (recipeDiff?.labor_live ?? []).map((line) => line.row_key),
+      );
+      for (const rowKey of pendingTrashLaborKeys) {
+        if (!liveLaborRowKeys.has(rowKey)) continue;
+        if (excluded_labor.some((e) => e.row_key === rowKey)) continue;
+        excluded_labor.push({
+          row_key: rowKey,
+          apply_mode: laborApplyModes.get(rowKey) ?? "overwrite",
+        });
+      }
+
+      const saved = await standardTechnicalSheetsAPI.saveSheet(
         selectedVersionId,
         {
-          ingredient_rows: editRows
-            .filter(includeIngredientRow)
-            .map((r) => ({
+          save_mode: saveMode,
+          ingredient_rows: editRows.filter(includeIngredientRow).map((r) => {
+            const meta = updateMetaByRowKey?.get(r.row_key);
+            const item = r.item_id ? itemById.get(r.item_id) : undefined;
+            const applyAvailability = resolveIngredientApplyAvailabilityForSave(
+              meta,
+              r,
+              item,
+              saveMode,
+              {
+                isManualNewRow: meta == null && !r.item_id,
+                isPendingNew: !r.item_id,
+              },
+            );
+            return {
               item_id: r.item_id,
               total_grams: r.total,
               specific_child: r.specific_child ?? undefined,
               step_quantities: r.step_quantities,
-            })),
+              apply_mode: resolveIngredientApplyMode(
+                r.row_key,
+                applyAvailability,
+                ingredientApplyModes,
+              ),
+            };
+          }),
           labor_rows: (editLaborRows ?? [])
             .filter(includeLaborRow)
-            .map((r) => ({
-              ...(r.isNew ||
-              r.row_key.startsWith("new-") ||
-              r.row_key.startsWith("labor-swap:")
-                ? {}
-                : { row_key: r.row_key }),
-              labor_role: r.labor_role.trim(),
-              minutes: r.minutes,
-            })),
+            .map((r) => {
+              const meta = laborUpdateMetaByRowKey?.get(r.row_key);
+              const applyAvailability = resolveLaborApplyAvailabilityForSave(
+                meta,
+                r,
+                saveMode,
+                { isNew: r.isNew },
+              );
+              return {
+                ...(r.isNew ||
+                r.row_key.startsWith("new-") ||
+                r.row_key.startsWith("labor-swap:")
+                  ? {}
+                  : { row_key: r.row_key }),
+                labor_role: r.labor_role.trim(),
+                minutes: r.minutes,
+                apply_mode: resolveLaborApplyMode(
+                  r.row_key,
+                  applyAvailability,
+                  laborApplyModes,
+                ),
+              };
+            }),
+          excluded_ingredients:
+            excluded_ingredients.length > 0 ? excluded_ingredients : undefined,
+          excluded_labor:
+            excluded_labor.length > 0 ? excluded_labor : undefined,
           description: editDescription.trim() ? editDescription.trim() : null,
           procedure: editProcedure.trim() ? editProcedure.trim() : null,
         },
       );
       const v = await loadVersions();
-      const match = v.find((x) => x.id === created.id);
-      setSelectedVersionId(match?.id ?? created.id);
-      setEditRows(null);
-      setEditLaborRows(null);
-      setEditReturnMode(null);
-      setEditDescription("");
-      setEditProcedure("");
-      setViewMode("sheet");
-      clearUpdateSession({
-        setRecipeDiff,
-        setLivePreviewSheet,
-        setUpdateRowChoices,
-        setRestoredRemovedKeys,
-        setLaborUpdateRowChoices,
-        setRestoredRemovedLaborKeys,
-      });
+      const match = v.find((x) => x.id === saved.id);
+      const savedId = match?.id ?? saved.id;
+      setSelectedVersionId(savedId);
+      cancelEditUpdate();
+      await loadDetail(savedId, priceMode);
+      onSheetSaved?.(sourceItemId);
     } catch (e) {
       console.error(e);
       const message = e instanceof Error ? e.message : String(e);
-      alert(message || "Failed to save technical sheet edits");
+      alert(message || "Failed to save technical sheet");
     } finally {
       setSavePending(false);
     }
   };
+
+  const refreshCostsFromExternalSave = useCallback(async () => {
+    if (viewMode === "sheet") {
+      if (
+        !selectedVersionId ||
+        (priceMode !== "latest" && priceMode !== "both")
+      ) {
+        return;
+      }
+      setPriceLoading(true);
+      try {
+        await loadDetail(selectedVersionId, priceMode);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setPriceLoading(false);
+      }
+      return;
+    }
+    if (!editRows) return;
+    const preppedIds = [
+      ...new Set(
+        editRows
+          .filter((row) => {
+            if (!row.item_id || crossTenantItemIds.has(row.item_id)) {
+              return false;
+            }
+            const item = itemById.get(row.item_id);
+            return item?.item_kind === "prepped";
+          })
+          .map((row) => row.item_id),
+      ),
+    ];
+    if (preppedIds.length === 0) return;
+    try {
+      const { costs } = await costAPI.getCostsBreakdownMissing(preppedIds);
+      const cacheUpdates = new Map<string, number | null>();
+      updateEditRows((prev) => {
+        if (!prev) return prev;
+        const next = prev.map((row) => {
+          const item = itemById.get(row.item_id);
+          if (item?.item_kind !== "prepped") return row;
+          const entry = costs[row.item_id];
+          const pu =
+            entry &&
+            Number.isFinite(entry.total_cost_per_gram) &&
+            entry.total_cost_per_gram > 0
+              ? entry.total_cost_per_gram
+              : null;
+          const updated: DraftRow = { ...row, puLoading: false };
+          applyPuToRow(updated, pu);
+          cacheUpdates.set(puCacheKey(row.item_id, row.specific_child), pu);
+          return updated;
+        });
+        setEditHasUnpriced(recomputeTotals(next).hasUnpriced);
+        return next;
+      });
+      if (cacheUpdates.size > 0) {
+        setCostCache((c) => {
+          const merged = new Map(c);
+          for (const [key, pu] of cacheUpdates) merged.set(key, pu);
+          return merged;
+        });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, [
+    viewMode,
+    selectedVersionId,
+    priceMode,
+    loadDetail,
+    editRows,
+    itemById,
+    crossTenantItemIds,
+  ]);
+
+  const prevCostRefreshRef = useRef(costRefreshGeneration);
+  useEffect(() => {
+    if (costRefreshGeneration === prevCostRefreshRef.current) return;
+    prevCostRefreshRef.current = costRefreshGeneration;
+    if (costRefreshGeneration <= 0) return;
+    void refreshCostsFromExternalSave();
+  }, [costRefreshGeneration, refreshCostsFromExternalSave]);
 
   const sheet = displaySheet;
   const modalClass = isDark
@@ -3081,28 +3530,27 @@ export function StandardTechnicalSheetView({
   const btnPrimary =
     "rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
   const btnEdit =
-    "flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50 bg-gray-600 hover:bg-gray-700";
+    "rounded-lg bg-gray-600 px-3 py-2 text-sm text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50";
 
   const showDiffBanner =
     !!detail?.has_recipe_diff &&
     !!detail?.is_latest &&
-    (viewMode === "sheet" || viewMode === "update") &&
+    viewMode === "sheet" &&
     !loading &&
     !sheetLoading &&
     !!sheet;
 
-  return (
-    <>
-      <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/50 p-1.5">
-        <div
-          className={`flex h-[100vh] w-[100vw] max-w-none flex-col overflow-hidden rounded-xl border shadow-2xl ${modalClass}`}
-          role="dialog"
-        >
-          <ModalHeader
-            isDark={isDark}
-            title={`Standard Technical Sheet — ${baseRecipeName}`}
-            onClose={onClose}
-          />
+  const panel = (
+    <div
+      className={`flex h-[100vh] w-[100vw] max-w-none flex-col overflow-hidden rounded-xl border shadow-2xl ${modalClass}`}
+      role="dialog"
+    >
+      <ModalHeader
+        isDark={isDark}
+        title={`Standard Technical Sheet — ${baseRecipeName}`}
+        onClose={onClose}
+        windowMode={windowMode}
+      />
 
           <div
             className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-6 py-3 ${isDark ? "border-slate-700" : "border-gray-200"}`}
@@ -3115,8 +3563,7 @@ export function StandardTechnicalSheetView({
               disabled={
                 loading ||
                 versions.length === 0 ||
-                viewMode === "edit" ||
-                viewMode === "update"
+                isEditUpdate
               }
               className={`rounded border px-3 py-1.5 text-sm ${isDark ? "bg-slate-800 border-slate-600" : "bg-white border-gray-300"}`}
             >
@@ -3130,81 +3577,45 @@ export function StandardTechnicalSheetView({
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
-              {updateLoading ? null : viewMode === "update" ? (
+              {updateLoading ? null : isEditUpdate ? (
                 <>
                   <button
                     type="button"
                     className={btnEdit}
-                    onClick={() => void startEdit()}
+                    disabled={savePending}
+                    onClick={() => void handleSave("this_version")}
                   >
-                    <Edit className="h-5 w-5" />
-                    Edit
+                    {savePending ? "Saving…" : "Save this version"}
                   </button>
                   <button
                     type="button"
                     className={btnPrimary}
-                    disabled={createPending || !canCreateVersionFromRecipe}
+                    disabled={savePending || !detail?.is_latest}
                     title={
-                      !canCreateVersionFromRecipe
-                        ? "No recipe changes or description/procedure edits to save."
+                      !detail?.is_latest
+                        ? "Only available when viewing the latest version"
                         : undefined
                     }
-                    onClick={() => void openCreatePreview()}
+                    onClick={() => void handleSave("new_version")}
                   >
-                    Create new version
+                    Save as new version
                   </button>
                   <button
                     type="button"
                     className={btnSecondary}
-                    onClick={cancelUpdate}
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : viewMode === "edit" ? (
-                <>
-                  <button
-                    type="button"
-                    className={btnPrimary}
-                    disabled={savePending}
-                    onClick={() => void handleSaveEdit()}
-                  >
-                    {savePending ? "Saving…" : "Save"}
-                  </button>
-                  <button
-                    type="button"
-                    className={btnSecondary}
-                    onClick={cancelEdit}
+                    onClick={cancelEditUpdate}
                   >
                     Cancel
                   </button>
                 </>
               ) : (
-                <>
-                  <button
-                    type="button"
-                    className={btnPrimary}
-                    disabled={!canOpenUpdate}
-                    onClick={() => void openUpdate()}
-                    title={
-                      !detail?.is_latest
-                        ? "Only available for the latest version"
-                        : undefined
-                    }
-                  >
-                    Update
-                  </button>
-                  {detail?.is_latest && !detail?.has_recipe_diff ? (
-                    <button
-                      type="button"
-                      className={btnEdit}
-                      onClick={() => void startEdit()}
-                    >
-                      <Edit className="h-5 w-5" />
-                      Edit
-                    </button>
-                  ) : null}
-                </>
+                <button
+                  type="button"
+                  className={btnPrimary}
+                  onClick={() => void openEditUpdate()}
+                >
+                  Edit/Update
+                </button>
               )}
             </div>
           </div>
@@ -3244,35 +3655,27 @@ export function StandardTechnicalSheetView({
                   description={displayDescription}
                   procedure={displayProcedure}
                   onDescriptionChange={
-                    viewMode === "update"
-                      ? setUpdateDescription
-                      : viewMode === "edit"
-                        ? setEditDescription
-                        : undefined
+                    isEditUpdate ? setEditDescription : undefined
                   }
                   onProcedureChange={
-                    viewMode === "update"
-                      ? setUpdateProcedure
-                      : viewMode === "edit"
-                        ? setEditProcedure
-                        : undefined
+                    isEditUpdate ? setEditProcedure : undefined
                   }
-                  editRows={viewMode === "edit" ? editRows : null}
+                  editRows={isEditUpdate ? editRows : null}
                   onAmountChange={
-                    viewMode === "edit" ? handleAmountChange : undefined
+                    isEditUpdate ? handleAmountChange : undefined
                   }
                   onRemoveRow={
-                    viewMode === "edit" ? handleRemoveRow : undefined
+                    isEditUpdate ? handleRemoveRow : undefined
                   }
                   pickerItems={pickerItems}
                   baseItems={baseItems}
                   vendorProducts={vendorProducts}
                   vendors={vendors}
                   onVendorChange={
-                    viewMode === "edit" ? handleVendorChange : undefined
+                    isEditUpdate ? handleVendorChange : undefined
                   }
                   hasUnpricedLines={
-                    viewMode === "edit"
+                    isEditUpdate
                       ? editHasUnpriced
                       : viewMode === "sheet" &&
                         detail.has_unpriced_lines &&
@@ -3290,55 +3693,56 @@ export function StandardTechnicalSheetView({
                   }
                   priceLoading={viewMode === "sheet" ? priceLoading : false}
                   updateLoading={updateLoading}
-                  updateMode={isUpdateFlow}
-                  updateEditMode={viewMode === "edit" && editReturnMode === "update"}
+                  updateMode={isEditUpdate}
+                  updateEditMode={isEditUpdate}
                   updateMetaByRowKey={updateMetaByRowKey ?? undefined}
                   pairedRemovedKeys={
-                    isUpdateFlow ? pairedRemovedKeys : undefined
+                    isEditUpdate ? pairedRemovedKeys : undefined
                   }
                   restoredRemovedKeys={
-                    isUpdateFlow ? restoredRemovedKeys : undefined
+                    isEditUpdate ? restoredRemovedKeys : undefined
                   }
                   onRestoreRemoved={
                     showRestoreRemoved ? handleRestoreRemoved : undefined
                   }
+                  pendingTrashKeys={
+                    isEditUpdate ? pendingTrashIngredientKeys : undefined
+                  }
                   updateRowChoices={updateRowChoices}
                   onVendorChoiceChange={
-                    viewMode === "edit" && editReturnMode === "update"
-                      ? handleVendorChoiceChange
-                      : undefined
+                    isEditUpdate ? handleVendorChoiceChange : undefined
                   }
                   onTotalChoiceChange={
-                    viewMode === "edit" && editReturnMode === "update"
-                      ? handleTotalChoiceChange
-                      : undefined
+                    isEditUpdate ? handleTotalChoiceChange : undefined
                   }
                   onFinalAmountChange={
-                    viewMode === "edit" && editReturnMode === "update"
-                      ? handleFinalAmountChange
-                      : undefined
+                    isEditUpdate ? handleFinalAmountChange : undefined
+                  }
+                  ingredientApplyModes={
+                    isEditUpdate ? ingredientApplyModes : undefined
+                  }
+                  onIngredientApplyModeChange={
+                    isEditUpdate ? handleIngredientApplyModeChange : undefined
                   }
                   crossTenantAvailableItems={crossTenantAvailableItems}
                   onAddIngredientRow={
-                    viewMode === "edit" ? handleAddIngredientRow : undefined
+                    isEditUpdate ? handleAddIngredientRow : undefined
                   }
                   onNewRowPickerTypeChange={
-                    viewMode === "edit"
-                      ? handleNewRowPickerTypeChange
-                      : undefined
+                    isEditUpdate ? handleNewRowPickerTypeChange : undefined
                   }
                   onNewRowCrossTenantFilterChange={
-                    viewMode === "edit"
+                    isEditUpdate
                       ? handleNewRowCrossTenantFilterChange
                       : undefined
                   }
                   onNewRowItemSelect={
-                    viewMode === "edit" ? handleNewRowItemSelect : undefined
+                    isEditUpdate ? handleNewRowItemSelect : undefined
                   }
                   laborRoles={laborRoles}
-                  editLaborRows={viewMode === "edit" ? editLaborRows : null}
+                  editLaborRows={isEditUpdate ? editLaborRows : null}
                   hasUnpricedLaborLines={
-                    viewMode === "edit"
+                    isEditUpdate
                       ? editLaborHasUnpriced
                       : viewMode === "sheet" &&
                         detail.has_unpriced_lines &&
@@ -3346,31 +3750,36 @@ export function StandardTechnicalSheetView({
                   }
                   laborUpdateMetaByRowKey={laborUpdateMetaByRowKey ?? undefined}
                   pairedRemovedLaborKeys={
-                    isUpdateFlow ? pairedRemovedLaborKeys : undefined
+                    isEditUpdate ? pairedRemovedLaborKeys : undefined
                   }
                   restoredRemovedLaborKeys={
-                    isUpdateFlow ? restoredRemovedLaborKeys : undefined
+                    isEditUpdate ? restoredRemovedLaborKeys : undefined
                   }
                   onRestoreRemovedLabor={
                     showRestoreRemoved ? handleRestoreRemovedLabor : undefined
                   }
+                  pendingTrashLaborKeys={
+                    isEditUpdate ? pendingTrashLaborKeys : undefined
+                  }
                   laborUpdateRowChoices={laborUpdateRowChoices}
                   onLaborMinutesChoiceChange={
-                    viewMode === "edit" && editReturnMode === "update"
-                      ? handleLaborMinutesChoiceChange
-                      : undefined
+                    isEditUpdate ? handleLaborMinutesChoiceChange : undefined
                   }
                   onLaborRoleChange={
-                    viewMode === "edit" ? handleLaborRoleChange : undefined
+                    isEditUpdate ? handleLaborRoleChange : undefined
                   }
                   onLaborMinutesChange={
-                    viewMode === "edit" ? handleLaborMinutesChange : undefined
+                    isEditUpdate ? handleLaborMinutesChange : undefined
                   }
                   onRemoveLaborRow={
-                    viewMode === "edit" ? handleRemoveLaborRow : undefined
+                    isEditUpdate ? handleRemoveLaborRow : undefined
                   }
                   onAddLaborRow={
-                    viewMode === "edit" ? handleAddLaborRow : undefined
+                    isEditUpdate ? handleAddLaborRow : undefined
+                  }
+                  laborApplyModes={isEditUpdate ? laborApplyModes : undefined}
+                  onLaborApplyModeChange={
+                    isEditUpdate ? handleLaborApplyModeChange : undefined
                   }
                   snapshotLaborCostByRowKey={
                     viewMode === "sheet" ? snapshotLaborCostByRowKey : undefined
@@ -3378,34 +3787,23 @@ export function StandardTechnicalSheetView({
                   snapshotLaborTotalCost={
                     viewMode === "sheet" ? snapshotLaborTotalCost : undefined
                   }
+                  crossTenantItemIds={crossTenantItemIds}
+                  onOpenPreppedSheet={onOpenPreppedSheet}
                 />
                 </>
               )}
           </div>
-        </div>
-      </div>
+    </div>
+  );
 
-      {previewOpen ? (
-        <div className="fixed inset-0 z-130 flex items-center justify-center bg-black/50 p-1.5">
-          <PreviewModal
-            isDark={isDark}
-            modalClass={modalClass}
-            previewLoading={previewLoading}
-            previewSheet={previewSheet}
-            description={updateDescription}
-            procedure={updateProcedure}
-            createPending={createPending}
-            pickerItems={pickerItems}
-            baseItems={baseItems}
-            vendorProducts={vendorProducts}
-            vendors={vendors}
-            laborRoles={laborRoles}
-            onClose={() => setPreviewOpen(false)}
-            onConfirm={() => void confirmCreateVersion()}
-          />
-        </div>
-      ) : null}
-    </>
+  if (windowMode) {
+    return panel;
+  }
+
+  return (
+    <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/50 p-1.5">
+      {panel}
+    </div>
   );
 }
 
@@ -3457,20 +3855,22 @@ function ModalHeader({
   isDark,
   title,
   onClose,
+  windowMode,
 }: {
   isDark: boolean;
   title: string;
   onClose: () => void;
+  windowMode?: boolean;
 }) {
   return (
     <div
-      className={`flex items-center justify-between border-b px-6 py-4 ${isDark ? "border-slate-700" : "border-gray-200"}`}
+      className={`flex items-center justify-between border-b px-6 py-4 ${isDark ? "border-slate-700" : "border-gray-200"} ${windowMode ? "ts-window-drag-handle cursor-move" : ""}`}
     >
-      <h3 className="text-lg font-semibold">{title}</h3>
+      <h3 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h3>
       <button
         type="button"
         onClick={onClose}
-        className={`rounded px-2 py-1 text-sm ${isDark ? "hover:bg-slate-800" : "hover:bg-gray-100"}`}
+        className={`ts-window-no-drag shrink-0 rounded px-2 py-1 text-sm ${isDark ? "hover:bg-slate-800" : "hover:bg-gray-100"}`}
       >
         Close
       </button>
@@ -3508,87 +3908,6 @@ function UnpricedBanner({ isDark }: { isDark: boolean }) {
       className={`rounded border px-4 py-3 text-sm ${isDark ? "border-slate-600 bg-slate-800 text-slate-300" : "border-gray-300 bg-gray-100 text-gray-700"}`}
     >
       Some lines could not be priced at current rates.
-    </div>
-  );
-}
-
-function PreviewModal({
-  isDark,
-  modalClass,
-  previewLoading,
-  previewSheet,
-  description,
-  procedure,
-  createPending,
-  pickerItems,
-  baseItems,
-  vendorProducts,
-  vendors,
-  laborRoles,
-  onClose,
-  onConfirm,
-}: {
-  isDark: boolean;
-  modalClass: string;
-  previewLoading: boolean;
-  previewSheet: SheetData | null;
-  description: string;
-  procedure: string;
-  createPending: boolean;
-  pickerItems: Item[];
-  baseItems: BaseItem[];
-  vendorProducts: VendorProductWithBase[];
-  vendors: Vendor[];
-  laborRoles: LaborRole[];
-  onClose: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div
-      className={`flex h-[100vh] w-[100vw] max-w-none flex-col overflow-hidden rounded-xl border shadow-2xl ${modalClass}`}
-    >
-      <ModalHeader
-        isDark={isDark}
-        title="Create new version from current recipe"
-        onClose={onClose}
-      />
-      <div className="min-h-0 flex-1 overflow-y-auto p-6">
-        {previewLoading || !previewSheet ? (
-          <LoadingBox isDark={isDark} />
-        ) : (
-          <TechnicalSheetBody
-            sheet={previewSheet}
-            isDark={isDark}
-            description={description}
-            procedure={procedure}
-            pickerItems={pickerItems}
-            baseItems={baseItems}
-            vendorProducts={vendorProducts}
-            vendors={vendors}
-            crossTenantAvailableItems={[]}
-            laborRoles={laborRoles}
-          />
-        )}
-      </div>
-      <div
-        className={`flex justify-end gap-2 border-t px-6 py-4 ${isDark ? "border-slate-700" : "border-gray-200"}`}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          className={`rounded-lg px-4 py-2 text-sm ${isDark ? "bg-slate-700 text-slate-200" : "bg-gray-200 text-gray-800"}`}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={previewLoading || !previewSheet || createPending}
-          onClick={onConfirm}
-          className="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          {createPending ? "Saving…" : "Confirm"}
-        </button>
-      </div>
     </div>
   );
 }

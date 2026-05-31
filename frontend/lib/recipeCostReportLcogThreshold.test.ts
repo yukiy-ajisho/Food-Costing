@@ -56,12 +56,12 @@ describe("getLcogThresholdCellState", () => {
 });
 
 describe("getEffectiveLcogThresholds", () => {
-  it("invalid over when caution >= over but caution still effective", () => {
+  it("invalidates both fields when caution >= over", () => {
     const r = getEffectiveLcogThresholds("60", "50");
-    expect(r.caution).toBe(60);
+    expect(r.caution).toBeNull();
     expect(r.over).toBeNull();
     expect(r.overInvalid).toBe(true);
-    expect(r.cautionInvalid).toBe(false);
+    expect(r.cautionInvalid).toBe(true);
   });
 });
 
