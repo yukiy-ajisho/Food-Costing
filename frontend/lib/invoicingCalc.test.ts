@@ -1,9 +1,17 @@
 import {
   computeInvoicingSubTotal,
   eachGramsForInvoicing,
+  formatInvoicingCostDisplay,
   getInvoicingUnitOptions,
   unitSizeAmountToKg,
+  type InvoicingCostBreakdown,
 } from "./invoicingCalc";
+
+const breakdown: InvoicingCostBreakdown = {
+  food_cost_per_gram: 0.005,
+  labor_cost_per_gram: 0.005,
+  total_cost_per_gram: 0.01,
+};
 
 describe("invoicingCalc", () => {
   it("prepped: each only when each_grams > 0", () => {
@@ -52,5 +60,42 @@ describe("invoicingCalc", () => {
 
   it("menu each subtotal uses finish yield grams", () => {
     expect(computeInvoicingSubTotal(1, "each", 2, 10, 350)).toBe(7);
+  });
+});
+
+describe("formatInvoicingCostDisplay", () => {
+  it("menu + finish yield + eachMode → $/each", () => {
+    const menu = {
+      is_menu_item: true,
+      each_grams: null as number | null,
+      proceed_yield_amount: 350,
+      proceed_yield_unit: "g",
+    };
+    expect(formatInvoicingCostDisplay(breakdown, menu, true)).toBe("$3.50/each");
+    expect(formatInvoicingCostDisplay(breakdown, menu, false)).toBe("$10.00/kg");
+  });
+
+  it("prepped + each_grams + eachMode → $/each", () => {
+    const prepped = {
+      is_menu_item: false,
+      each_grams: 100,
+      proceed_yield_amount: 0,
+      proceed_yield_unit: "g",
+    };
+    expect(formatInvoicingCostDisplay(breakdown, prepped, true)).toBe(
+      "$1.00/each",
+    );
+  });
+
+  it("prepped without each_grams + eachMode → $/kg", () => {
+    const prepped = {
+      is_menu_item: false,
+      each_grams: null as number | null,
+      proceed_yield_amount: 350,
+      proceed_yield_unit: "g",
+    };
+    expect(formatInvoicingCostDisplay(breakdown, prepped, true)).toBe(
+      "$10.00/kg",
+    );
   });
 });

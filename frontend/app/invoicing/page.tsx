@@ -5,17 +5,35 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCompany } from "@/contexts/CompanyContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { useTheme } from "@/contexts/ThemeContext";
-import { DeliveryInformationTab } from "@/components/invoicing/DeliveryInformationTab";
+import { AccountInformationTab } from "@/components/invoicing/AccountInformationTab";
+import { DeliverySiteTab } from "@/components/invoicing/DeliverySiteTab";
 import { InvoiceGenerationTab } from "@/components/invoicing/InvoiceGenerationTab";
 import { InvoiceBoxTab } from "@/components/invoicing/InvoiceBoxTab";
 
-type InvoicingTab = "generation" | "box" | "delivery";
+type InvoicingSection = "account" | "invoice";
+type AccountTab = "accounts" | "delivery-site";
+type InvoiceTab = "box" | "generation";
 
-function tabFromSearchParams(params: URLSearchParams): InvoicingTab {
+function sectionFromParams(params: URLSearchParams): InvoicingSection {
+  const section = params.get("section");
+  if (section === "account") return "account";
+  const legacyTab = params.get("tab");
+  if (legacyTab === "delivery") return "account";
+  return "invoice";
+}
+
+function accountTabFromParams(params: URLSearchParams): AccountTab {
+  const tab = params.get("tab");
+  if (tab === "delivery" || tab === "delivery-site") return "delivery-site";
+  if (tab === "accounts") return "accounts";
+  return "accounts";
+}
+
+function invoiceTabFromParams(params: URLSearchParams): InvoiceTab {
   const tab = params.get("tab");
   if (tab === "box") return "box";
-  if (tab === "delivery") return "delivery";
-  return "generation";
+  if (tab === "generation") return "generation";
+  return "box";
 }
 
 function InvoicingPageContent() {
@@ -26,7 +44,9 @@ function InvoicingPageContent() {
   const { loading: companyLoading, companies, selectedCompanyId } =
     useCompany();
   const { loading: tenantLoading, tenants, selectedTenantId } = useTenant();
-  const activeTab = tabFromSearchParams(searchParams);
+  const section = sectionFromParams(searchParams);
+  const accountTab = accountTabFromParams(searchParams);
+  const invoiceTab = invoiceTabFromParams(searchParams);
 
   const canAccessInvoicing = (() => {
     if (!selectedCompanyId) return false;
@@ -39,8 +59,8 @@ function InvoicingPageContent() {
     return tenantRole === "admin" || tenantRole === "director";
   })();
 
-  const setActiveTab = (tab: InvoicingTab) => {
-    router.replace(`/invoicing?tab=${tab}`);
+  const navigateTab = (tab: string) => {
+    router.replace(`/invoicing?section=${section}&tab=${tab}`);
   };
 
   const textMuted = isDark ? "text-slate-400" : "text-gray-500";
@@ -61,24 +81,21 @@ function InvoicingPageContent() {
     );
   }
 
-  const tabBtn = (tab: InvoicingTab, label: string) => {
-    const active = activeTab === tab;
-    return (
-      <button
-        type="button"
-        onClick={() => setActiveTab(tab)}
-        className={`border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
-          active
-            ? "border-blue-500 text-blue-600"
-            : isDark
-              ? "border-transparent text-slate-400 hover:border-slate-600 hover:text-slate-300"
-              : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
-        }`}
-      >
-        {label}
-      </button>
-    );
-  };
+  const subTabBtn = (active: boolean, onClick: () => void, label: string) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`border-b-2 px-1 py-4 text-sm font-medium transition-colors ${
+        active
+          ? "border-blue-500 text-blue-600"
+          : isDark
+            ? "border-transparent text-slate-400 hover:border-slate-600 hover:text-slate-300"
+            : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700"
+      }`}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div
@@ -94,15 +111,48 @@ function InvoicingPageContent() {
             }`}
           >
             <nav className="flex space-x-8">
-              {tabBtn("generation", "Invoice Generation")}
-              {tabBtn("box", "Invoice Box")}
-              {tabBtn("delivery", "Delivery Information")}
+              {section === "account" ? (
+                <>
+                  {subTabBtn(
+                    accountTab === "accounts",
+                    () => navigateTab("accounts"),
+                    "Account Information",
+                  )}
+                  {subTabBtn(
+                    accountTab === "delivery-site",
+                    () => navigateTab("delivery-site"),
+                    "Delivery Site",
+                  )}
+                </>
+              ) : (
+                <>
+                  {subTabBtn(
+                    invoiceTab === "box",
+                    () => navigateTab("box"),
+                    "Invoice Box",
+                  )}
+                  {subTabBtn(
+                    invoiceTab === "generation",
+                    () => navigateTab("generation"),
+                    "Invoice Generation",
+                  )}
+                </>
+              )}
             </nav>
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            {activeTab === "generation" ? <InvoiceGenerationTab /> : null}
-            {activeTab === "box" ? <InvoiceBoxTab /> : null}
-            {activeTab === "delivery" ? <DeliveryInformationTab /> : null}
+            {section === "account" && accountTab === "accounts" ? (
+              <AccountInformationTab />
+            ) : null}
+            {section === "account" && accountTab === "delivery-site" ? (
+              <DeliverySiteTab />
+            ) : null}
+            {section === "invoice" && invoiceTab === "box" ? (
+              <InvoiceBoxTab />
+            ) : null}
+            {section === "invoice" && invoiceTab === "generation" ? (
+              <InvoiceGenerationTab />
+            ) : null}
           </div>
         </div>
       </div>

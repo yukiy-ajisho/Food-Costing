@@ -13,6 +13,7 @@ export type GeneratePreviewPayload = {
   deliverySiteId: string;
   listName: string;
   deliverySiteName: string;
+  invoiceNumber: string;
   orderReceivedDate: string;
   deliveryDate: string;
   invoiceDate: string;
@@ -59,6 +60,7 @@ export function boxInvoiceToPreviewPayload(
     deliverySiteId: invoice.delivery_site_id ?? "",
     listName: invoice.invoice_number,
     deliverySiteName: invoice.delivery_site_name,
+    invoiceNumber: invoice.invoice_number,
     orderReceivedDate: invoice.order_received_date ?? "",
     deliveryDate: invoice.delivery_date ?? "",
     invoiceDate: invoice.invoice_date ?? "",

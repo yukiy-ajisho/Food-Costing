@@ -63,7 +63,7 @@ export function CreateInvoicingListModal({
         <div
           className={`flex items-center justify-between border-b px-5 py-4 ${border}`}
         >
-          <h2 className="text-lg font-semibold">Create invoice list</h2>
+          <h2 className="text-lg font-semibold">Create New Template</h2>
           <button type="button" onClick={onClose} aria-label="Close">
             <X className="h-5 w-5" />
           </button>
@@ -71,7 +71,9 @@ export function CreateInvoicingListModal({
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium">List name</label>
+            <label className="mb-1 block text-sm font-medium">
+              Delivery list template
+            </label>
             <input
               className={inputCls}
               value={name}

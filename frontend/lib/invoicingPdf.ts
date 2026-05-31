@@ -25,6 +25,9 @@ export async function buildInvoicePreviewPdf(
 
   draw("INVOICE", true, 18);
   y -= 4;
+  if (payload.invoiceNumber) {
+    draw(`Invoice #: ${payload.invoiceNumber}`, true);
+  }
   draw(`Delivery Site: ${payload.deliverySiteName}`);
   if (payload.orderReceivedDate) {
     draw(`Order Received: ${payload.orderReceivedDate}`);

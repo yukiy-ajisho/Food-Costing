@@ -61,3 +61,14 @@ body {
 .no-spinner[type="number"] {
   -moz-appearance: textfield;
 }
+
+/* Invoice Generation: white calendar icon on dark date inputs */
+.dark .invoicing-generation-date-input {
+  color-scheme: dark;
+}
+
+.dark .invoicing-generation-date-input::-webkit-calendar-picker-indicator {
+  filter: brightness(0) invert(1);
+  cursor: pointer;
+  opacity: 1;
+}

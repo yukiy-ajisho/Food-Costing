@@ -10,13 +10,14 @@ import {
   type InvoiceListItemRow,
   type InvoiceListSummary,
   type InvoicingItemCandidate,
+  type InvoicingAccount,
   type DeliverySite,
 } from "@/lib/invoicing";
 import {
   computeInvoicingSubTotal,
   costPerKgFromBreakdown,
   eachGramsForInvoicing,
-  formatCostPerKg,
+  formatInvoicingCostDisplay,
   formatCurrency,
   getInvoicingUnitOptions,
   type InvoicingCostBreakdown,
@@ -108,11 +109,15 @@ export function InvoiceGenerationTab() {
   const [invoiceDate, setInvoiceDate] = useState("");
 
   const [candidates, setCandidates] = useState<InvoicingItemCandidate[]>([]);
+  const [accounts, setAccounts] = useState<InvoicingAccount[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState("");
   const [deliverySites, setDeliverySites] = useState<DeliverySite[]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [costsLoading, setCostsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deliverySiteSaving, setDeliverySiteSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [isEditMode, setIsEditMode] = useState(false);
@@ -123,6 +128,7 @@ export function InvoiceGenerationTab() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [openListMenuId, setOpenListMenuId] = useState<string | null>(null);
+  const [eachMode, setEachMode] = useState(false);
   const [previewPayload, setPreviewPayload] =
     useState<GeneratePreviewPayload | null>(null);
 
@@ -141,6 +147,11 @@ export function InvoiceGenerationTab() {
       : "border-gray-300 bg-white text-gray-900"
   }`;
   const headerInputCls = `h-10 w-full min-w-[200px] rounded-lg border px-3 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+    isDark
+      ? "border-slate-600 bg-slate-900 text-slate-100"
+      : "border-gray-300 bg-white text-gray-900"
+  }`;
+  const deliverySiteSelectCls = `h-7 w-[min(100%,9.5rem)] min-w-[7rem] max-w-[9.5rem] rounded border px-1.5 py-0.5 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/40 ${
     isDark
       ? "border-slate-600 bg-slate-900 text-slate-100"
       : "border-gray-300 bg-white text-gray-900"
@@ -173,7 +184,7 @@ export function InvoiceGenerationTab() {
   const btnEdit =
     "inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-gray-600 px-4 text-sm font-medium text-white transition-colors hover:bg-gray-700";
 
-  const dateInputCls = `h-10 w-full rounded-lg border px-3 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+  const dateInputCls = `invoicing-generation-date-input h-10 w-full rounded-lg border px-3 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
     isDark
       ? "border-slate-600 bg-slate-900 text-slate-100"
       : "border-gray-300 bg-white text-gray-900"
@@ -278,7 +289,57 @@ export function InvoiceGenerationTab() {
       .listDeliverySites()
       .then((d) => setDeliverySites(d.sites ?? []))
       .catch(() => {});
+    void invoicingAPI
+      .listAccounts()
+      .then((d) => setAccounts(d.accounts ?? []))
+      .catch(() => {});
   }, [loadLists]);
+
+  useEffect(() => {
+    setSelectedAccountId((prev) =>
+      prev && accounts.some((a) => a.id === prev) ? prev : "",
+    );
+  }, [accounts]);
+
+  const filteredLists = useMemo(() => {
+    if (!selectedAccountId) return lists;
+    const siteIds = new Set(
+      deliverySites
+        .filter((s) => s.account_id === selectedAccountId)
+        .map((s) => s.id),
+    );
+    return lists.filter((l) => siteIds.has(l.delivery_site_id));
+  }, [lists, deliverySites, selectedAccountId]);
+
+  const sitesForSelectedAccount = useMemo(
+    () =>
+      selectedAccountId
+        ? deliverySites.filter((s) => s.account_id === selectedAccountId)
+        : deliverySites,
+    [deliverySites, selectedAccountId],
+  );
+
+  const deliverySiteOptions = useMemo(() => {
+    const options = [...sitesForSelectedAccount];
+    if (deliverySiteId && !options.some((s) => s.id === deliverySiteId)) {
+      const current = deliverySites.find((s) => s.id === deliverySiteId);
+      if (current) options.unshift(current);
+    }
+    return options;
+  }, [deliverySiteId, deliverySites, sitesForSelectedAccount]);
+
+  useEffect(() => {
+    if (filteredLists.length === 0) {
+      setSelectedListId(null);
+      return;
+    }
+    setSelectedListId((current) => {
+      if (current && filteredLists.some((l) => l.id === current)) {
+        return current;
+      }
+      return filteredLists[0].id;
+    });
+  }, [filteredLists]);
 
   useEffect(() => {
     if (!selectedListId) return;
@@ -432,6 +493,38 @@ export function InvoiceGenerationTab() {
     }
   };
 
+  const handleDeliverySiteChange = async (nextSiteId: string) => {
+    if (!selectedListId || !nextSiteId || nextSiteId === deliverySiteId) {
+      return;
+    }
+    const site = deliverySites.find((s) => s.id === nextSiteId);
+    if (!site) return;
+    if (selectedAccountId && site.account_id !== selectedAccountId) {
+      return;
+    }
+
+    const prevId = deliverySiteId;
+    const prevName = deliverySiteName;
+    setDeliverySiteId(nextSiteId);
+    setDeliverySiteName(site.name);
+    setDeliverySiteSaving(true);
+    setError(null);
+    try {
+      await invoicingAPI.updateInvoiceList(selectedListId, {
+        delivery_site_id: nextSiteId,
+      });
+      await loadLists();
+    } catch (e: unknown) {
+      setDeliverySiteId(prevId);
+      setDeliverySiteName(prevName);
+      setError(
+        e instanceof Error ? e.message : "Failed to update delivery site",
+      );
+    } finally {
+      setDeliverySiteSaving(false);
+    }
+  };
+
   const handleAddPendingRow = () => {
     setPendingAdds((prev) => [
       { localId: newLocalId(), item_id: "" },
@@ -439,7 +532,7 @@ export function InvoiceGenerationTab() {
     ]);
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     setError(null);
     if (!selectedListId) return;
     if (!invoiceDate.trim()) {
@@ -498,17 +591,31 @@ export function InvoiceGenerationTab() {
     }
 
     const totalAmount = rows.reduce((sum, r) => sum + r.subTotal, 0);
-    setPreviewPayload({
-      listId: selectedListId,
-      deliverySiteId,
-      listName,
-      deliverySiteName,
-      orderReceivedDate,
-      deliveryDate,
-      invoiceDate,
-      rows,
-      totalAmount,
-    });
+    setPreviewLoading(true);
+    try {
+      const { invoice_number } = await invoicingAPI.previewInvoiceNumber({
+        delivery_site_id: deliverySiteId,
+        invoice_date: invoiceDate,
+      });
+      setPreviewPayload({
+        listId: selectedListId,
+        deliverySiteId,
+        listName,
+        deliverySiteName,
+        invoiceNumber: invoice_number,
+        orderReceivedDate,
+        deliveryDate,
+        invoiceDate,
+        rows,
+        totalAmount,
+      });
+    } catch (e: unknown) {
+      setError(
+        e instanceof Error ? e.message : "Failed to allocate preview invoice #",
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
   const handleInvoiceSaved = async (emailWarning?: string) => {
@@ -635,7 +742,13 @@ export function InvoiceGenerationTab() {
           )}
         </td>
         <td className={`px-4 py-2 tabular-nums ${muted}`}>
-          {costsLoading ? "…" : formatCostPerKg(costs[row.item_id])}
+          {costsLoading
+            ? "…"
+            : formatInvoicingCostDisplay(
+                costs[row.item_id],
+                row,
+                eachMode,
+              )}
         </td>
         <td className={`px-4 py-2 tabular-nums font-medium ${textMain}`}>
           {subTotal != null ? formatCurrency(subTotal) : "—"}
@@ -666,45 +779,69 @@ export function InvoiceGenerationTab() {
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden gap-4">
-      <aside className={`${cardShell} h-full min-h-0 w-[240px] shrink-0`}>
-        <div className="shrink-0 px-4 pb-3 pt-4">
+      <div className="flex h-full min-h-0 w-[240px] shrink-0 flex-col gap-3">
+        <div className={`${cardShell} shrink-0 px-4 py-4`}>
           <p className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
-            Invoice list name
+            Account
           </p>
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className={`${listCreateBtn} mt-3`}
+          <select
+            className={`${headerInputCls} mt-2`}
+            value={selectedAccountId}
+            onChange={(e) => setSelectedAccountId(e.target.value)}
+            disabled={accounts.length === 0}
           >
-            <Plus className="h-4 w-4 shrink-0" />
-            Create New List
-          </button>
+            <option value="">Show all</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.company_name}
+              </option>
+            ))}
+          </select>
         </div>
-        <div className={`shrink-0 border-b ${border}`} />
-        <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-          {lists.length === 0 ? (
-            <li className={`px-3 py-8 text-center text-sm ${muted}`}>
-              No lists yet
-            </li>
-          ) : (
-            lists.map((list) => (
-              <PricingListPickerRow
-                key={list.id}
-                name={list.name}
-                active={selectedListId === list.id}
-                isDark={isDark}
-                menuOpen={openListMenuId === list.id}
-                onSelect={() => setSelectedListId(list.id)}
-                onToggleMenu={() =>
-                  setOpenListMenuId((id) => (id === list.id ? null : list.id))
-                }
-                onCloseMenu={() => setOpenListMenuId(null)}
-                onDelete={() => void handleDeleteList(list.id)}
-              />
-            ))
-          )}
-        </ul>
-      </aside>
+
+        <aside className={`${cardShell} min-h-0 flex-1`}>
+          <div className="shrink-0 px-4 pb-3 pt-4">
+            <p className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
+              Delivery list template
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              disabled={sitesForSelectedAccount.length === 0}
+              className={`${listCreateBtn} mt-3`}
+            >
+              <Plus className="h-4 w-4 shrink-0" />
+              Create New Template
+            </button>
+          </div>
+          <div className={`shrink-0 border-b ${border}`} />
+          <ul className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+            {filteredLists.length === 0 ? (
+              <li className={`px-3 py-8 text-center text-sm ${muted}`}>
+                {selectedAccountId
+                  ? "No templates for this account"
+                  : "No templates yet"}
+              </li>
+            ) : (
+              filteredLists.map((list) => (
+                <PricingListPickerRow
+                  key={list.id}
+                  name={list.name}
+                  active={selectedListId === list.id}
+                  isDark={isDark}
+                  menuOpen={openListMenuId === list.id}
+                  onSelect={() => setSelectedListId(list.id)}
+                  onToggleMenu={() =>
+                    setOpenListMenuId((id) => (id === list.id ? null : list.id))
+                  }
+                  onCloseMenu={() => setOpenListMenuId(null)}
+                  onDelete={() => void handleDeleteList(list.id)}
+                />
+              ))
+            )}
+          </ul>
+        </aside>
+      </div>
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {!selectedListId ? (
@@ -742,39 +879,31 @@ export function InvoiceGenerationTab() {
                     </h2>
                   )}
                 </div>
-                <div className="min-w-[200px]">
-                  {isEditMode ? (
-                    <>
-                      <label
-                        htmlFor="invoicing-delivery-site-select"
-                        className={`mb-1.5 block text-xs font-medium uppercase tracking-wide ${muted}`}
-                      >
-                        Delivery site
-                      </label>
-                      <select
-                        id="invoicing-delivery-site-select"
-                        value={deliverySiteId}
-                        onChange={(e) => {
-                          const id = e.target.value;
-                          setDeliverySiteId(id);
-                          const site = deliverySites.find((s) => s.id === id);
-                          setDeliverySiteName(site?.name ?? "");
-                        }}
-                        className={headerInputCls}
-                      >
-                        <option value="">Select delivery site</option>
-                        {deliverySites.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.name}
-                          </option>
-                        ))}
-                      </select>
-                    </>
-                  ) : (
-                    <p className={`flex min-h-10 items-center text-sm ${muted}`}>
-                      Delivery site: {deliverySiteName || "—"}
-                    </p>
-                  )}
+                <div className="shrink-0">
+                  <label
+                    htmlFor="invoicing-delivery-site-select"
+                    className={`mb-0.5 block text-[11px] font-medium leading-tight ${muted}`}
+                  >
+                    Delivery site
+                  </label>
+                  <select
+                    id="invoicing-delivery-site-select"
+                    value={deliverySiteId}
+                    disabled={
+                      deliverySiteSaving ||
+                      saving ||
+                      deliverySiteOptions.length === 0
+                    }
+                    onChange={(e) => void handleDeliverySiteChange(e.target.value)}
+                    className={deliverySiteSelectCls}
+                  >
+                    <option value="">Select delivery site</option>
+                    {deliverySiteOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -811,11 +940,11 @@ export function InvoiceGenerationTab() {
                     </button>
                     <button
                       type="button"
-                      disabled={!canGenerate}
-                      onClick={handleGenerate}
+                      disabled={!canGenerate || previewLoading}
+                      onClick={() => void handleGenerate()}
                       className={btnPrimary}
                     >
-                      Generate
+                      {previewLoading ? "Generating…" : "Generate"}
                     </button>
                   </>
                 )}
@@ -833,7 +962,8 @@ export function InvoiceGenerationTab() {
             >
               {isEditMode ? (
                 <p className={`mb-3 text-xs ${muted}`}>
-                  Dates are set when generating an invoice (after Save).
+                  Dates are set when generating an invoice (after Save). Delivery
+                  site saves immediately when changed.
                 </p>
               ) : null}
               <div className="grid gap-4 sm:grid-cols-3">
@@ -852,7 +982,24 @@ export function InvoiceGenerationTab() {
                     <th className={`${thCls} text-left min-w-48`}>Name</th>
                     <th className={`${thCls} text-left`}>Unit Size</th>
                     <th className={`${thCls} text-left w-24`}>Units</th>
-                    <th className={`${thCls} text-left w-40`}>Cost</th>
+                    <th className={`${thCls} text-left w-40`}>
+                      <div className="flex items-center justify-between gap-2 pr-1">
+                        <span>Cost</span>
+                        <button
+                          type="button"
+                          onClick={() => setEachMode((v) => !v)}
+                          className={`shrink-0 rounded px-2 py-0.5 text-xs normal-case transition-colors ${
+                            eachMode
+                              ? "bg-blue-500 font-semibold text-white"
+                              : isDark
+                                ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                          }`}
+                        >
+                          each
+                        </button>
+                      </div>
+                    </th>
                     <th className={`${thCls} text-left w-32`}>Sub total</th>
                     <th className={`${thCls} w-16`} aria-label="Row actions" />
                   </tr>
@@ -983,7 +1130,7 @@ export function InvoiceGenerationTab() {
         <CreateInvoicingListModal
           isDark={isDark}
           candidates={candidates}
-          deliverySites={deliverySites}
+          deliverySites={sitesForSelectedAccount}
           onClose={() => setShowCreate(false)}
           onCreate={(payload) => void handleCreateList(payload)}
         />

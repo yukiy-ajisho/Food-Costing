@@ -81,6 +81,7 @@ export function InvoiceGeneratePreviewModal({
         order_received_date: payload.orderReceivedDate || null,
         delivery_date: payload.deliveryDate || null,
         invoice_date: payload.invoiceDate,
+        invoice_number: payload.invoiceNumber || undefined,
         total_amount: payload.totalAmount,
         lines: previewPayloadToBoxLines(payload),
         send,
@@ -129,6 +130,7 @@ export function InvoiceGeneratePreviewModal({
               {mode === "box" ? "Invoice" : "Invoice preview"}
             </h2>
             <p className="text-sm text-gray-500 dark:text-slate-400">
+              {payload.invoiceNumber ? `Invoice # ${payload.invoiceNumber} · ` : ""}
               {payload.listName} · {payload.deliverySiteName} · Total{" "}
               {totalLabel}
               {mode === "box" ? ` · ${sentLabel}` : null}

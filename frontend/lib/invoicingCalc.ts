@@ -70,6 +70,20 @@ export function formatCostPerKg(
   return `$${perKg.toFixed(2)}/kg`;
 }
 
+/** Cost column display — eachMode toggles $/kg vs $/each (display only; subtotals unchanged). */
+export function formatInvoicingCostDisplay(
+  breakdown: InvoicingCostBreakdown | undefined,
+  row: InvoicingEachGramsContext,
+  eachMode: boolean,
+): string {
+  if (!breakdown?.total_cost_per_gram) return "—";
+  const eachGrams = eachGramsForInvoicing(row);
+  if (eachMode && eachGrams != null) {
+    return `$${(breakdown.total_cost_per_gram * eachGrams).toFixed(2)}/each`;
+  }
+  return formatCostPerKg(breakdown);
+}
+
 /** Invoicing unit_size_unit options — each when grams/each can be resolved (§4-5-2). */
 export function getInvoicingUnitOptions(
   row: InvoicingEachGramsContext,
