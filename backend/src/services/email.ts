@@ -94,43 +94,39 @@ export async function sendCompanyInvitationEmail(
 
   const resend = getResendClient();
 
-  try {
-    const html = await render(
-      React.createElement(CompanyInvitationEmail, {
-        companyName,
-        inviterName,
-        acceptUrl,
-      })
+  const html = await render(
+    React.createElement(CompanyInvitationEmail, {
+      companyName,
+      inviterName,
+      acceptUrl,
+    }),
+  );
+
+  const { data, error } = await resend.emails.send({
+    from:
+      process.env.RESEND_FROM_EMAIL || "Food Costing <onboarding@resend.dev>",
+    to: [to],
+    subject: `You've been invited to join ${companyName} as a director on Food Costing`,
+    html,
+  });
+
+  if (error) {
+    console.error(
+      "[Email Service] Error sending company invitation email:",
+      error,
     );
-
-    const { data, error } = await resend.emails.send({
-      from:
-        process.env.RESEND_FROM_EMAIL || "Food Costing <onboarding@resend.dev>",
-      to: [to],
-      subject: `You've been invited to join ${companyName} as a director on Food Costing`,
-      html,
-    });
-
-    if (error) {
-      console.error(
-        "[Email Service] Error sending company invitation email:",
-        error
-      );
-      throw error;
-    }
-
-    if (!data || !data.id) {
-      throw new Error("Resend did not return an email_id");
-    }
-
-    console.log(
-      "[Email Service] Company invitation email sent successfully:",
-      data
-    );
-    return data.id;
-  } catch (error) {
     throw error;
   }
+
+  if (!data || !data.id) {
+    throw new Error("Resend did not return an email_id");
+  }
+
+  console.log(
+    "[Email Service] Company invitation email sent successfully:",
+    data,
+  );
+  return data.id;
 }
 
 export interface InvoiceEmailParams {
