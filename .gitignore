@@ -15,6 +15,7 @@ node_modules/
 
 # Supabase
 supabase/dump/
+supabase/.env
 
 # Misc
 .DS_Store

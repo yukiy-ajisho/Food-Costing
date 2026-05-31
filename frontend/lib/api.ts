@@ -410,6 +410,10 @@ export interface StandardTechnicalSheetDetail {
 
 export type StandardTechnicalSheetPriceMode = "latest" | "snapshot" | "both";
 
+export type StandardSheetApplyMode = "override" | "overwrite";
+
+export type StandardSheetSaveMode = "this_version" | "new_version";
+
 export interface StandardRecipeDiffLine {
   type: "added" | "removed" | "changed";
   row_key: string;
@@ -1194,6 +1198,39 @@ export const standardTechnicalSheetsAPI = {
   },
   getRecipeDiff: (id: string) =>
     fetchAPI<StandardRecipeDiff>(`/standard-technical-sheets/${id}/recipe-diff`),
+  saveSheet: (
+    id: string,
+    payload: {
+      save_mode: StandardSheetSaveMode;
+      ingredient_rows: Array<{
+        item_id: string;
+        total_grams: number;
+        specific_child?: string | null;
+        step_quantities?: Record<string, number>;
+        apply_mode: StandardSheetApplyMode;
+      }>;
+      labor_rows?: Array<{
+        row_key?: string | null;
+        labor_role: string;
+        minutes: number;
+        apply_mode: StandardSheetApplyMode;
+      }>;
+      excluded_ingredients?: Array<{
+        item_id: string;
+        apply_mode: StandardSheetApplyMode;
+      }>;
+      excluded_labor?: Array<{
+        row_key: string;
+        apply_mode: StandardSheetApplyMode;
+      }>;
+      description?: string | null;
+      procedure?: string | null;
+    },
+  ) =>
+    fetchAPI<{ id: string; version_number: number; is_latest: boolean }>(
+      `/standard-technical-sheets/${id}/save`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
   saveEdits: (
     id: string,
     payload: {

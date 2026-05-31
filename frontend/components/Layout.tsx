@@ -48,6 +48,8 @@ const SIDEBAR_TEAM_NAV_ROW_ALIGN = "min-h-9 flex items-center gap-2";
 const SIDEBAR_SUB_NAV_ROW_MIN = "min-h-11";
 const SIDEBAR_SUB_NAV_ROW_ALIGN = `${SIDEBAR_SUB_NAV_ROW_MIN} flex items-center gap-2`;
 const FOOD_COSTING_SUB_NAV_ROW_ALIGN = "min-h-8 flex items-center gap-2";
+/** 親行: ラベル直後に chevron（flex-1 で右端に押し出さない） */
+const SIDEBAR_NAV_LABEL_CHEVRON = "flex min-w-0 items-center gap-0.5";
 
 /** 外側クリップ用の幅（内側レイアウト幅と一致） */
 const SIDEBAR_COLLAPSED_PX = 64;
@@ -888,8 +890,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   >
                     <Utensils className="h-5 w-5 shrink-0" />
                     {isSidebarExpanded && (
-                      <>
-                        <span className="min-w-0 flex-1 text-left text-sm whitespace-nowrap">
+                      <span className={SIDEBAR_NAV_LABEL_CHEVRON}>
+                        <span className="text-sm whitespace-nowrap">
                           Food Costing
                         </span>
                         {foodCostingExpanded ? (
@@ -897,7 +899,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         ) : (
                           <ChevronRight className="h-4 w-4 shrink-0" />
                         )}
-                      </>
+                      </span>
                     )}
                   </button>
                   {isSidebarExpanded &&
@@ -1008,8 +1010,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   >
                     <TeamNavIcon className="h-5 w-5 shrink-0" />
                     {isSidebarExpanded && (
-                      <>
-                        <span className="text-sm whitespace-nowrap flex-1 min-w-0">
+                      <span className={SIDEBAR_NAV_LABEL_CHEVRON}>
+                        <span className="text-sm whitespace-nowrap">
                           {teamNavItem.label}
                         </span>
                         {teamExpanded ? (
@@ -1017,7 +1019,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         ) : (
                           <ChevronRight className="h-4 w-4 shrink-0" />
                         )}
-                      </>
+                      </span>
                     )}
                   </button>
                   {isSidebarExpanded &&
@@ -1132,7 +1134,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       )}
                     </div>
                     {isSidebarExpanded && (
-                      <span className="text-sm whitespace-nowrap">Upload Box</span>
+                      <span className="text-sm whitespace-nowrap">
+                        Upload Box
+                      </span>
                     )}
                   </Link>
                 ) : null}
@@ -1189,8 +1193,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
                       )}
                     </span>
                     {isSidebarExpanded && (
-                      <>
-                        <span className="text-sm whitespace-nowrap flex-1 min-w-0 text-left">
+                      <span className={SIDEBAR_NAV_LABEL_CHEVRON}>
+                        <span className="text-sm whitespace-nowrap">
                           Documents
                         </span>
                         {licenseExpanded ? (
@@ -1198,7 +1202,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         ) : (
                           <ChevronRight className="h-4 w-4 shrink-0" />
                         )}
-                      </>
+                      </span>
                     )}
                   </button>
                   {isSidebarExpanded &&

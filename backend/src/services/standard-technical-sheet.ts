@@ -5,22 +5,25 @@ import {
   buildLaborDiffLines,
   buildRecipeSnapshotLines,
   buildLaborSnapshotLines,
+  buildLaborRowsForSource,
   buildStandardSnapshot,
   compareIngredientSnapshotsAsync,
   compareLaborSnapshots,
-  compareRecipeSnapshotsAsync,
   isIngredientSnapshotLine,
   isLaborSnapshotLine,
   laborSnapshotLinesToDisplay,
   recipeSnapshotLinesToDisplay,
+  type IngredientSnapshotLine,
   type LaborDiffLine,
+  type LaborSnapshotLine,
   type LaborSnapshotDisplayLine,
   type RecipeDiffLine,
+  type RecipeSnapshotLine,
   type RecipeSnapshotDisplayLine,
   type StandardSnapshot,
   type TechnicalSheetPayload,
 } from "./technical-sheet-builder";
-import { quantityFromGrams } from "./units";
+import { convertToGrams, quantityFromGrams } from "./units";
 import { checkCycleCrossTenant } from "./cycle-detection-cross-tenant";
 
 export type StandardTechnicalSheetRow = {
@@ -259,13 +262,53 @@ export async function ensureStandardV0(params: {
   return loadStandardSheetRowById(rpcRow.id);
 }
 
+async function snapshotVsLiveRecipeDiff(
+  snapshot: StandardSnapshot,
+  sourceItemId: string,
+  tenantIds: string[],
+): Promise<{
+  savedAll: RecipeSnapshotLine[];
+  savedIngredients: IngredientSnapshotLine[];
+  savedLabor: LaborSnapshotLine[];
+  liveIngredients: IngredientSnapshotLine[];
+  liveLabor: LaborSnapshotLine[];
+  hasIngredientDiff: boolean;
+  hasLaborDiff: boolean;
+}> {
+  const savedAll = snapshot.recipe_snapshot.lines;
+  const savedIngredients = savedAll.filter(isIngredientSnapshotLine);
+  const savedLabor = savedAll.filter(isLaborSnapshotLine);
+  const [liveIngredients, liveLabor] = await Promise.all([
+    buildRecipeSnapshotLines(sourceItemId, tenantIds),
+    buildLaborSnapshotLines(sourceItemId),
+  ]);
+  const hasIngredientDiff = await compareIngredientSnapshotsAsync(
+    savedIngredients,
+    liveIngredients,
+  );
+  const hasLaborDiff = compareLaborSnapshots(savedLabor, liveLabor);
+  return {
+    savedAll,
+    savedIngredients,
+    savedLabor,
+    liveIngredients,
+    liveLabor,
+    hasIngredientDiff,
+    hasLaborDiff,
+  };
+}
+
 export async function computeHasRecipeDiff(
   snapshot: StandardSnapshot,
   sourceItemId: string,
   tenantIds: string[],
 ): Promise<boolean> {
-  const live = await buildRecipeSnapshotLines(sourceItemId, tenantIds);
-  return compareRecipeSnapshotsAsync(snapshot.recipe_snapshot.lines, live);
+  const { hasIngredientDiff, hasLaborDiff } = await snapshotVsLiveRecipeDiff(
+    snapshot,
+    sourceItemId,
+    tenantIds,
+  );
+  return hasIngredientDiff || hasLaborDiff;
 }
 
 export function sheetFromSnapshot(
@@ -302,18 +345,14 @@ export async function getRecipeDiffForLatest(
   labor_saved: LaborSnapshotDisplayLine[];
   labor_live: LaborSnapshotDisplayLine[];
 }> {
-  const savedAll = snapshot.recipe_snapshot.lines;
-  const savedIngredients = savedAll.filter(isIngredientSnapshotLine);
-  const savedLabor = savedAll.filter(isLaborSnapshotLine);
-  const [liveIngredients, liveLabor] = await Promise.all([
-    buildRecipeSnapshotLines(sourceItemId, tenantIds),
-    buildLaborSnapshotLines(sourceItemId),
-  ]);
-  const hasIngredientDiff = await compareIngredientSnapshotsAsync(
-    savedIngredients,
+  const {
+    savedAll,
+    savedLabor,
     liveIngredients,
-  );
-  const hasLaborDiff = compareLaborSnapshots(savedLabor, liveLabor);
+    liveLabor,
+    hasIngredientDiff,
+    hasLaborDiff,
+  } = await snapshotVsLiveRecipeDiff(snapshot, sourceItemId, tenantIds);
   const lines = await buildRecipeDiffLines(savedAll, [
     ...liveIngredients,
     ...liveLabor,
@@ -348,10 +387,29 @@ export type SheetLaborEdit = {
   minutes: number;
 };
 
+export type ApplyMode = "override" | "overwrite";
+
+export type SheetIngredientSaveRow = SheetIngredientEdit & {
+  apply_mode: ApplyMode;
+};
+
+export type SheetLaborSaveRow = SheetLaborEdit & {
+  apply_mode: ApplyMode;
+};
+
 export type StandardSheetEditPayload = {
   ingredient_rows: SheetIngredientEdit[];
   labor_rows?: SheetLaborEdit[];
 };
+
+export type StandardSheetSavePayload = {
+  ingredient_rows: SheetIngredientSaveRow[];
+  labor_rows?: SheetLaborSaveRow[];
+  excluded_ingredients?: Array<{ item_id: string; apply_mode: ApplyMode }>;
+  excluded_labor?: Array<{ row_key: string; apply_mode: ApplyMode }>;
+};
+
+export type SaveMode = "this_version" | "new_version";
 
 export type SheetEditActor = {
   tenantId: string;
@@ -640,6 +698,332 @@ export async function applySheetEditsToRecipe(
   }
 }
 
+async function backupRecipeLines(
+  sourceItemId: string,
+): Promise<RecipeLine[]> {
+  const { data, error } = await supabase
+    .from("recipe_lines")
+    .select("*")
+    .eq("parent_item_id", sourceItemId);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as RecipeLine[];
+}
+
+async function restoreRecipeLines(
+  sourceItemId: string,
+  backup: RecipeLine[],
+): Promise<void> {
+  const { error: delErr } = await supabase
+    .from("recipe_lines")
+    .delete()
+    .eq("parent_item_id", sourceItemId);
+  if (delErr) throw new Error(delErr.message);
+  if (backup.length === 0) return;
+  const { error: insErr } = await supabase.from("recipe_lines").insert(backup);
+  if (insErr) throw new Error(insErr.message);
+}
+
+async function buildSnapshotForSave(
+  sourceItemId: string,
+  tenantIds: string[],
+  fullPayload: StandardSheetEditPayload,
+  actor: SheetEditActor,
+): Promise<StandardSnapshot> {
+  const backup = await backupRecipeLines(sourceItemId);
+  try {
+    await applySheetEditsToRecipe(sourceItemId, fullPayload, actor);
+    return await buildStandardSnapshot({
+      sourceItemId,
+      tenantIds,
+      expandItemIds: new Set(),
+    });
+  } finally {
+    await restoreRecipeLines(sourceItemId, backup);
+  }
+}
+
+/** Align recipe_snapshot (and sheet labor row_keys) with live recipe after partial apply. */
+async function syncSnapshotRecipeLinesFromLive(
+  snapshot: StandardSnapshot,
+  sourceItemId: string,
+  tenantIds: string[],
+): Promise<void> {
+  const [ingredientLines, laborLines] = await Promise.all([
+    buildRecipeSnapshotLines(sourceItemId, tenantIds),
+    buildLaborSnapshotLines(sourceItemId),
+  ]);
+  snapshot.recipe_snapshot = { lines: [...ingredientLines, ...laborLines] };
+
+  const laborBundle = await buildLaborRowsForSource(sourceItemId, tenantIds);
+  snapshot.sheet.labor_rows = laborBundle.rows;
+  snapshot.sheet.total_labor_cost = laborBundle.total;
+}
+
+async function recipeLineToIngredientEdit(
+  line: RecipeLine,
+  itemMap: Map<string, Item>,
+  baseItemMap: Map<string, import("../types/database").BaseItem>,
+): Promise<SheetIngredientEdit | null> {
+  if (!line.child_item_id || !line.unit) return null;
+  const qty = Number(line.quantity);
+  if (!Number.isFinite(qty) || qty <= 0) return null;
+  const child = itemMap.get(line.child_item_id);
+  if (!child) return null;
+  let grams = qty;
+  try {
+    grams = convertToGrams(
+      line.unit,
+      qty,
+      line.child_item_id,
+      itemMap,
+      baseItemMap,
+    );
+  } catch {
+    if (line.unit !== "g") return null;
+  }
+  return {
+    item_id: line.child_item_id,
+    total_grams: grams,
+    specific_child: line.specific_child ?? undefined,
+  };
+}
+
+async function applyPartialRecipeEdits(
+  sourceItemId: string,
+  payload: StandardSheetSavePayload,
+  actor: SheetEditActor,
+): Promise<void> {
+  const overwriteIngredients = payload.ingredient_rows.filter(
+    (r) => r.apply_mode === "overwrite",
+  );
+  const overwriteLabor = (payload.labor_rows ?? []).filter(
+    (r) => r.apply_mode === "overwrite",
+  );
+  const overwriteByChild = new Map(
+    overwriteIngredients.map((r) => [r.item_id, r]),
+  );
+  const excludedOverwriteIngredients = new Set(
+    (payload.excluded_ingredients ?? [])
+      .filter((e) => e.apply_mode === "overwrite")
+      .map((e) => e.item_id),
+  );
+  const excludedOverwriteLabor = new Set(
+    (payload.excluded_labor ?? [])
+      .filter((e) => e.apply_mode === "overwrite")
+      .map((e) => e.row_key),
+  );
+
+  const { data: existing, error: loadErr } = await supabase
+    .from("recipe_lines")
+    .select("*")
+    .eq("parent_item_id", sourceItemId);
+  if (loadErr) throw new Error(loadErr.message);
+
+  const allLines = (existing ?? []) as RecipeLine[];
+  const ingredientLines = allLines.filter((l) => l.line_type === "ingredient");
+  const laborLines = allLines.filter((l) => l.line_type === "labor");
+
+  const childIds = [
+    ...new Set([
+      ...ingredientLines.map((l) => l.child_item_id).filter(Boolean) as string[],
+      ...overwriteIngredients.map((r) => r.item_id),
+    ]),
+  ];
+  const itemMap = new Map<string, Item>();
+  const baseItemMap = new Map<string, import("../types/database").BaseItem>();
+  if (childIds.length > 0) {
+    const { data: items, error: itemsErr } = await supabase
+      .from("items")
+      .select("*")
+      .in("id", childIds);
+    if (itemsErr) throw new Error(itemsErr.message);
+    for (const item of (items ?? []) as Item[]) {
+      itemMap.set(item.id, item);
+    }
+    const baseIds = [
+      ...new Set((items ?? []).map((i) => i.base_item_id).filter(Boolean)),
+    ];
+    if (baseIds.length > 0) {
+      const { data: bases } = await supabase
+        .from("base_items")
+        .select("*")
+        .in("id", baseIds);
+      for (const b of bases ?? []) {
+        baseItemMap.set(b.id, b);
+      }
+    }
+  }
+
+  const mergedIngredients: SheetIngredientEdit[] = [];
+  const seenChildIds = new Set<string>();
+
+  for (const line of ingredientLines) {
+    if (!line.child_item_id) continue;
+    if (excludedOverwriteIngredients.has(line.child_item_id)) continue;
+    const overwrite = overwriteByChild.get(line.child_item_id);
+    if (overwrite) {
+      mergedIngredients.push(overwrite);
+      seenChildIds.add(line.child_item_id);
+      continue;
+    }
+    const kept = await recipeLineToIngredientEdit(line, itemMap, baseItemMap);
+    if (kept) {
+      mergedIngredients.push(kept);
+      seenChildIds.add(line.child_item_id);
+    }
+  }
+
+  for (const row of overwriteIngredients) {
+    if (!seenChildIds.has(row.item_id)) {
+      mergedIngredients.push(row);
+      seenChildIds.add(row.item_id);
+    }
+  }
+
+  const mergedLabor: SheetLaborEdit[] = [];
+  const seenLaborKeys = new Set<string>();
+
+  for (const line of laborLines) {
+    if (excludedOverwriteLabor.has(line.id)) continue;
+    const overwrite = overwriteLabor.find((r) => r.row_key === line.id);
+    if (overwrite) {
+      mergedLabor.push(overwrite);
+      seenLaborKeys.add(line.id);
+      continue;
+    }
+    if (!line.labor_role || !line.minutes) continue;
+    mergedLabor.push({
+      row_key: line.id,
+      labor_role: line.labor_role,
+      minutes: line.minutes,
+    });
+    seenLaborKeys.add(line.id);
+  }
+
+  for (const row of overwriteLabor) {
+    const key = row.row_key?.trim();
+    if (key && seenLaborKeys.has(key)) continue;
+    if (!key && row.labor_role) {
+      mergedLabor.push(row);
+      continue;
+    }
+    if (key && !seenLaborKeys.has(key)) {
+      mergedLabor.push(row);
+      seenLaborKeys.add(key);
+    }
+  }
+
+  await applySheetEditsToRecipe(
+    sourceItemId,
+    { ingredient_rows: mergedIngredients, labor_rows: mergedLabor },
+    actor,
+  );
+}
+
+export async function updateStandardVersionInPlace(params: {
+  id: string;
+  tenantId: string;
+  snapshot: StandardSnapshot;
+  description: string | null;
+  procedure: string | null;
+}): Promise<StandardTechnicalSheetRow> {
+  const { data: rpcRows, error: rpcErr } = await supabase.rpc(
+    "update_standard_technical_sheet_version",
+    {
+      p_id: params.id,
+      p_tenant_id: params.tenantId,
+      p_snapshot: params.snapshot,
+      p_description: params.description,
+      p_procedure: params.procedure,
+    },
+  );
+  if (rpcErr) {
+    throw new Error(
+      `update_standard_technical_sheet_version failed: ${rpcErr.message}. ` +
+        "Apply migration 20260529120000_update_standard_technical_sheet_version.sql.",
+    );
+  }
+  const rpcRow = parseRpcVersionRow(rpcRows);
+  if (rpcRow) {
+    return loadStandardSheetRowById(rpcRow.id);
+  }
+  throw new Error("update_standard_technical_sheet_version returned no row");
+}
+
+export async function saveStandardSheetVersion(params: {
+  sheetId: string;
+  tenantId: string;
+  tenantIds: string[];
+  sourceItemId: string;
+  createdBy: string;
+  description: string | null;
+  procedure: string | null;
+  saveMode: SaveMode;
+  isLatest: boolean;
+  payload: StandardSheetSavePayload;
+}): Promise<StandardTechnicalSheetRow> {
+  if (params.saveMode === "new_version" && !params.isLatest) {
+    throw new Error("Save as new version is only allowed on the latest version");
+  }
+
+  const actor: SheetEditActor = {
+    tenantId: params.tenantId,
+    userId: params.createdBy,
+  };
+
+  const overwriteOnly: StandardSheetEditPayload = {
+    ingredient_rows: params.payload.ingredient_rows.filter(
+      (r) => r.apply_mode === "overwrite",
+    ),
+    labor_rows: (params.payload.labor_rows ?? []).filter(
+      (r) => r.apply_mode === "overwrite",
+    ),
+  };
+  await validateSheetEditsNoCycle(
+    params.sourceItemId,
+    actor,
+    overwriteOnly,
+  );
+
+  const fullPayload: StandardSheetEditPayload = {
+    ingredient_rows: params.payload.ingredient_rows,
+    labor_rows: params.payload.labor_rows,
+  };
+  const snapshot = await buildSnapshotForSave(
+    params.sourceItemId,
+    params.tenantIds,
+    fullPayload,
+    actor,
+  );
+
+  await applyPartialRecipeEdits(params.sourceItemId, params.payload, actor);
+  await syncSnapshotRecipeLinesFromLive(
+    snapshot,
+    params.sourceItemId,
+    params.tenantIds,
+  );
+
+  if (params.saveMode === "this_version") {
+    return updateStandardVersionInPlace({
+      id: params.sheetId,
+      tenantId: params.tenantId,
+      snapshot,
+      description: params.description,
+      procedure: params.procedure,
+    });
+  }
+
+  return insertStandardVersion({
+    tenantId: params.tenantId,
+    sourceItemId: params.sourceItemId,
+    snapshot,
+    createdBy: params.createdBy,
+    description: params.description,
+    procedure: params.procedure,
+  });
+}
+
+/** @deprecated Use saveStandardSheetVersion. Kept for compatibility. */
 export async function saveStandardSheetEdits(params: {
   tenantId: string;
   tenantIds: string[];
@@ -649,23 +1033,30 @@ export async function saveStandardSheetEdits(params: {
   procedure: string | null;
   payload: StandardSheetEditPayload;
 }): Promise<StandardTechnicalSheetRow> {
-  const actor: SheetEditActor = {
+  const latest = await getLatestStandardSheet(
+    params.tenantId,
+    params.sourceItemId,
+  );
+  if (!latest) throw new Error("No standard technical sheet found");
+  return saveStandardSheetVersion({
+    sheetId: latest.id,
     tenantId: params.tenantId,
-    userId: params.createdBy,
-  };
-  await validateSheetEditsNoCycle(params.sourceItemId, actor, params.payload);
-  await applySheetEditsToRecipe(params.sourceItemId, params.payload, actor);
-  const snapshot = await buildStandardSnapshot({
-    sourceItemId: params.sourceItemId,
     tenantIds: params.tenantIds,
-    expandItemIds: new Set(),
-  });
-  return insertStandardVersion({
-    tenantId: params.tenantId,
     sourceItemId: params.sourceItemId,
-    snapshot,
     createdBy: params.createdBy,
     description: params.description,
     procedure: params.procedure,
+    saveMode: "new_version",
+    isLatest: true,
+    payload: {
+      ingredient_rows: params.payload.ingredient_rows.map((r) => ({
+        ...r,
+        apply_mode: "overwrite" as const,
+      })),
+      labor_rows: (params.payload.labor_rows ?? []).map((r) => ({
+        ...r,
+        apply_mode: "overwrite" as const,
+      })),
+    },
   });
 }

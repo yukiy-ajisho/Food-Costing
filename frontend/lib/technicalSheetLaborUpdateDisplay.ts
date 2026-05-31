@@ -1,4 +1,4 @@
-import type { StandardRecipeDiff } from "@/lib/api";
+import type { StandardRecipeDiff, StandardSheetApplyMode } from "@/lib/api";
 import type { PuChoice } from "@/lib/technicalSheetUpdateDisplay";
 
 export type LaborUpdateRowChoices = {
@@ -37,6 +37,10 @@ export function laborRoleSwapDisplayKey(minutes: number): string {
   return `labor-swap:${minutes}`;
 }
 
+function laborSemanticKey(labor_role: string, minutes: number): string {
+  return `${labor_role.trim()}|${minutes}`;
+}
+
 export function detectLaborRoleSwapPairs(
   diff: StandardRecipeDiff,
 ): Map<string, LaborRoleSwapPair> {
@@ -72,27 +76,82 @@ export function detectLaborRoleSwapPairs(
 
 export function buildLaborUpdateDisplayPlan(
   diff: StandardRecipeDiff,
-  _restoredRemovedKeys: ReadonlySet<string> = new Set(),
+  restoredRemovedKeys: ReadonlySet<string> = new Set(),
 ): LaborUpdateDisplayPlan {
   const roleSwaps = detectLaborRoleSwapPairs(diff);
   const laborSaved = diff.labor_saved ?? [];
   const laborLive = diff.labor_live ?? [];
-  const allKeys = new Set([
-    ...laborSaved.map((l) => l.row_key),
-    ...laborLive.map((l) => l.row_key),
-  ]);
   const savedByKey = new Map(laborSaved.map((l) => [l.row_key, l]));
   const liveByKey = new Map(laborLive.map((l) => [l.row_key, l]));
 
-  const displayKeys = [...allKeys].sort((a, b) => {
-    const roleA = savedByKey.get(a)?.labor_role ?? liveByKey.get(a)?.labor_role ?? a;
-    const roleB = savedByKey.get(b)?.labor_role ?? liveByKey.get(b)?.labor_role ?? b;
+  type SemEntry = {
+    saved?: (typeof laborSaved)[number];
+    live?: (typeof laborLive)[number];
+  };
+  const bySem = new Map<string, SemEntry>();
+  for (const line of laborSaved) {
+    const sem = laborSemanticKey(line.labor_role, line.minutes);
+    const entry = bySem.get(sem) ?? {};
+    entry.saved = line;
+    bySem.set(sem, entry);
+  }
+  for (const line of laborLive) {
+    const sem = laborSemanticKey(line.labor_role, line.minutes);
+    const entry = bySem.get(sem) ?? {};
+    entry.live = line;
+    bySem.set(sem, entry);
+  }
+
+  const pairedRemovedKeys = new Set<string>();
+  for (const pair of roleSwaps.values()) {
+    pairedRemovedKeys.add(pair.removedKey);
+    pairedRemovedKeys.add(pair.addedKey);
+  }
+
+  const displayKeys: string[] = [];
+  const swapMinutesInserted = new Set<number>();
+
+  const sortedSem = [...bySem.keys()].sort((a, b) => {
+    const roleA = a.split("|")[0] ?? a;
+    const roleB = b.split("|")[0] ?? b;
     const byRole = roleA.localeCompare(roleB);
     if (byRole !== 0) return byRole;
     return a.localeCompare(b);
   });
 
-  return { displayKeys, roleSwaps, pairedRemovedKeys: new Set() };
+  for (const sem of sortedSem) {
+    const { saved, live } = bySem.get(sem)!;
+    if (saved && live) {
+      const minutes = saved.minutes;
+      const pair = roleSwaps.get(String(minutes));
+      if (
+        pair &&
+        pair.removedKey === saved.row_key &&
+        pair.addedKey === live.row_key &&
+        !swapMinutesInserted.has(minutes)
+      ) {
+        swapMinutesInserted.add(minutes);
+        displayKeys.push(laborRoleSwapDisplayKey(minutes));
+        continue;
+      }
+      displayKeys.push(live.row_key);
+      continue;
+    }
+    if (saved && !live) {
+      if (
+        restoredRemovedKeys.has(saved.row_key) ||
+        !pairedRemovedKeys.has(saved.row_key)
+      ) {
+        displayKeys.push(saved.row_key);
+      }
+      continue;
+    }
+    if (live && !saved) {
+      displayKeys.push(live.row_key);
+    }
+  }
+
+  return { displayKeys, roleSwaps, pairedRemovedKeys };
 }
 
 export function buildLaborUpdateMetaByRowKey(
@@ -101,27 +160,57 @@ export function buildLaborUpdateMetaByRowKey(
 ): Map<string, LaborUpdateRowMeta> {
   const plan = buildLaborUpdateDisplayPlan(diff, restoredRemovedKeys);
   const diffByKey = new Map((diff.labor_lines ?? []).map((l) => [l.row_key, l]));
-  const savedByKey = new Map((diff.labor_saved ?? []).map((l) => [l.row_key, l]));
-  const liveByKey = new Map((diff.labor_live ?? []).map((l) => [l.row_key, l]));
+  const laborSaved = diff.labor_saved ?? [];
+  const laborLive = diff.labor_live ?? [];
+  const savedByKey = new Map(laborSaved.map((l) => [l.row_key, l]));
+  const liveByKey = new Map(laborLive.map((l) => [l.row_key, l]));
   const meta = new Map<string, LaborUpdateRowMeta>();
 
-  const allKeys = new Set([
-    ...(diff.labor_saved ?? []).map((l) => l.row_key),
-    ...(diff.labor_live ?? []).map((l) => l.row_key),
-  ]);
+  const findSavedForDisplay = (
+    displayKey: string,
+  ): (typeof laborSaved)[number] | undefined => {
+    const direct = savedByKey.get(displayKey);
+    if (direct) return direct;
+    const liveLine = liveByKey.get(displayKey);
+    if (!liveLine) return undefined;
+    const sem = laborSemanticKey(liveLine.labor_role, liveLine.minutes);
+    return laborSaved.find(
+      (s) => laborSemanticKey(s.labor_role, s.minutes) === sem,
+    );
+  };
 
-  for (const rowKey of allKeys) {
-    const diffLine = diffByKey.get(rowKey);
-    const savedLine = savedByKey.get(rowKey);
-    const liveLine = liveByKey.get(rowKey);
+  const findLiveForDisplay = (
+    displayKey: string,
+  ): (typeof laborLive)[number] | undefined => {
+    const direct = liveByKey.get(displayKey);
+    if (direct) return direct;
+    const savedLine = savedByKey.get(displayKey);
+    if (!savedLine) return undefined;
+    const sem = laborSemanticKey(savedLine.labor_role, savedLine.minutes);
+    return laborLive.find(
+      (l) => laborSemanticKey(l.labor_role, l.minutes) === sem,
+    );
+  };
+
+  for (const displayKey of plan.displayKeys) {
+    const { sheetKey, liveKey } = resolveLaborSnapshotKeysForChoice(
+      displayKey,
+      plan.roleSwaps,
+    );
+    const diffLine =
+      diffByKey.get(displayKey) ??
+      diffByKey.get(sheetKey) ??
+      diffByKey.get(liveKey);
+    const savedLine = findSavedForDisplay(displayKey) ?? savedByKey.get(sheetKey);
+    const liveLine = findLiveForDisplay(displayKey) ?? liveByKey.get(liveKey);
 
     let diffType: LaborUpdateDiffType = diffLine?.type ?? "unchanged";
-    if (diffType === "removed" && restoredRemovedKeys.has(rowKey)) {
+    if (diffType === "removed" && restoredRemovedKeys.has(sheetKey)) {
       diffType = "unchanged";
     }
 
-    meta.set(rowKey, {
-      row_key: rowKey,
+    meta.set(displayKey, {
+      row_key: displayKey,
       diffType,
       sheetRole: diffLine?.saved_labor_role ?? savedLine?.labor_role ?? null,
       liveRole: diffLine?.live_labor_role ?? liveLine?.labor_role ?? null,
@@ -147,6 +236,23 @@ export function defaultLaborUpdateRowChoices(
     }
   }
   return choices;
+}
+
+/** Removed (pending Restore) rows: Override only — recipe has no line to overwrite. */
+export function defaultLaborApplyModes(
+  diff: StandardRecipeDiff,
+  plan: LaborUpdateDisplayPlan,
+): Map<string, StandardSheetApplyMode> {
+  const modes = new Map<string, StandardSheetApplyMode>();
+  for (const key of plan.displayKeys) {
+    modes.set(key, "overwrite");
+  }
+  for (const line of diff.labor_lines ?? []) {
+    if (line.type === "removed" && !plan.pairedRemovedKeys.has(line.row_key)) {
+      modes.set(line.row_key, "override");
+    }
+  }
+  return modes;
 }
 
 export function effectiveLaborChoice(
@@ -206,6 +312,50 @@ export function minutesMatchesLive(
   minutes: number,
 ): boolean {
   return minutesMatch(minutes, meta.liveMinutes);
+}
+
+function roleMatchesSheet(meta: LaborUpdateRowMeta, role: string): boolean {
+  const sheet = (meta.sheetRole ?? "").trim();
+  if (!sheet) return false;
+  return role.trim() === sheet;
+}
+
+function roleMatchesLive(meta: LaborUpdateRowMeta, role: string): boolean {
+  const live = (meta.liveRole ?? "").trim();
+  if (!live) return false;
+  return role.trim() === live;
+}
+
+/** True when draft row differs from both Current version and Recipe database. */
+export function laborRowDiffersFromVersions(
+  meta: LaborUpdateRowMeta,
+  row: { labor_role: string; minutes: number },
+): boolean {
+  if (!roleMatchesSheet(meta, row.labor_role)) return true;
+  if (!roleMatchesLive(meta, row.labor_role)) return true;
+  if (!minutesMatchesSheet(meta, row.minutes)) return true;
+  if (!minutesMatchesLive(meta, row.minutes)) return true;
+  return false;
+}
+
+export function isLaborApplyChoiceNeeded(
+  diffType: LaborUpdateDiffType | undefined,
+  meta: LaborUpdateRowMeta | undefined,
+  row: { labor_role: string; minutes: number },
+  opts?: { isNew?: boolean },
+): boolean {
+  if (opts?.isNew || meta == null) return true;
+  if (diffType !== "unchanged") return true;
+  return laborRowDiffersFromVersions(meta, row);
+}
+
+export function resolveLaborApplyMode(
+  rowKey: string,
+  choiceNeeded: boolean,
+  modes: Map<string, StandardSheetApplyMode> | undefined,
+): StandardSheetApplyMode {
+  if (!choiceNeeded) return "override";
+  return modes?.get(rowKey) ?? "overwrite";
 }
 
 export function resolveEditMinutesRadios(

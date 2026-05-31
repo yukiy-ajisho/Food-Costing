@@ -1,4 +1,10 @@
-import type { BaseItem, Item, StandardRecipeDiff, Vendor } from "@/lib/api";
+import type {
+  BaseItem,
+  Item,
+  StandardRecipeDiff,
+  StandardSheetApplyMode,
+  Vendor,
+} from "@/lib/api";
 import { childIdFromRowKey, snapshotRowKey } from "@/lib/technicalSheetRowKey";
 import {
   puPerGramForRawVendorChoice,
@@ -213,6 +219,23 @@ export function defaultUpdateRowChoices(
   return choices;
 }
 
+/** Removed (pending Restore) rows: Override only — recipe has no line to overwrite. */
+export function defaultIngredientApplyModes(
+  diff: StandardRecipeDiff,
+  plan: UpdateDisplayPlan,
+): Map<string, StandardSheetApplyMode> {
+  const modes = new Map<string, StandardSheetApplyMode>();
+  for (const key of plan.displayKeys) {
+    modes.set(key, "overwrite");
+  }
+  for (const line of diff.lines) {
+    if (line.type === "removed" && !plan.pairedRowKeys.has(line.row_key)) {
+      modes.set(line.row_key, "override");
+    }
+  }
+  return modes;
+}
+
 export function mergedVersionAmountDisplay(
   meta: UpdateRowMeta,
   diffType: UpdateDiffType,
@@ -381,6 +404,42 @@ export function totalMatchesLive(
   totalGrams: number,
 ): boolean {
   return gramsMatch(totalGrams, meta.liveGrams);
+}
+
+/** True when New recipe column values differ from both Current version and Recipe database. */
+export function ingredientNewRecipeDiffersFromVersions(
+  meta: UpdateRowMeta,
+  row: { specific_child?: string | null; total: number },
+  item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
+): boolean {
+  if (item?.item_kind === "raw" && !item.is_menu_item) {
+    if (!vendorMatchesSheet(meta, row.specific_child)) return true;
+    if (!vendorMatchesLive(meta, row.specific_child)) return true;
+  }
+  if (!totalMatchesSheet(meta, row.total)) return true;
+  if (!totalMatchesLive(meta, row.total)) return true;
+  return false;
+}
+
+export function isIngredientApplyChoiceNeeded(
+  diffType: UpdateDiffType | undefined,
+  meta: UpdateRowMeta | undefined,
+  row: { specific_child?: string | null; total: number },
+  item: Pick<Item, "item_kind" | "is_menu_item"> | null | undefined,
+  opts?: { isManualNewRow?: boolean; isPendingNew?: boolean },
+): boolean {
+  if (opts?.isManualNewRow || opts?.isPendingNew || meta == null) return true;
+  if (diffType !== "unchanged") return true;
+  return ingredientNewRecipeDiffersFromVersions(meta, row, item);
+}
+
+export function resolveIngredientApplyMode(
+  rowKey: string,
+  choiceNeeded: boolean,
+  modes: Map<string, StandardSheetApplyMode> | undefined,
+): StandardSheetApplyMode {
+  if (!choiceNeeded) return "override";
+  return modes?.get(rowKey) ?? "overwrite";
 }
 
 function resolveEditFieldRadios(
