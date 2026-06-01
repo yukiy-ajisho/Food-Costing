@@ -1368,7 +1368,7 @@ export function RecipeCostReportListPage({
   };
 
   const thCls = `h-14 align-middle px-4 py-3 text-xs font-medium uppercase tracking-wider ${
-    isDark ? "text-slate-300 bg-slate-700/80" : "text-gray-500 bg-gray-50"
+    isDark ? "text-slate-300 bg-slate-700" : "text-gray-500 bg-gray-50"
   }`;
   const tbodyRowDividerCls = `[&>tr:not(:last-child)>td]:border-b ${
     isDark

@@ -1528,7 +1528,7 @@ export function InvoiceImportModal({
                         <thead>
                           <tr
                             className={
-                              isDark ? "bg-slate-700/80" : "bg-gray-100"
+                              isDark ? "bg-slate-700" : "bg-gray-100"
                             }
                           >
                             <th className={`px-2 py-2 text-left ${thCls}`}>
@@ -1882,7 +1882,7 @@ export function InvoiceImportModal({
                     <table className="w-full min-w-[1080px] text-sm">
                       <thead>
                         <tr
-                          className={isDark ? "bg-slate-700/80" : "bg-gray-100"}
+                          className={isDark ? "bg-slate-700" : "bg-gray-100"}
                         >
                           <th className={`px-2 py-2 text-left ${thCls}`}>#</th>
                           <th
@@ -2146,7 +2146,7 @@ export function InvoiceImportModal({
                     <table className="w-full min-w-[640px] text-sm">
                       <thead>
                         <tr
-                          className={isDark ? "bg-slate-700/80" : "bg-gray-100"}
+                          className={isDark ? "bg-slate-700" : "bg-gray-100"}
                         >
                           <th className={`px-2 py-2 text-left ${thCls}`}>#</th>
                           <th className={`px-2 py-2 text-left ${thCls}`}>

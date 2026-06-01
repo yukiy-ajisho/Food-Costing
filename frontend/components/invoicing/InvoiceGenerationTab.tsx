@@ -23,9 +23,7 @@ import {
   type InvoicingCostBreakdown,
 } from "@/lib/invoicingCalc";
 import { CreateInvoicingListModal } from "./CreateInvoicingListModal";
-import {
-  InvoiceGeneratePreviewModal,
-} from "./InvoiceGeneratePreviewModal";
+import { InvoiceGeneratePreviewModal } from "./InvoiceGeneratePreviewModal";
 import type { GeneratePreviewPayload } from "@/lib/invoicingPreview";
 
 type RowInput = {
@@ -91,7 +89,13 @@ function formatUnitSizeDisplay(input: RowInput): string {
   return `${input.unitSize} ${input.unitSizeUnit}`;
 }
 
-export function InvoiceGenerationTab() {
+type InvoiceGenerationTabProps = {
+  onInvoiceSaved?: () => void;
+};
+
+export function InvoiceGenerationTab({
+  onInvoiceSaved,
+}: InvoiceGenerationTabProps = {}) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -160,7 +164,7 @@ export function InvoiceGenerationTab() {
       : "border-gray-300 bg-white text-gray-900"
   }`;
   const thCls = `h-14 align-middle px-4 py-3 text-xs font-medium uppercase tracking-wider ${
-    isDark ? "text-slate-300 bg-slate-700/80" : "text-gray-500 bg-gray-50"
+    isDark ? "text-slate-300 bg-slate-700" : "text-gray-500 bg-gray-50"
   }`;
   const tbodyRowDividerCls = `[&>tr:not(:last-child)>td]:border-b ${
     isDark
@@ -237,16 +241,18 @@ export function InvoiceGenerationTab() {
   }, []);
 
   const loadDetail = useCallback(
-    async (listId: string, options?: { preserveGenerationInputs?: boolean }) => {
-      const preserveGenerationInputs = options?.preserveGenerationInputs ?? false;
+    async (
+      listId: string,
+      options?: { preserveGenerationInputs?: boolean },
+    ) => {
+      const preserveGenerationInputs =
+        options?.preserveGenerationInputs ?? false;
       setLoading(true);
       setError(null);
       if (!preserveGenerationInputs) {
         setIsEditMode(false);
         setPendingRemovals(new Set());
         setPendingAdds([]);
-        setOrderReceivedDate((prev) => prev || todayYmd());
-        setDeliveryDate((prev) => prev || todayYmd());
         setInvoiceDate((prev) => prev || todayYmd());
       }
       try {
@@ -344,14 +350,13 @@ export function InvoiceGenerationTab() {
   }, [filteredLists]);
 
   useEffect(() => {
-    if (!selectedListId) return;
-    void loadDetail(selectedListId);
-  }, [selectedListId, loadDetail]);
+    setInvoiceDate(todayYmd());
+  }, []);
 
   useEffect(() => {
     if (!selectedListId) return;
-    setInvoiceDate((prev) => prev || todayYmd());
-  }, [selectedListId]);
+    void loadDetail(selectedListId);
+  }, [selectedListId, loadDetail]);
 
   const candidateById = useMemo(() => {
     const map = new Map<string, InvoicingItemCandidate>();
@@ -393,10 +398,7 @@ export function InvoiceGenerationTab() {
     costs,
   ]);
 
-  const updateRowInput = (
-    itemId: string,
-    patch: Partial<RowInput>,
-  ) => {
+  const updateRowInput = (itemId: string, patch: Partial<RowInput>) => {
     setRowInputs((prev) => {
       const next = new Map(prev);
       const current = next.get(itemId) ?? emptyRowInput();
@@ -442,7 +444,8 @@ export function InvoiceGenerationTab() {
     setIsEditMode(false);
     setPendingRemovals(new Set());
     setPendingAdds([]);
-    if (selectedListId) void loadDetail(selectedListId, { preserveGenerationInputs: true });
+    if (selectedListId)
+      void loadDetail(selectedListId, { preserveGenerationInputs: true });
   };
 
   const handleSaveEdit = async () => {
@@ -540,10 +543,7 @@ export function InvoiceGenerationTab() {
   };
 
   const handleAddPendingRow = () => {
-    setPendingAdds((prev) => [
-      { localId: newLocalId(), item_id: "" },
-      ...prev,
-    ]);
+    setPendingAdds((prev) => [{ localId: newLocalId(), item_id: "" }, ...prev]);
   };
 
   const handleGenerate = async () => {
@@ -661,6 +661,7 @@ export function InvoiceGenerationTab() {
     } else {
       setError(null);
     }
+    onInvoiceSaved?.();
   };
 
   const renderRow = (
@@ -769,11 +770,7 @@ export function InvoiceGenerationTab() {
         <td className={`px-4 py-2 tabular-nums ${muted}`}>
           {costsLoading
             ? "…"
-            : formatInvoicingCostDisplay(
-                costs[row.item_id],
-                row,
-                eachMode,
-              )}
+            : formatInvoicingCostDisplay(costs[row.item_id], row, eachMode)}
         </td>
         <td className={`px-4 py-2 tabular-nums font-medium ${textMain}`}>
           {subTotal != null ? formatCurrency(subTotal) : "—"}
@@ -826,7 +823,9 @@ export function InvoiceGenerationTab() {
 
         <aside className={`${cardShell} min-h-0 flex-1`}>
           <div className="shrink-0 px-4 pb-3 pt-4">
-            <p className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
+            <p
+              className={`text-xs font-medium uppercase tracking-wide ${muted}`}
+            >
               Delivery list template
             </p>
             <button
@@ -919,7 +918,9 @@ export function InvoiceGenerationTab() {
                       saving ||
                       deliverySiteOptions.length === 0
                     }
-                    onChange={(e) => void handleDeliverySiteChange(e.target.value)}
+                    onChange={(e) =>
+                      void handleDeliverySiteChange(e.target.value)
+                    }
                     className={deliverySiteSelectCls}
                   >
                     <option value="">Select delivery site</option>
@@ -987,21 +988,29 @@ export function InvoiceGenerationTab() {
             >
               {isEditMode ? (
                 <p className={`mb-3 text-xs ${muted}`}>
-                  Dates are set when generating an invoice (after Save). Delivery
-                  site saves immediately when changed.
+                  Dates are set when generating an invoice (after Save).
+                  Delivery site saves immediately when changed.
                 </p>
               ) : null}
               <div className="grid gap-4 sm:grid-cols-3">
-                <div className="sm:col-span-3">
-                  {renderDateField(
-                    "Invoice creation date",
-                    invoiceDate,
-                    setInvoiceDate,
-                    { alwaysEditable: true },
-                  )}
-                </div>
-                {renderDateField("Order received", orderReceivedDate, setOrderReceivedDate)}
-                {renderDateField("Delivery date", deliveryDate, setDeliveryDate)}
+                {renderDateField(
+                  "Invoice creation date",
+                  invoiceDate,
+                  setInvoiceDate,
+                  { alwaysEditable: true },
+                )}
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                {renderDateField(
+                  "Order received",
+                  orderReceivedDate,
+                  setOrderReceivedDate,
+                )}
+                {renderDateField(
+                  "Delivery date",
+                  deliveryDate,
+                  setDeliveryDate,
+                )}
               </div>
             </div>
 
@@ -1121,7 +1130,9 @@ export function InvoiceGenerationTab() {
                                   .map((c) => (
                                     <option key={c.id} value={c.id}>
                                       {c.name}
-                                      {c.is_menu_item ? " (Menu)" : " (Prepped)"}
+                                      {c.is_menu_item
+                                        ? " (Menu)"
+                                        : " (Prepped)"}
                                     </option>
                                   ))}
                               </select>

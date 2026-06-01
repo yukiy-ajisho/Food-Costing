@@ -107,25 +107,16 @@ function isInvoicingPath(pathname: string): boolean {
 
 type InvoicingNavSection = "account" | "invoice";
 
-function invoicingSectionFromSearchParams(
-  searchParams: URLSearchParams,
-): InvoicingNavSection {
-  const section = searchParams.get("section");
-  if (section === "account") return "account";
-  const legacyTab = searchParams.get("tab");
-  if (legacyTab === "delivery") return "account";
-  return "invoice";
-}
-
 function isInvoicingSectionNavActive(
   pathname: string,
-  searchParams: URLSearchParams,
   section: InvoicingNavSection,
 ): boolean {
-  return (
-    pathname.startsWith("/invoicing") &&
-    invoicingSectionFromSearchParams(searchParams) === section
-  );
+  if (section === "invoice") {
+    return (
+      pathname.startsWith("/invoicing/invoice") || pathname === "/invoicing"
+    );
+  }
+  return pathname.startsWith("/invoicing/account");
 }
 
 // Food costing サブメニュー
@@ -180,13 +171,13 @@ const invoicingSectionSubItems = [
   {
     id: "inv-invoice",
     label: "Invoice",
-    href: "/invoicing?section=invoice&tab=box",
+    href: "/invoicing/invoice",
     section: "invoice" as const,
   },
   {
     id: "inv-account",
     label: "Account",
-    href: "/invoicing?section=account&tab=accounts",
+    href: "/invoicing/account",
     section: "account" as const,
   },
 ] as const;
@@ -669,15 +660,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/company-requirements"))
       return "Company Requirements";
     if (pathname.startsWith("/document-box")) return "Upload Box";
-    if (pathname.startsWith("/invoicing")) {
-      const section = invoicingSectionFromSearchParams(searchParams);
-      if (section === "account") {
-        const tab = searchParams.get("tab");
-        if (tab === "delivery-site" || tab === "delivery") return "Delivery Site";
-        return "Account Information";
-      }
+    if (pathname.startsWith("/invoicing/account")) {
       const tab = searchParams.get("tab");
-      if (tab === "generation") return "Invoice Generation";
+      if (tab === "delivery-site" || tab === "delivery") return "Delivery Site";
+      return "Account Information";
+    }
+    if (pathname.startsWith("/invoicing/invoice") || pathname === "/invoicing") {
       return "Invoice Box";
     }
     if (pathname.startsWith("/dashboard")) return "Dashboard";
@@ -1226,11 +1214,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         const href = canAccessInvoicing ? sub.href : "#";
                         const isActive =
                           canAccessInvoicing &&
-                          isInvoicingSectionNavActive(
-                            pathname,
-                            searchParams,
-                            sub.section,
-                          );
+                          isInvoicingSectionNavActive(pathname, sub.section);
                         return (
                           <Link
                             key={sub.id}
