@@ -1,17 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
-import type { DeliverySite, InvoicingItemCandidate } from "@/lib/invoicing";
+import type {
+  DeliverySite,
+  InvoicingAccount,
+  InvoicingItemCandidate,
+} from "@/lib/invoicing";
 import { ItemKindBadge } from "@/components/recipe-cost-report/ItemKindBadge";
 
 type Props = {
   isDark: boolean;
   candidates: InvoicingItemCandidate[];
+  accounts: InvoicingAccount[];
   deliverySites: DeliverySite[];
+  selectedAccountId: string;
   onClose: () => void;
   onCreate: (payload: {
     name: string;
+    account_id: string;
     delivery_site_id: string;
     item_ids: string[];
   }) => void;
@@ -20,16 +27,36 @@ type Props = {
 export function CreateInvoicingListModal({
   isDark,
   candidates,
+  accounts,
   deliverySites,
+  selectedAccountId,
   onClose,
   onCreate,
 }: Props) {
   const [name, setName] = useState("");
+  const [accountId, setAccountId] = useState(selectedAccountId || "");
   const [deliverySiteId, setDeliverySiteId] = useState("");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showMenu, setShowMenu] = useState(true);
   const [showPrepped, setShowPrepped] = useState(true);
+
+  useEffect(() => {
+    setAccountId(selectedAccountId || "");
+  }, [selectedAccountId]);
+
+  const accountLocked = selectedAccountId.trim().length > 0;
+
+  const deliverySitesForAccount = useMemo(() => {
+    if (!accountId) return deliverySites;
+    return deliverySites.filter((site) => site.account_id === accountId);
+  }, [deliverySites, accountId]);
+
+  useEffect(() => {
+    setDeliverySiteId((prev) =>
+      prev && deliverySitesForAccount.some((site) => site.id === prev) ? prev : "",
+    );
+  }, [deliverySitesForAccount]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -43,9 +70,10 @@ export function CreateInvoicingListModal({
 
   const canCreate =
     name.trim().length > 0 &&
+    accountId.length > 0 &&
     deliverySiteId.length > 0 &&
     selected.size > 0 &&
-    deliverySites.length > 0;
+    deliverySitesForAccount.length > 0;
 
   const panel = isDark ? "bg-slate-800 text-slate-100" : "bg-white text-gray-900";
   const border = isDark ? "border-slate-600" : "border-gray-200";
@@ -83,6 +111,23 @@ export function CreateInvoicingListModal({
           </div>
 
           <div>
+            <label className="mb-1 block text-sm font-medium">Account</label>
+            <select
+              className={inputCls}
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+              disabled={accountLocked || accounts.length === 0}
+            >
+              <option value="">Select account</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.company_name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
             <label className="mb-1 block text-sm font-medium">
               Delivery site
             </label>
@@ -90,10 +135,10 @@ export function CreateInvoicingListModal({
               className={inputCls}
               value={deliverySiteId}
               onChange={(e) => setDeliverySiteId(e.target.value)}
-              disabled={deliverySites.length === 0}
+              disabled={deliverySitesForAccount.length === 0}
             >
               <option value="">Select delivery site</option>
-              {deliverySites.map((s) => (
+              {deliverySitesForAccount.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
@@ -186,6 +231,7 @@ export function CreateInvoicingListModal({
             onClick={() =>
               onCreate({
                 name: name.trim(),
+                account_id: accountId,
                 delivery_site_id: deliverySiteId,
                 item_ids: [...selected],
               })

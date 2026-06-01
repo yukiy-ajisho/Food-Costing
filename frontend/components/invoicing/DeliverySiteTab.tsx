@@ -103,7 +103,7 @@ export function DeliverySiteTab() {
 
   const openCreate = () => {
     setEditingId(null);
-    setForm({ ...EMPTY_FORM });
+    setForm({ ...EMPTY_FORM, account_id: accountFilterId || "" });
     setModalError(null);
     setModalOpen(true);
   };

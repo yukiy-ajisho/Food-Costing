@@ -178,16 +178,16 @@ const teamSubItems = [
 /** Invoicing 直下は Account / Invoice の2サブメニューのみ。各画面はページ内タブ。 */
 const invoicingSectionSubItems = [
   {
-    id: "inv-account",
-    label: "Account",
-    href: "/invoicing?section=account&tab=accounts",
-    section: "account" as const,
-  },
-  {
     id: "inv-invoice",
     label: "Invoice",
     href: "/invoicing?section=invoice&tab=box",
     section: "invoice" as const,
+  },
+  {
+    id: "inv-account",
+    label: "Account",
+    href: "/invoicing?section=account&tab=accounts",
+    section: "account" as const,
   },
 ] as const;
 
