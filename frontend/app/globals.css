@@ -72,3 +72,14 @@ body {
   cursor: pointer;
   opacity: 1;
 }
+
+.dark .invoicing-box-mini-field[type="date"] {
+  color-scheme: dark;
+}
+
+.dark .invoicing-box-mini-field[type="date"]::-webkit-calendar-picker-indicator {
+  filter: brightness(0) invert(1);
+  cursor: pointer;
+  opacity: 0.85;
+  transform: scale(0.75);
+}

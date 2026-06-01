@@ -931,7 +931,7 @@ router.get("/invoices", async (req, res) => {
       supabase
         .from("invoice_box_invoices")
         .select(
-          "id, invoice_number, invoice_date, total_amount, delivery_site_name, sent_at, created_at",
+          "id, invoice_number, invoice_date, company_name, total_amount, delivery_site_name, sent_at, created_at",
         )
         .order("created_at", { ascending: false }),
       req,
@@ -1065,12 +1065,20 @@ router.post("/invoices", async (req, res) => {
 
     const { data: site, error: siteErr } = await supabase
       .from("delivery_sites")
-      .select("id, name, email")
+      .select("id, name, email, invoicing_accounts ( company_name )")
       .eq("tenant_id", tenantId)
       .eq("id", deliverySiteId)
       .maybeSingle();
     if (siteErr) return res.status(500).json({ error: siteErr.message });
     if (!site) return res.status(400).json({ error: "Delivery site not found" });
+
+    const joinedAccount = site.invoicing_accounts as
+      | { company_name: string }
+      | { company_name: string }[]
+      | null;
+    const companyName = Array.isArray(joinedAccount)
+      ? (joinedAccount[0]?.company_name ?? "")
+      : (joinedAccount?.company_name ?? "");
 
     const listLines = normalizeInvoiceListLines(list.lines);
     if ("error" in listLines) {
@@ -1136,6 +1144,7 @@ router.post("/invoices", async (req, res) => {
         p_invoice_number: invoiceNumber,
         p_delivery_site_name: site.name,
         p_delivery_email: site.email,
+        p_company_name: companyName,
         p_order_received_date: orderReceivedParsed,
         p_delivery_date: deliveryDateParsed,
         p_invoice_date: invoiceDate,
@@ -1265,6 +1274,34 @@ router.post("/invoices/:id/send", async (req, res) => {
     }
 
     res.json({ invoice: { ...updated, lines: normalized } });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /invoicing/invoices/:id
+ */
+router.delete("/invoices/:id", async (req, res) => {
+  try {
+    const invoiceId = req.params.id?.trim();
+    if (!invoiceId) return res.status(400).json({ error: "id is required" });
+
+    const { data: existing, error: fetchErr } = await withTenantFilter(
+      supabase.from("invoice_box_invoices").select("id").eq("id", invoiceId),
+      req,
+    ).maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!existing) return res.status(404).json({ error: "Invoice not found" });
+
+    const { error } = await withTenantFilter(
+      supabase.from("invoice_box_invoices").delete().eq("id", invoiceId),
+      req,
+    );
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.status(204).send();
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });

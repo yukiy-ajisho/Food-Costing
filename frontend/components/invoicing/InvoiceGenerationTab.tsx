@@ -23,9 +23,7 @@ import {
   type InvoicingCostBreakdown,
 } from "@/lib/invoicingCalc";
 import { CreateInvoicingListModal } from "./CreateInvoicingListModal";
-import {
-  InvoiceGeneratePreviewModal,
-} from "./InvoiceGeneratePreviewModal";
+import { InvoiceGeneratePreviewModal } from "./InvoiceGeneratePreviewModal";
 import type { GeneratePreviewPayload } from "@/lib/invoicingPreview";
 
 type RowInput = {
@@ -44,6 +42,9 @@ function newLocalId(): string {
 }
 
 const DEFAULT_UNIT_SIZE_UNIT = "g";
+function todayYmd(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 function emptyRowInput(row?: InvoiceListItemRow): RowInput {
   return {
@@ -88,7 +89,13 @@ function formatUnitSizeDisplay(input: RowInput): string {
   return `${input.unitSize} ${input.unitSizeUnit}`;
 }
 
-export function InvoiceGenerationTab() {
+type InvoiceGenerationTabProps = {
+  onInvoiceSaved?: () => void;
+};
+
+export function InvoiceGenerationTab({
+  onInvoiceSaved,
+}: InvoiceGenerationTabProps = {}) {
   const { theme } = useTheme();
   const isDark = theme === "dark";
 
@@ -157,7 +164,7 @@ export function InvoiceGenerationTab() {
       : "border-gray-300 bg-white text-gray-900"
   }`;
   const thCls = `h-14 align-middle px-4 py-3 text-xs font-medium uppercase tracking-wider ${
-    isDark ? "text-slate-300 bg-slate-700/80" : "text-gray-500 bg-gray-50"
+    isDark ? "text-slate-300 bg-slate-700" : "text-gray-500 bg-gray-50"
   }`;
   const tbodyRowDividerCls = `[&>tr:not(:last-child)>td]:border-b ${
     isDark
@@ -189,29 +196,28 @@ export function InvoiceGenerationTab() {
       ? "border-slate-600 bg-slate-900 text-slate-100"
       : "border-gray-300 bg-white text-gray-900"
   }`;
-  const dateReadOnlyCls = `flex h-10 w-full items-center rounded-lg border px-3 text-sm tabular-nums ${
-    isDark
-      ? "cursor-not-allowed border-slate-700 bg-slate-800/80 text-slate-500"
-      : "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-500"
-  }`;
-
   const renderDateField = (
     label: string,
     value: string,
     onChange: (next: string) => void,
+    options?: { alwaysEditable?: boolean },
   ) => (
     <label className={`block text-sm ${textMain}`}>
       <span className={`mb-1 block text-xs font-medium ${muted}`}>{label}</span>
-      {isEditMode ? (
-        <div className={dateReadOnlyCls} aria-readonly title="Enter dates after saving list edits">
-          {value.trim() || "—"}
-        </div>
+      {!isEditMode || options?.alwaysEditable ? (
+        <input
+          type="date"
+          className={dateInputCls}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
       ) : (
         <input
           type="date"
           className={dateInputCls}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          disabled
         />
       )}
     </label>
@@ -235,17 +241,19 @@ export function InvoiceGenerationTab() {
   }, []);
 
   const loadDetail = useCallback(
-    async (listId: string, options?: { preserveGenerationInputs?: boolean }) => {
-      const preserveGenerationInputs = options?.preserveGenerationInputs ?? false;
+    async (
+      listId: string,
+      options?: { preserveGenerationInputs?: boolean },
+    ) => {
+      const preserveGenerationInputs =
+        options?.preserveGenerationInputs ?? false;
       setLoading(true);
       setError(null);
       if (!preserveGenerationInputs) {
         setIsEditMode(false);
         setPendingRemovals(new Set());
         setPendingAdds([]);
-        setOrderReceivedDate("");
-        setDeliveryDate("");
-        setInvoiceDate("");
+        setInvoiceDate((prev) => prev || todayYmd());
       }
       try {
         const data = await invoicingAPI.getInvoiceList(listId);
@@ -342,6 +350,10 @@ export function InvoiceGenerationTab() {
   }, [filteredLists]);
 
   useEffect(() => {
+    setInvoiceDate(todayYmd());
+  }, []);
+
+  useEffect(() => {
     if (!selectedListId) return;
     void loadDetail(selectedListId);
   }, [selectedListId, loadDetail]);
@@ -359,32 +371,34 @@ export function InvoiceGenerationTab() {
 
   const canGenerate = useMemo(() => {
     if (loading || costsLoading) return false;
+    if (!orderReceivedDate.trim()) return false;
+    if (!deliveryDate.trim()) return false;
     if (!invoiceDate.trim()) return false;
     if (visibleItems.length === 0) return false;
     for (const row of visibleItems) {
       const input = rowInputs.get(row.item_id) ?? emptyRowInput(row);
       const unitSize = parseFloat(input.unitSize);
-      const units = parseFloat(input.units);
+      const unitsRaw = input.units.trim();
+      const units = unitsRaw === "" ? null : parseFloat(unitsRaw);
       const unitSizeUnit = input.unitSizeUnit.trim();
       if (!Number.isFinite(unitSize) || unitSize <= 0) return false;
       if (!unitSizeUnit) return false;
-      if (!Number.isFinite(units) || units <= 0) return false;
+      if (units != null && (!Number.isFinite(units) || units < 0)) return false;
       if (costPerKgFromBreakdown(costs[row.item_id]) == null) return false;
     }
     return true;
   }, [
     loading,
     costsLoading,
+    orderReceivedDate,
+    deliveryDate,
     invoiceDate,
     visibleItems,
     rowInputs,
     costs,
   ]);
 
-  const updateRowInput = (
-    itemId: string,
-    patch: Partial<RowInput>,
-  ) => {
+  const updateRowInput = (itemId: string, patch: Partial<RowInput>) => {
     setRowInputs((prev) => {
       const next = new Map(prev);
       const current = next.get(itemId) ?? emptyRowInput();
@@ -395,6 +409,7 @@ export function InvoiceGenerationTab() {
 
   const handleCreateList = async (payload: {
     name: string;
+    account_id: string;
     delivery_site_id: string;
     item_ids: string[];
   }) => {
@@ -404,6 +419,7 @@ export function InvoiceGenerationTab() {
       setShowCreate(false);
       await loadLists();
       setSelectedListId(data.list.id);
+      setInvoiceDate((prev) => prev || todayYmd());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create list");
     }
@@ -428,7 +444,8 @@ export function InvoiceGenerationTab() {
     setIsEditMode(false);
     setPendingRemovals(new Set());
     setPendingAdds([]);
-    if (selectedListId) void loadDetail(selectedListId);
+    if (selectedListId)
+      void loadDetail(selectedListId, { preserveGenerationInputs: true });
   };
 
   const handleSaveEdit = async () => {
@@ -526,17 +543,22 @@ export function InvoiceGenerationTab() {
   };
 
   const handleAddPendingRow = () => {
-    setPendingAdds((prev) => [
-      { localId: newLocalId(), item_id: "" },
-      ...prev,
-    ]);
+    setPendingAdds((prev) => [{ localId: newLocalId(), item_id: "" }, ...prev]);
   };
 
   const handleGenerate = async () => {
     setError(null);
     if (!selectedListId) return;
+    if (!orderReceivedDate.trim()) {
+      setError("Order received is required before Generate.");
+      return;
+    }
+    if (!deliveryDate.trim()) {
+      setError("Delivery date is required before Generate.");
+      return;
+    }
     if (!invoiceDate.trim()) {
-      setError("Invoice *Date is required before Generate.");
+      setError("Invoice creation date is required before Generate.");
       return;
     }
 
@@ -544,7 +566,8 @@ export function InvoiceGenerationTab() {
     for (const row of visibleItems) {
       const input = rowInputs.get(row.item_id) ?? emptyRowInput(row);
       const unitSize = parseFloat(input.unitSize);
-      const units = parseFloat(input.units);
+      const unitsRaw = input.units.trim();
+      const units = unitsRaw === "" ? 0 : parseFloat(unitsRaw);
       const unitSizeUnit = input.unitSizeUnit.trim();
 
       if (!Number.isFinite(unitSize) || unitSize <= 0) {
@@ -555,8 +578,8 @@ export function InvoiceGenerationTab() {
         setError(`Unit Size unit is required for "${row.name}".`);
         return;
       }
-      if (!Number.isFinite(units) || units <= 0) {
-        setError(`Units is required for "${row.name}".`);
+      if (!Number.isFinite(units) || units < 0) {
+        setError(`Units must be 0 or greater for "${row.name}".`);
         return;
       }
 
@@ -638,6 +661,7 @@ export function InvoiceGenerationTab() {
     } else {
       setError(null);
     }
+    onInvoiceSaved?.();
   };
 
   const renderRow = (
@@ -650,13 +674,15 @@ export function InvoiceGenerationTab() {
     const effectiveEachGrams = eachGramsForInvoicing(row);
     const costPerKg = costPerKgFromBreakdown(costs[row.item_id]);
     const unitSizeNum = parseFloat(input.unitSize);
-    const unitsNum = parseFloat(input.units);
+    const unitsRaw = input.units.trim();
+    const unitsNum = unitsRaw === "" ? null : parseFloat(unitsRaw);
     const subTotal =
       Number.isFinite(unitSizeNum) &&
       unitSizeNum > 0 &&
       input.unitSizeUnit &&
+      unitsNum != null &&
       Number.isFinite(unitsNum) &&
-      unitsNum > 0 &&
+      unitsNum >= 0 &&
       costPerKg != null
         ? computeInvoicingSubTotal(
             unitSizeNum,
@@ -744,11 +770,7 @@ export function InvoiceGenerationTab() {
         <td className={`px-4 py-2 tabular-nums ${muted}`}>
           {costsLoading
             ? "…"
-            : formatInvoicingCostDisplay(
-                costs[row.item_id],
-                row,
-                eachMode,
-              )}
+            : formatInvoicingCostDisplay(costs[row.item_id], row, eachMode)}
         </td>
         <td className={`px-4 py-2 tabular-nums font-medium ${textMain}`}>
           {subTotal != null ? formatCurrency(subTotal) : "—"}
@@ -801,7 +823,9 @@ export function InvoiceGenerationTab() {
 
         <aside className={`${cardShell} min-h-0 flex-1`}>
           <div className="shrink-0 px-4 pb-3 pt-4">
-            <p className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
+            <p
+              className={`text-xs font-medium uppercase tracking-wide ${muted}`}
+            >
               Delivery list template
             </p>
             <button
@@ -894,7 +918,9 @@ export function InvoiceGenerationTab() {
                       saving ||
                       deliverySiteOptions.length === 0
                     }
-                    onChange={(e) => void handleDeliverySiteChange(e.target.value)}
+                    onChange={(e) =>
+                      void handleDeliverySiteChange(e.target.value)
+                    }
                     className={deliverySiteSelectCls}
                   >
                     <option value="">Select delivery site</option>
@@ -962,14 +988,29 @@ export function InvoiceGenerationTab() {
             >
               {isEditMode ? (
                 <p className={`mb-3 text-xs ${muted}`}>
-                  Dates are set when generating an invoice (after Save). Delivery
-                  site saves immediately when changed.
+                  Dates are set when generating an invoice (after Save).
+                  Delivery site saves immediately when changed.
                 </p>
               ) : null}
               <div className="grid gap-4 sm:grid-cols-3">
-                {renderDateField("Order Received", orderReceivedDate, setOrderReceivedDate)}
-                {renderDateField("Delivery Date", deliveryDate, setDeliveryDate)}
-                {renderDateField("Invoice *Date", invoiceDate, setInvoiceDate)}
+                {renderDateField(
+                  "Invoice creation date",
+                  invoiceDate,
+                  setInvoiceDate,
+                  { alwaysEditable: true },
+                )}
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                {renderDateField(
+                  "Order received",
+                  orderReceivedDate,
+                  setOrderReceivedDate,
+                )}
+                {renderDateField(
+                  "Delivery date",
+                  deliveryDate,
+                  setDeliveryDate,
+                )}
               </div>
             </div>
 
@@ -1089,7 +1130,9 @@ export function InvoiceGenerationTab() {
                                   .map((c) => (
                                     <option key={c.id} value={c.id}>
                                       {c.name}
-                                      {c.is_menu_item ? " (Menu)" : " (Prepped)"}
+                                      {c.is_menu_item
+                                        ? " (Menu)"
+                                        : " (Prepped)"}
                                     </option>
                                   ))}
                               </select>
@@ -1130,7 +1173,9 @@ export function InvoiceGenerationTab() {
         <CreateInvoicingListModal
           isDark={isDark}
           candidates={candidates}
-          deliverySites={sitesForSelectedAccount}
+          accounts={accounts}
+          deliverySites={deliverySites}
+          selectedAccountId={selectedAccountId}
           onClose={() => setShowCreate(false)}
           onCreate={(payload) => void handleCreateList(payload)}
         />

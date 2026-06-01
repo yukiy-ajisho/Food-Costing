@@ -93,6 +93,7 @@ export type BoxInvoiceSummary = {
   id: string;
   invoice_number: string;
   invoice_date: string | null;
+  company_name: string;
   total_amount: number;
   delivery_site_name: string;
   sent_at: string | null;
@@ -118,6 +119,7 @@ export type BoxInvoice = {
   delivery_site_id: string | null;
   delivery_site_name: string;
   delivery_email: string;
+  company_name: string;
   order_received_date: string | null;
   delivery_date: string | null;
   invoice_date: string | null;
@@ -281,4 +283,9 @@ export const invoicingAPI = {
         body: JSON.stringify({ pdf_base64: pdfBase64 }),
       },
     ),
+
+  deleteBoxInvoice: (invoiceId: string) =>
+    apiRequest<void>(`/invoicing/invoices/${encodeURIComponent(invoiceId)}`, {
+      method: "DELETE",
+    }),
 };
