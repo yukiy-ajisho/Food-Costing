@@ -10,6 +10,7 @@ import {
 } from "react";
 import { CornerUpLeft, Loader2, Plus, Trash2 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
+import { HeaderHoverHint } from "@/components/recipe-cost-report/HeaderHoverHint";
 import { useTenant } from "@/contexts/TenantContext";
 import {
   StandardTechnicalSheetLaborTable,
@@ -104,11 +105,19 @@ import {
 } from "@/lib/technicalSheetLaborUpdateDisplay";
 import {
   formatDualPtDollars,
-  formatDualPuPerKg,
+  formatDualPuForDisplay,
   formatDualTotalCostLines,
   formatPtDollars,
-  formatPuPerKg,
+  formatPuForDisplay,
+  type PuMassDisplayUnit,
 } from "@/lib/technicalSheetFormat";
+import {
+  TS_HINT_APPLY,
+  TS_HINT_CREATION_DATE,
+  TS_HINT_CURRENT_PRICE,
+  TS_HINT_PRICE_TOTAL,
+  TS_HINT_PRICE_UNIT,
+} from "@/lib/technicalSheetUiHints";
 
 type StandardTechnicalSheetViewProps = {
   isDark: boolean;
@@ -244,7 +253,9 @@ function displayLineToDraftRow(
 }
 
 function technicalSheetTableHeaderClass(isDark: boolean): string {
-  return isDark ? "bg-slate-950 text-slate-200" : "bg-gray-300 text-gray-900";
+  return isDark
+    ? "bg-slate-600 text-slate-200"
+    : "bg-gray-100 text-gray-700";
 }
 
 function technicalSheetTableBodyRowClass(isDark: boolean): string {
@@ -867,6 +878,8 @@ function TechnicalSheetBody({
   snapshotLaborTotalCost,
   crossTenantItemIds,
   onOpenPreppedSheet,
+  puDisplayUnit,
+  onPuDisplayUnitChange,
 }: {
   sheet: SheetData;
   isDark: boolean;
@@ -943,6 +956,8 @@ function TechnicalSheetBody({
   snapshotLaborTotalCost?: number | null;
   crossTenantItemIds?: ReadonlySet<string>;
   onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
+  puDisplayUnit: PuMassDisplayUnit;
+  onPuDisplayUnitChange: (unit: PuMassDisplayUnit) => void;
 }) {
   const crossTenantIds = crossTenantItemIds ?? new Set<string>();
   const rows = editRows ?? sheet.ingredient_rows;
@@ -1065,6 +1080,8 @@ function TechnicalSheetBody({
                 priceLoading={priceLoading}
                 crossTenantItemIds={crossTenantIds}
                 onOpenPreppedSheet={onOpenPreppedSheet}
+                puDisplayUnit={puDisplayUnit}
+                onPuDisplayUnitChange={onPuDisplayUnitChange}
               />
               <div className="mt-3 flex justify-end text-right text-sm font-semibold">
                 {priceLoading ? (
@@ -1588,6 +1605,98 @@ function ApplyModeRadios({
   );
 }
 
+/** kg/lb display — same toggle as Recipe Cost Report Cost column (g / kg). */
+function PuMassUnitToggle({
+  isDark,
+  puDisplayUnit,
+  onPuDisplayUnitChange,
+}: {
+  isDark: boolean;
+  puDisplayUnit: PuMassDisplayUnit;
+  onPuDisplayUnitChange: (unit: PuMassDisplayUnit) => void;
+}) {
+  const muted = isDark ? "text-slate-400" : "text-gray-500";
+  const textMain = isDark ? "text-slate-100" : "text-gray-900";
+  return (
+    <div className="flex shrink-0 items-center gap-1 normal-case font-normal">
+      <span
+        className={`text-xs ${
+          puDisplayUnit === "kg" ? `font-semibold ${textMain}` : muted
+        }`}
+      >
+        kg
+      </span>
+      <label className="relative inline-flex shrink-0 cursor-pointer items-center">
+        <input
+          type="checkbox"
+          checked={puDisplayUnit === "lb"}
+          onChange={(e) =>
+            onPuDisplayUnitChange(e.target.checked ? "lb" : "kg")
+          }
+          className="peer sr-only"
+        />
+        <div
+          className={`h-4 w-8 rounded-full after:absolute after:left-[1px] after:top-[1px] after:h-3 after:w-3 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all peer-checked:after:translate-x-4 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-gray-300 after:content-[''] ${
+            isDark ? "bg-slate-600" : "bg-gray-300"
+          }`}
+        />
+      </label>
+      <span
+        className={`text-xs ${
+          puDisplayUnit === "lb" ? `font-semibold ${textMain}` : muted
+        }`}
+      >
+        lb
+      </span>
+    </div>
+  );
+}
+
+function IngredientPuColumnHeader({
+  isDark,
+  updateEditMode,
+  puDisplayUnit,
+  onPuDisplayUnitChange,
+}: {
+  isDark: boolean;
+  updateEditMode?: boolean;
+  puDisplayUnit: PuMassDisplayUnit;
+  onPuDisplayUnitChange: (unit: PuMassDisplayUnit) => void;
+}) {
+  return (
+    <th
+      className={`border px-2 py-1 text-right ${updateEditMode ? "min-w-[8.5rem]" : ""}`}
+    >
+      <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+        <HeaderHoverHint hint={TS_HINT_PRICE_UNIT} isDark={isDark} multiline>
+          <span>{updateEditMode ? "PU" : "Price Unit"}</span>
+        </HeaderHoverHint>
+        <PuMassUnitToggle
+          isDark={isDark}
+          puDisplayUnit={puDisplayUnit}
+          onPuDisplayUnitChange={onPuDisplayUnitChange}
+        />
+      </div>
+    </th>
+  );
+}
+
+function IngredientPtColumnHeader({
+  isDark,
+  updateEditMode,
+}: {
+  isDark: boolean;
+  updateEditMode?: boolean;
+}) {
+  return (
+    <th className="border px-2 py-1 text-right">
+      <HeaderHoverHint hint={TS_HINT_PRICE_TOTAL} isDark={isDark} multiline>
+        <span>{updateEditMode ? "PT" : "Price Total"}</span>
+      </HeaderHoverHint>
+    </th>
+  );
+}
+
 function IngredientTable({
   rows,
   isDark,
@@ -1622,6 +1731,8 @@ function IngredientTable({
   priceLoading,
   crossTenantItemIds = new Set<string>(),
   onOpenPreppedSheet,
+  puDisplayUnit,
+  onPuDisplayUnitChange,
 }: {
   rows: (RecipeSummaryTechnicalSheetIngredientRow & { row_key?: string })[];
   isDark: boolean;
@@ -1666,6 +1777,8 @@ function IngredientTable({
   priceLoading?: boolean;
   crossTenantItemIds?: ReadonlySet<string>;
   onOpenPreppedSheet?: (sourceItemId: string, baseRecipeName: string) => void;
+  puDisplayUnit: PuMassDisplayUnit;
+  onPuDisplayUnitChange: (unit: PuMassDisplayUnit) => void;
 }) {
   const showBothPrices = priceMode === "both" && snapshotPriceByRowKey != null;
   const showUpdateTotal = updateMode && updateMetaByRowKey && updateRowChoices;
@@ -1675,6 +1788,8 @@ function IngredientTable({
   const updateCompareMinW = showFinalColumn ? "min-w-[260px]" : "min-w-[180px]";
   const showActionColumn =
     (!!editable && !!onRemoveRow) || (!!showUpdateTotal && !!onRestoreRemoved);
+  const tableNeedsWideLayout =
+    showUpdateTotal || showApplyModeColumn || showActionColumn;
   const itemById = useMemo(() => {
     const m = new Map(pickerItems.map((i) => [i.id, i]));
     for (const entry of crossTenantAvailableItems) {
@@ -1691,8 +1806,10 @@ function IngredientTable({
 
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse text-xs">
+      <div className={tableNeedsWideLayout ? "overflow-x-auto" : "min-w-0"}>
+        <table
+          className={`w-full border-collapse text-xs ${tableNeedsWideLayout ? "min-w-[720px]" : ""}`}
+        >
           <thead>
             <tr className={technicalSheetTableHeaderClass(isDark)}>
               <th className="border px-2 py-1 text-left">Nature</th>
@@ -1726,11 +1843,27 @@ function IngredientTable({
               ) : (
                 <th className="border px-2 py-1 text-right">Net Weight</th>
               )}
-              <th className="border px-2 py-1 text-right">PU (kg)</th>
-              <th className="border px-2 py-1 text-right">PT</th>
+              <IngredientPuColumnHeader
+                isDark={isDark}
+                updateEditMode={updateEditMode}
+                puDisplayUnit={puDisplayUnit}
+                onPuDisplayUnitChange={onPuDisplayUnitChange}
+              />
+              <IngredientPtColumnHeader
+                isDark={isDark}
+                updateEditMode={updateEditMode}
+              />
               {showApplyModeColumn ? (
                 <th className="border px-2 py-1 text-center min-w-[88px]">
-                  Apply
+                  <HeaderHoverHint
+                    hint={TS_HINT_APPLY}
+                    isDark={isDark}
+                    multiline
+                    tooltipAlign="end"
+                    portaled
+                  >
+                    <span>Apply</span>
+                  </HeaderHoverHint>
                 </th>
               ) : null}
             </tr>
@@ -2089,12 +2222,13 @@ function IngredientTable({
                     ("puLoading" in row && (row as DraftRow).puLoading) ? (
                       <Loader2 className="inline h-3 w-3 animate-spin" />
                     ) : showBothPrices ? (
-                      formatDualPuPerKg(
+                      formatDualPuForDisplay(
                         snapshotPriceByRowKey.get(rowKey)?.pu,
                         row.pu,
+                        puDisplayUnit,
                       )
                     ) : (
-                      formatPuPerKg(row.pu)
+                      formatPuForDisplay(row.pu, puDisplayUnit)
                     )}
                   </td>
                   <td className={`border px-2 py-1 text-right ${rowBgClass}`}>
@@ -2218,6 +2352,7 @@ export function StandardTechnicalSheetView({
 
   const [priceMode, setPriceMode] =
     useState<StandardTechnicalSheetPriceMode>("latest");
+  const [puDisplayUnit, setPuDisplayUnit] = useState<PuMassDisplayUnit>("kg");
   const prevPriceModeRef = useRef<StandardTechnicalSheetPriceMode | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("sheet");
   const [recipeDiff, setRecipeDiff] = useState<StandardRecipeDiff | null>(null);
@@ -3535,7 +3670,7 @@ export function StandardTechnicalSheetView({
 
   const panel = (
     <div
-      className={`flex h-[100vh] w-[100vw] max-w-none flex-col overflow-hidden rounded-xl border shadow-2xl ${modalClass}`}
+      className={`flex h-full w-full min-w-0 max-w-full flex-col overflow-hidden rounded-xl border shadow-2xl ${modalClass}`}
       role="dialog"
     >
       <ModalHeader
@@ -3543,6 +3678,7 @@ export function StandardTechnicalSheetView({
         title={`Standard Technical Sheet — ${baseRecipeName}`}
         onClose={onClose}
         windowMode={windowMode}
+        hideClose={isEditUpdate}
       />
 
       <div
@@ -3611,7 +3747,7 @@ export function StandardTechnicalSheetView({
 
       {showDiffBanner ? <DiffBanner isDark={isDark} /> : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-4">
+      <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-6 space-y-4">
         {loading || sheetLoading || !sheet || !detail ? (
           <LoadingBox isDark={isDark} />
         ) : (
@@ -3762,6 +3898,8 @@ export function StandardTechnicalSheetView({
               }
               crossTenantItemIds={crossTenantItemIds}
               onOpenPreppedSheet={onOpenPreppedSheet}
+              puDisplayUnit={puDisplayUnit}
+              onPuDisplayUnitChange={setPuDisplayUnit}
             />
           </>
         )}
@@ -3774,8 +3912,8 @@ export function StandardTechnicalSheetView({
   }
 
   return (
-    <div className="fixed inset-0 z-120 flex items-center justify-center bg-black/50 p-1.5">
-      {panel}
+    <div className="fixed inset-0 z-120 flex bg-black/50 p-1.5">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{panel}</div>
     </div>
   );
 }
@@ -3792,9 +3930,13 @@ function PriceModeRadio({
   disabled?: boolean;
 }) {
   const labelClass = isDark ? "text-slate-300" : "text-gray-600";
-  const options: { value: StandardTechnicalSheetPriceMode; label: string }[] = [
-    { value: "latest", label: "Current" },
-    { value: "snapshot", label: "Snapshot" },
+  const options: {
+    value: StandardTechnicalSheetPriceMode;
+    label: string;
+    hint?: string;
+  }[] = [
+    { value: "latest", label: "Current price", hint: TS_HINT_CURRENT_PRICE },
+    { value: "snapshot", label: "Creation date", hint: TS_HINT_CREATION_DATE },
     { value: "both", label: "Current(snapshot)" },
   ];
 
@@ -3804,7 +3946,7 @@ function PriceModeRadio({
       className={`m-0 flex flex-wrap items-center justify-end gap-x-3 gap-y-1 border-0 p-0 ${disabled ? "opacity-50" : ""}`}
     >
       <legend className="sr-only">Price display mode</legend>
-      {options.map(({ value, label }) => (
+      {options.map(({ value, label, hint }) => (
         <label
           key={value}
           className={`flex cursor-pointer items-center gap-1.5 text-xs ${labelClass}`}
@@ -3817,7 +3959,13 @@ function PriceModeRadio({
             onChange={() => setPriceMode(value)}
             className="h-3.5 w-3.5 accent-blue-600"
           />
-          {label}
+          {hint ? (
+            <HeaderHoverHint hint={hint} isDark={isDark} multiline>
+              <span>{label}</span>
+            </HeaderHoverHint>
+          ) : (
+            label
+          )}
         </label>
       ))}
     </fieldset>
@@ -3829,24 +3977,28 @@ function ModalHeader({
   title,
   onClose,
   windowMode,
+  hideClose,
 }: {
   isDark: boolean;
   title: string;
   onClose: () => void;
   windowMode?: boolean;
+  hideClose?: boolean;
 }) {
   return (
     <div
       className={`flex items-center justify-between border-b px-6 py-4 ${isDark ? "border-slate-700" : "border-gray-200"} ${windowMode ? "ts-window-drag-handle cursor-move" : ""}`}
     >
       <h3 className="min-w-0 flex-1 truncate text-lg font-semibold">{title}</h3>
-      <button
-        type="button"
-        onClick={onClose}
-        className={`ts-window-no-drag shrink-0 rounded px-2 py-1 text-sm ${isDark ? "hover:bg-slate-800" : "hover:bg-gray-100"}`}
-      >
-        Close
-      </button>
+      {hideClose ? null : (
+        <button
+          type="button"
+          onClick={onClose}
+          className={`ts-window-no-drag shrink-0 rounded px-2 py-1 text-sm ${isDark ? "hover:bg-slate-800" : "hover:bg-gray-100"}`}
+        >
+          Close
+        </button>
+      )}
     </div>
   );
 }

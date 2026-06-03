@@ -174,7 +174,7 @@ function DraggableSheetWindow({
       >
         <div
           ref={nodeRef}
-          className="pointer-events-auto"
+          className="pointer-events-auto flex h-[calc(100vh-0.75rem)] w-[calc(100vw-0.75rem)] min-w-0 max-w-full flex-col"
           onMouseDown={() => onFocusWindow(entry.sourceItemId)}
         >
           <StandardTechnicalSheetView

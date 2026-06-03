@@ -6,11 +6,8 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { invoicingAPI, type BoxInvoiceSummary } from "@/lib/invoicing";
 import { formatCurrency } from "@/lib/invoicingCalc";
 import {
-  addDaysYmd,
   EMPTY_INVOICE_BOX_FILTERS,
   filterInvoiceBoxRows,
-  maxAmountBefore,
-  minAmountAfter,
   nextInvoiceBoxSortState,
   sortInvoiceBoxRows,
   uniqueSortedValues,
@@ -23,6 +20,7 @@ import {
   type GeneratePreviewPayload,
 } from "@/lib/invoicingPreview";
 import { InvoiceBoxHeaderFilter } from "./InvoiceBoxHeaderFilter";
+import { InvoiceBoxHeaderRangeFilter } from "./InvoiceBoxHeaderRangeFilter";
 import { InvoiceGeneratePreviewModal } from "./InvoiceGeneratePreviewModal";
 import { InvoiceGenerationModal } from "./InvoiceGenerationModal";
 
@@ -58,11 +56,6 @@ export function InvoiceBoxTab() {
   const muted = isDark ? "text-slate-400" : "text-gray-500";
   const thCls = `h-14 align-middle px-3 py-2 text-xs font-medium uppercase tracking-wider ${
     isDark ? "text-slate-300 bg-slate-700" : "text-gray-500 bg-gray-50"
-  }`;
-  const miniFieldCls = `invoicing-box-mini-field h-6 shrink-0 rounded border px-1 text-[10px] leading-none tabular-nums focus:outline-none focus:ring-1 focus:ring-blue-500/40 ${
-    isDark
-      ? "border-slate-600 bg-slate-900 text-slate-100"
-      : "border-gray-300 bg-white text-gray-900"
   }`;
   const tbodyRowDividerCls = `[&>tr:not(:last-child)>td]:border-b ${
     isDark
@@ -148,73 +141,6 @@ export function InvoiceBoxTab() {
     );
   };
 
-  const renderDateRangeInputs = (
-    minKey: "dateMin" | "sentMin",
-    maxKey: "dateMax" | "sentMax",
-    fromLabel: string,
-    toLabel: string,
-  ) => {
-    const min = filters[minKey];
-    const max = filters[maxKey];
-    const maxMin = min ? addDaysYmd(min, 1) : undefined;
-    const minMax = max ? addDaysYmd(max, -1) : undefined;
-    return (
-      <>
-        <input
-          type="date"
-          aria-label={fromLabel}
-          className={`${miniFieldCls} w-[5.5rem]`}
-          value={min}
-          max={minMax}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => patchFilters({ [minKey]: e.target.value })}
-        />
-        <input
-          type="date"
-          aria-label={toLabel}
-          className={`${miniFieldCls} w-[5.5rem]`}
-          value={max}
-          min={maxMin}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => patchFilters({ [maxKey]: e.target.value })}
-        />
-      </>
-    );
-  };
-
-  const renderAmountRangeInputs = () => {
-    const min = filters.amountMin;
-    const max = filters.amountMax;
-    return (
-      <>
-        <input
-          type="number"
-          inputMode="decimal"
-          step="0.01"
-          aria-label="Amount minimum"
-          placeholder="Min"
-          className={`${miniFieldCls} w-14`}
-          value={min}
-          max={max ? maxAmountBefore(max) : undefined}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => patchFilters({ amountMin: e.target.value })}
-        />
-        <input
-          type="number"
-          inputMode="decimal"
-          step="0.01"
-          aria-label="Amount maximum"
-          placeholder="Max"
-          className={`${miniFieldCls} w-14`}
-          value={max}
-          min={min ? minAmountAfter(min) : undefined}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => patchFilters({ amountMax: e.target.value })}
-        />
-      </>
-    );
-  };
-
   const openInvoice = async (summary: BoxInvoiceSummary) => {
     setOpeningId(summary.id);
     setError(null);
@@ -290,15 +216,21 @@ export function InvoiceBoxTab() {
             className={`border-b ${border} ${showScroll ? "sticky top-0 z-10" : ""}`}
           >
             <tr>
-              <th className={`${thCls} text-left min-w-[10.5rem]`}>
+              <th className={`${thCls} text-left`}>
                 <div className="flex items-center gap-1">
                   {renderSortButton("date", "Date")}
-                  {renderDateRangeInputs(
-                    "dateMin",
-                    "dateMax",
-                    "Invoice date from",
-                    "Invoice date to",
-                  )}
+                  <InvoiceBoxHeaderRangeFilter
+                    isDark={isDark}
+                    kind="date"
+                    min={filters.dateMin}
+                    max={filters.dateMax}
+                    onChange={(dateMin, dateMax) =>
+                      patchFilters({ dateMin, dateMax })
+                    }
+                    ariaLabel="Filter by invoice date"
+                    fromLabel="From"
+                    toLabel="To"
+                  />
                 </div>
               </th>
               <th className={`${thCls} text-left min-w-40`}>
@@ -314,10 +246,19 @@ export function InvoiceBoxTab() {
                 </div>
               </th>
               <th className={`${thCls} text-left min-w-32`}>Invoice #</th>
-              <th className={`${thCls} text-left min-w-[8.5rem]`}>
+              <th className={`${thCls} text-left`}>
                 <div className="flex items-center gap-1">
                   {renderSortButton("amount", "Amount")}
-                  {renderAmountRangeInputs()}
+                  <InvoiceBoxHeaderRangeFilter
+                    isDark={isDark}
+                    kind="amount"
+                    min={filters.amountMin}
+                    max={filters.amountMax}
+                    onChange={(amountMin, amountMax) =>
+                      patchFilters({ amountMin, amountMax })
+                    }
+                    ariaLabel="Filter by amount"
+                  />
                 </div>
               </th>
               <th className={`${thCls} text-left min-w-44`}>
@@ -332,15 +273,21 @@ export function InvoiceBoxTab() {
                   />
                 </div>
               </th>
-              <th className={`${thCls} text-left min-w-[10.5rem]`}>
+              <th className={`${thCls} text-left`}>
                 <div className="flex items-center gap-1">
                   {renderSortButton("sent", "Sent")}
-                  {renderDateRangeInputs(
-                    "sentMin",
-                    "sentMax",
-                    "Sent date from",
-                    "Sent date to",
-                  )}
+                  <InvoiceBoxHeaderRangeFilter
+                    isDark={isDark}
+                    kind="date"
+                    min={filters.sentMin}
+                    max={filters.sentMax}
+                    onChange={(sentMin, sentMax) =>
+                      patchFilters({ sentMin, sentMax })
+                    }
+                    ariaLabel="Filter by sent date"
+                    fromLabel="From"
+                    toLabel="To"
+                  />
                 </div>
               </th>
               <th className={`${thCls} w-12 px-2`} aria-label="Actions" />

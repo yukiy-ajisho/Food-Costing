@@ -119,6 +119,7 @@ export function PrintModal({
     const cleanup = () => {
       document.body.classList.remove(PRINT_BODY_CLASS);
       window.removeEventListener("afterprint", cleanup);
+      onClose();
     };
     window.addEventListener("afterprint", cleanup);
     window.print();
