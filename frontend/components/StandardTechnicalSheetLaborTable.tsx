@@ -2,6 +2,8 @@
 
 import { CornerUpLeft, Loader2, Plus, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
+import { HeaderHoverHint } from "@/components/recipe-cost-report/HeaderHoverHint";
+import { TS_HINT_APPLY } from "@/lib/technicalSheetUiHints";
 import type { LaborRole, RecipeSummaryTechnicalSheetLaborRow, StandardSheetApplyMode } from "@/lib/api";
 import {
   effectiveLaborChoice,
@@ -232,7 +234,9 @@ function ApplyModeRadios({
 }
 
 function technicalSheetTableHeaderClass(isDark: boolean): string {
-  return isDark ? "bg-slate-950 text-slate-200" : "bg-gray-300 text-gray-900";
+  return isDark
+    ? "bg-slate-600 text-slate-200"
+    : "bg-gray-100 text-gray-700";
 }
 
 function technicalSheetTableBodyRowClass(isDark: boolean): string {
@@ -441,11 +445,15 @@ export function StandardTechnicalSheetLaborTable({
   const updateCompareMinW = showFinalColumn ? "min-w-[220px]" : "min-w-[160px]";
   const showActionColumn =
     (!!editable && !!onRemoveRow) || (!!showUpdateTriple && !!onRestoreRemoved);
+  const tableNeedsWideLayout =
+    showUpdateTriple || showApplyModeColumn || showActionColumn;
 
   return (
     <div className="space-y-2">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] border-collapse text-xs">
+      <div className={tableNeedsWideLayout ? "overflow-x-auto" : "min-w-0"}>
+        <table
+          className={`w-full border-collapse text-xs ${tableNeedsWideLayout ? "min-w-[640px]" : ""}`}
+        >
           <thead>
             <tr className={technicalSheetTableHeaderClass(isDark)}>
               <th className="border px-2 py-1 text-left min-w-[120px]">Role</th>
@@ -470,7 +478,15 @@ export function StandardTechnicalSheetLaborTable({
               <th className="border px-2 py-1 text-right">Cost</th>
               {showApplyModeColumn ? (
                 <th className="border px-2 py-1 text-center min-w-[88px]">
-                  Apply
+                  <HeaderHoverHint
+                    hint={TS_HINT_APPLY}
+                    isDark={isDark}
+                    multiline
+                    tooltipAlign="end"
+                    portaled
+                  >
+                    <span>Apply</span>
+                  </HeaderHoverHint>
                 </th>
               ) : null}
             </tr>

@@ -1,3 +1,9 @@
+import {
+  formatInvoiceDateTimeDisplay,
+  isoToLocalDateTimeInput,
+  localDateYmdFromInput,
+} from "@/lib/invoicingDateTime";
+
 export type GeneratePreviewRow = {
   itemId: string;
   name: string;
@@ -16,7 +22,12 @@ export type GeneratePreviewPayload = {
   invoiceNumber: string;
   orderReceivedDate: string;
   deliveryDate: string;
+  /** Display: YYYY-MM-DD HH:mm (PDF / email preview). */
   invoiceDate: string;
+  /** ISO UTC for API save. */
+  invoiceDateIso: string;
+  /** Calendar YYYY-MM-DD for invoice number (from user's picker). */
+  invoiceDateYmd: string;
   rows: GeneratePreviewRow[];
   totalAmount: number;
 };
@@ -63,7 +74,12 @@ export function boxInvoiceToPreviewPayload(
     invoiceNumber: invoice.invoice_number,
     orderReceivedDate: invoice.order_received_date ?? "",
     deliveryDate: invoice.delivery_date ?? "",
-    invoiceDate: invoice.invoice_date ?? "",
+    invoiceDate: formatInvoiceDateTimeDisplay(invoice.invoice_date),
+    invoiceDateIso: invoice.invoice_date ?? "",
+    invoiceDateYmd:
+      localDateYmdFromInput(
+        isoToLocalDateTimeInput(invoice.invoice_date ?? ""),
+      ) ?? "",
     rows: sorted.map((line) => ({
       itemId: line.item_id,
       name: line.name,

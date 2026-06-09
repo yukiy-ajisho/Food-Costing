@@ -75,7 +75,7 @@ export function saveChangeHistory(changes: {
         (storageError as { code?: number }).code === 22
       ) {
         console.warn(
-          "LocalStorage quota exceeded. Clearing old history and retrying..."
+          "LocalStorage quota exceeded. Clearing old history and retrying...",
         );
 
         // 各配列の古い半分を削除
@@ -84,29 +84,29 @@ export function saveChangeHistory(changes: {
 
         const reduced: typeof changes = {
           changed_item_ids: merged.changed_item_ids?.slice(
-            halfLength(merged.changed_item_ids)
+            halfLength(merged.changed_item_ids),
           ),
           changed_vendor_product_ids: merged.changed_vendor_product_ids?.slice(
-            halfLength(merged.changed_vendor_product_ids)
+            halfLength(merged.changed_vendor_product_ids),
           ),
           changed_base_item_ids: merged.changed_base_item_ids?.slice(
-            halfLength(merged.changed_base_item_ids)
+            halfLength(merged.changed_base_item_ids),
           ),
           changed_labor_role_names: merged.changed_labor_role_names?.slice(
-            halfLength(merged.changed_labor_role_names)
+            halfLength(merged.changed_labor_role_names),
           ),
         };
 
         try {
           localStorage.setItem(
             "costing_change_history",
-            JSON.stringify(reduced)
+            JSON.stringify(reduced),
           );
           console.log("Successfully saved reduced change history.");
         } catch (retryError) {
           console.error(
             "Failed to save even after reducing history:",
-            retryError
+            retryError,
           );
         }
       } else {
@@ -147,7 +147,7 @@ export function getItemDisplayName(
         name: string | null;
         base_item_id?: string | null;
       },
-  baseItems: BaseItem[]
+  baseItems: BaseItem[],
 ): string {
   if (item.item_kind === "raw" && item.base_item_id) {
     const baseItem = baseItems.find((b) => b.id === item.base_item_id);
@@ -217,6 +217,7 @@ export interface Item {
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   wholesale?: number | null; // wholesale price
   retail?: number | null; // retail price
+  delivery?: boolean; // invoicing delivery preselect flag
   user_id: string; // FK to users
   responsible_user_id?: string | null; // FK to users - The Manager who has the right to change access rights for this record
 }
@@ -478,7 +479,7 @@ export interface StandardRecipeDiff {
 export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {},
-  tenantId?: string | null
+  tenantId?: string | null,
 ): Promise<T> {
   const supabase = createClient();
   const {
@@ -538,7 +539,7 @@ export async function apiRequest<T>(
     throw new Error(
       (errorData as { error?: string; message?: string }).error ||
         (errorData as { error?: string; message?: string }).message ||
-        "API request failed"
+        "API request failed",
     );
   }
 
@@ -555,7 +556,7 @@ export async function apiRequest<T>(
 async function fetchAPI<T>(
   endpoint: string,
   options?: RequestInit,
-  tenantId?: string | null
+  tenantId?: string | null,
 ): Promise<T> {
   return apiRequest<T>(endpoint, options, tenantId);
 }
@@ -590,7 +591,7 @@ export const itemsAPI = {
       `/items/${id}/deprecate`,
       {
         method: "PATCH",
-      }
+      },
     ),
 };
 
@@ -604,7 +605,7 @@ export const recipeLinesAPI = {
       {
         method: "POST",
         body: JSON.stringify({ item_ids: itemIds }),
-      }
+      },
     );
   },
   create: (line: Partial<RecipeLine>) =>
@@ -642,7 +643,7 @@ export const costAPI = {
   getCost: (itemId: string, clearCache?: boolean) => {
     const query = clearCache ? "?clear_cache=true" : "";
     return fetchAPI<{ item_id: string; cost_per_gram: number }>(
-      `/items/${itemId}/cost${query}`
+      `/items/${itemId}/cost${query}`,
     );
   },
   getCosts: (itemIds: string[]) => {
@@ -783,7 +784,7 @@ export const vendorProductsAPI = {
       `/vendor-products/${id}/deprecate`,
       {
         method: "PATCH",
-      }
+      },
     ),
   recordManualPricesBulk: (
     operations: Array<
@@ -805,14 +806,14 @@ export const vendorProductsAPI = {
           case_price?: number | null;
           price: number;
         }
-    >
+    >,
   ) =>
     fetchAPI<{ changed_vendor_product_ids: string[] }>(
       "/vendor-products/bulk/manual-prices",
       {
         method: "POST",
         body: JSON.stringify({ operations }),
-      }
+      },
     ),
   recordInvoiceImportBulk: (
     operations: Array<
@@ -874,14 +875,14 @@ export const vendorProductsAPI = {
           case_price?: number | null;
           current_price: number;
         }
-    >
+    >,
   ) =>
     fetchAPI<{ changed_vendor_product_ids: string[] }>(
       "/vendor-products/bulk/edit-save",
       {
         method: "POST",
         body: JSON.stringify({ operations }),
-      }
+      },
     ),
 };
 
@@ -964,7 +965,9 @@ export const priceEventsAPI = {
         ...(options?.invoiceDate?.trim()
           ? { invoice_date: options.invoiceDate.trim() }
           : {}),
-        ...(options?.invoiceId != null ? { invoice_id: options.invoiceId } : {}),
+        ...(options?.invoiceId != null
+          ? { invoice_id: options.invoiceId }
+          : {}),
         ...(options?.caseUnit != null ? { case_unit: options.caseUnit } : {}),
         ...(options?.casePurchased != null
           ? { case_purchased: options.casePurchased }
@@ -1063,7 +1066,7 @@ export const productMappingsAPI = {
       queryParams.append("virtual_product_id", params.virtual_product_id);
     const query = queryParams.toString();
     return fetchAPI<ProductMapping[]>(
-      `/product-mappings${query ? `?${query}` : ""}`
+      `/product-mappings${query ? `?${query}` : ""}`,
     );
   },
   getById: (id: string) => fetchAPI<ProductMapping>(`/product-mappings/${id}`),
@@ -1086,13 +1089,14 @@ export const crossTenantItemSharesAPI = {
     item_id?: string;
   }) => {
     const q = new URLSearchParams({ company_id: params.company_id });
-    if (params.owner_tenant_id) q.append("owner_tenant_id", params.owner_tenant_id);
+    if (params.owner_tenant_id)
+      q.append("owner_tenant_id", params.owner_tenant_id);
     if (params.item_id) q.append("item_id", params.item_id);
     return fetchAPI<CrossTenantItemShare[]>(`/cross-tenant-item-shares?${q}`);
   },
   getAvailable: (tenantId: string) =>
     fetchAPI<CrossTenantAvailableItem[]>(
-      `/cross-tenant-item-shares/available?tenant_id=${tenantId}`
+      `/cross-tenant-item-shares/available?tenant_id=${tenantId}`,
     ),
   resolveGrandfatheredIngredients: (tenantId: string, itemIds: string[]) =>
     fetchAPI<CrossTenantGrandfatheredIngredientMeta[]>(
@@ -1102,7 +1106,9 @@ export const crossTenantItemSharesAPI = {
         body: JSON.stringify({ tenant_id: tenantId, item_ids: itemIds }),
       },
     ),
-  create: (share: Omit<CrossTenantItemShare, "id" | "created_at" | "updated_at">) =>
+  create: (
+    share: Omit<CrossTenantItemShare, "id" | "created_at" | "updated_at">,
+  ) =>
     fetchAPI<CrossTenantItemShare>("/cross-tenant-item-shares", {
       method: "POST",
       body: JSON.stringify(share),
@@ -1137,7 +1143,7 @@ export const resourceSharesAPI = {
     if (params?.target_id) queryParams.append("target_id", params.target_id);
     const query = queryParams.toString();
     return fetchAPI<ResourceShare[]>(
-      `/resource-shares${query ? `?${query}` : ""}`
+      `/resource-shares${query ? `?${query}` : ""}`,
     );
   },
   getById: (id: string) => fetchAPI<ResourceShare>(`/resource-shares/${id}`),
@@ -1173,18 +1179,25 @@ export const recipeSummariesAPI = {
       method: "DELETE",
     }),
   getTechnicalSheet: (id: string) =>
-    fetchAPI<RecipeSummaryTechnicalSheet>(`/recipe-summaries/${id}/technical-sheet`),
+    fetchAPI<RecipeSummaryTechnicalSheet>(
+      `/recipe-summaries/${id}/technical-sheet`,
+    ),
 };
 
 export const standardTechnicalSheetsAPI = {
   listBaseRecipes: () =>
-    fetchAPI<StandardBaseRecipeRow[]>("/standard-technical-sheets/base-recipes"),
+    fetchAPI<StandardBaseRecipeRow[]>(
+      "/standard-technical-sheets/base-recipes",
+    ),
   listVersions: (sourceItemId: string) =>
     fetchAPI<{
       source_item_id: string;
       versions: StandardTechnicalSheetVersionMeta[];
     }>(`/standard-technical-sheets/items/${sourceItemId}/versions`),
-  getById: (id: string, options?: { price_mode?: StandardTechnicalSheetPriceMode }) => {
+  getById: (
+    id: string,
+    options?: { price_mode?: StandardTechnicalSheetPriceMode },
+  ) => {
     const params = new URLSearchParams();
     if (options?.price_mode) {
       const apiMode =
@@ -1197,7 +1210,9 @@ export const standardTechnicalSheetsAPI = {
     );
   },
   getRecipeDiff: (id: string) =>
-    fetchAPI<StandardRecipeDiff>(`/standard-technical-sheets/${id}/recipe-diff`),
+    fetchAPI<StandardRecipeDiff>(
+      `/standard-technical-sheets/${id}/recipe-diff`,
+    ),
   saveSheet: (
     id: string,
     payload: {

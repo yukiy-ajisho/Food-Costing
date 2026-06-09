@@ -16,6 +16,7 @@ import {
   Plus,
   Trash2,
   X,
+  Search,
   ArrowRight,
   ChevronDown,
   ChevronUp,
@@ -174,7 +175,9 @@ function VendorItemsTruncatedHover({
     const text =
       root.querySelector<HTMLElement>("[data-truncated-cell]") ??
       root.querySelector<HTMLElement>(".truncate") ??
-      (root.firstElementChild instanceof HTMLElement ? root.firstElementChild : null);
+      (root.firstElementChild instanceof HTMLElement
+        ? root.firstElementChild
+        : null);
     const trimmed = label.trim();
     if (!text || !trimmed || trimmed === "-") {
       setShowHint(false);
@@ -225,8 +228,7 @@ function VendorProductEachGramsHover({
   className?: string;
   children: ReactNode;
 }) {
-  const hint =
-    purchaseUnit === "each" && eachGrams ? `${eachGrams}g` : null;
+  const hint = purchaseUnit === "each" && eachGrams ? `${eachGrams}g` : null;
   if (!hint) {
     return <span className={className}>{children}</span>;
   }
@@ -288,8 +290,7 @@ export default function ItemsPage() {
   );
 
   const baseItemIdsWithActiveVp = useMemo(
-    () =>
-      baseItemIdsWithActiveVendorProduct(mappings, vendorProductsCatalog),
+    () => baseItemIdsWithActiveVendorProduct(mappings, vendorProductsCatalog),
     [mappings, vendorProductsCatalog],
   );
 
@@ -341,6 +342,9 @@ export default function ItemsPage() {
   const [vendorItemsSort, setVendorItemsSort] = useState<VendorItemsSortState>(
     VENDOR_ITEMS_SORT_SSR_INITIAL,
   );
+  const [vendorItemsSearchTerm, setVendorItemsSearchTerm] = useState("");
+  const [appliedVendorItemsSearchTerm, setAppliedVendorItemsSearchTerm] =
+    useState("");
   useEffect(() => {
     setVendorItemsSort(readVendorItemsSortFromStorage());
   }, []);
@@ -383,10 +387,29 @@ export default function ItemsPage() {
   const [fixedHeaderHeight, setFixedHeaderHeight] = useState(0);
 
   useEffect(() => {
-    if (fixedHeaderRef.current) {
-      setFixedHeaderHeight(fixedHeaderRef.current.offsetHeight);
-    }
-  }, []);
+    const updateFixedHeaderHeight = () => {
+      if (fixedHeaderRef.current) {
+        setFixedHeaderHeight(fixedHeaderRef.current.offsetHeight);
+      }
+    };
+    updateFixedHeaderHeight();
+    const el = fixedHeaderRef.current;
+    if (!el) return;
+    const resizeObserver = new ResizeObserver(updateFixedHeaderHeight);
+    resizeObserver.observe(el);
+    window.addEventListener("resize", updateFixedHeaderHeight);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", updateFixedHeaderHeight);
+    };
+  }, [
+    activeTab,
+    isEditModeItems,
+    isRecordPriceModeItems,
+    isEditModeBaseItems,
+    vendorItemsSearchTerm,
+    appliedVendorItemsSearchTerm,
+  ]);
 
   useEffect(() => {
     // タブやテナントを切り替えたら、権限メッセージをリセットする
@@ -639,7 +662,7 @@ export default function ItemsPage() {
               qty <= 0
             ) {
               alert(
-                "For each new row: select base item and vendor, enter quantity greater than 0, and enter a price.",
+                "For each new row: select base item and vendor, enter quantity greater than 0, and enter a cost.",
               );
               setLoadingItems(false);
               return;
@@ -647,9 +670,7 @@ export default function ItemsPage() {
 
             const rawNewPrice = newPriceInputs.get(vp.id) ?? "";
             if (rawNewPrice.trim() === "") {
-              alert(
-                "For each new row: enter a price in the New price column.",
-              );
+              alert("For each new row: enter a cost in the New cost column.");
               setLoadingItems(false);
               return;
             }
@@ -666,13 +687,13 @@ export default function ItemsPage() {
               }
               const caseCost = parseDecimalInputForCommit(rawNewPrice);
               if (caseCost === null || caseCost <= 0) {
-                alert("Enter Case cost greater than 0 in New price.");
+                alert("Enter New case cost greater than 0 in New cost.");
                 setLoadingItems(false);
                 return;
               }
               const computed = unitPriceFromCaseCost(caseCost, caseUnit);
               if (computed === null) {
-                alert("Invalid Case cost or Case unit.");
+                alert("Invalid New case cost or Case unit.");
                 setLoadingItems(false);
                 return;
               }
@@ -681,7 +702,7 @@ export default function ItemsPage() {
             } else {
               const unitCost = parseDecimalInputForCommit(rawNewPrice);
               if (unitCost === null || unitCost <= 0) {
-                alert("Enter Unit cost greater than 0 in New price.");
+                alert("Enter New unit cost greater than 0 in New cost.");
                 setLoadingItems(false);
                 return;
               }
@@ -696,7 +717,7 @@ export default function ItemsPage() {
               brand_name: vp.brand_name || null,
               purchase_unit: vp.purchase_unit,
               purchase_quantity: qty,
-              case_unit: isCase ? vp.case_unit ?? null : null,
+              case_unit: isCase ? (vp.case_unit ?? null) : null,
               case_price: casePrice,
               price: unitPrice,
             });
@@ -708,7 +729,7 @@ export default function ItemsPage() {
           const parsed = parseDecimalInputForCommit(raw);
           if (parsed === null) continue;
           if (parsed <= 0) {
-            alert("New price must be greater than 0");
+            alert("New cost must be greater than 0");
             setLoadingItems(false);
             return;
           }
@@ -722,7 +743,7 @@ export default function ItemsPage() {
             }
             const unitPrice = unitPriceFromCaseCost(parsed, caseUnit);
             if (unitPrice === null) {
-              alert("Invalid Case cost.");
+              alert("Invalid New case cost.");
               setLoadingItems(false);
               return;
             }
@@ -859,7 +880,7 @@ export default function ItemsPage() {
       for (const vp of filteredVendorProducts) {
         if (vp.isNew) {
           if (!Number.isFinite(vp.current_price) || vp.current_price <= 0) {
-            alert("新規行の Unit cost は 0 より大きい数値にしてください。");
+            alert("新規行の New unit cost は 0 より大きい数値にしてください。");
             setLoadingItems(false);
             return;
           }
@@ -931,8 +952,8 @@ export default function ItemsPage() {
             brand_name: vp.brand_name || null,
             purchase_unit: vp.purchase_unit,
             purchase_quantity: vp.purchase_quantity,
-            case_unit: isCase ? vp.case_unit ?? null : null,
-            case_price: isCase ? vp.case_price ?? null : null,
+            case_unit: isCase ? (vp.case_unit ?? null) : null,
+            case_price: isCase ? (vp.case_price ?? null) : null,
             current_price: vp.current_price,
           });
         } else {
@@ -1667,13 +1688,49 @@ export default function ItemsPage() {
     return a.id.localeCompare(b.id);
   };
 
-  const sortedVendorProducts = (() => {
-    const stable = [...vendorProducts];
+  const vendorProductSearchHaystack = useCallback(
+    (vp: VendorProductUI): string => {
+      const baseName =
+        baseItems.find((bi) => bi.id === vp.base_item_id)?.name?.trim() ?? "";
+      const vendorName =
+        vendors.find((v) => v.id === vp.vendor_id)?.name?.trim() ?? "";
+      return [baseName, vendorName, (vp.product_name ?? "").trim(), (vp.brand_name ?? "").trim()]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+    },
+    [baseItems, vendors],
+  );
+
+  const filteredVendorProducts = useMemo(() => {
+    const term = appliedVendorItemsSearchTerm.trim().toLowerCase();
+    if (!term) return vendorProducts;
+    return vendorProducts.filter((vp) => {
+      if (vp.isNew) return true;
+      return vendorProductSearchHaystack(vp).includes(term);
+    });
+  }, [
+    vendorProducts,
+    appliedVendorItemsSearchTerm,
+    vendorProductSearchHaystack,
+  ]);
+
+  const sortedVendorProducts = useMemo(() => {
+    const stable = [...filteredVendorProducts];
     const draftRows = stable.filter((vp) => vp.isNew);
     const existingRows = stable.filter((vp) => !vp.isNew);
     existingRows.sort(compareVendorProductsForSort);
     return [...draftRows, ...existingRows];
-  })();
+  }, [filteredVendorProducts, vendorItemsSort, baseItems, vendors]);
+
+  const handleVendorItemsSearch = () => {
+    setAppliedVendorItemsSearchTerm(vendorItemsSearchTerm);
+  };
+
+  const handleClearVendorItemsSearch = () => {
+    setVendorItemsSearchTerm("");
+    setAppliedVendorItemsSearchTerm("");
+  };
 
   const handleVendorItemsSortHeaderClick = (column: VendorItemsSortKey) => {
     setVendorItemsSort((prev) => {
@@ -1756,7 +1813,11 @@ export default function ItemsPage() {
 
       const rowAttr = target.getAttribute("data-vi-row");
       const colAttr = target.getAttribute("data-vi-col");
-      if (rowAttr == null || colAttr == null || !isVendorItemsGridCol(colAttr)) {
+      if (
+        rowAttr == null ||
+        colAttr == null ||
+        !isVendorItemsGridCol(colAttr)
+      ) {
         return;
       }
 
@@ -1921,7 +1982,7 @@ export default function ItemsPage() {
                         disabled={isActiveTabBusy}
                         className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:pointer-events-none disabled:opacity-50"
                       >
-                        Manual record new price
+                        Manual record new cost
                       </button>
                     </>
                   )}
@@ -1929,6 +1990,68 @@ export default function ItemsPage() {
               )}
             </div>
           </div>
+
+          {activeTab === "items" && (
+            <div
+              className={`mt-4 rounded-lg border p-4 transition-colors ${
+                isDark
+                  ? "bg-slate-800 border-slate-700"
+                  : "bg-white border-gray-200"
+              }`}
+            >
+              <div className="flex flex-col gap-2 md:flex-row md:items-end">
+                <div className="flex-1 w-full">
+                  <label
+                    className={`mb-1 block text-xs ${
+                      isDark ? "text-slate-300" : "text-gray-600"
+                    }`}
+                  >
+                    Search:
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={vendorItemsSearchTerm}
+                      onChange={(e) => setVendorItemsSearchTerm(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleVendorItemsSearch();
+                        }
+                      }}
+                      className={`flex-1 rounded-md border px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                        isDark
+                          ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                          : "bg-white border-gray-300 text-gray-900"
+                      }`}
+                      placeholder="Base item, vendor, product, brand..."
+                    />
+                    <button
+                      type="button"
+                      onClick={handleVendorItemsSearch}
+                      className="rounded-md bg-blue-600 px-4 py-2 text-white transition-colors hover:bg-blue-700"
+                      title="Search"
+                    >
+                      <Search className="h-5 w-5" />
+                    </button>
+                    {(vendorItemsSearchTerm || appliedVendorItemsSearchTerm) && (
+                      <button
+                        type="button"
+                        onClick={handleClearVendorItemsSearch}
+                        className={`rounded-md px-4 py-2 transition-colors ${
+                          isDark
+                            ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
+                            : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        }`}
+                        title="Clear search"
+                      >
+                        <X className="h-5 w-5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Itemsタブ（vendor_productsテーブルを操作） */}
@@ -2063,7 +2186,7 @@ export default function ItemsPage() {
                         }`}
                         style={{ width: "8%" }}
                       >
-                        Unit cost
+                        New unit cost
                       </th>
                       <th
                         className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
@@ -2071,7 +2194,7 @@ export default function ItemsPage() {
                         }`}
                         style={{ width: "8%" }}
                       >
-                        Case cost
+                        New case cost
                       </th>
                       <th
                         className="whitespace-nowrap px-1 py-3"
@@ -2081,7 +2204,9 @@ export default function ItemsPage() {
                       <th
                         className={`whitespace-nowrap px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                           isRecordPriceModeItems
-                            ? "text-blue-700"
+                            ? isDark
+                              ? "font-semibold text-sky-500"
+                              : "font-semibold text-blue-700"
                             : isDark
                               ? "text-slate-300"
                               : "text-gray-500"
@@ -2091,7 +2216,7 @@ export default function ItemsPage() {
                           isRecordPriceModeItems ? undefined : "Row actions"
                         }
                       >
-                        {isRecordPriceModeItems ? "New price" : ""}
+                        {isRecordPriceModeItems ? "New cost" : ""}
                       </th>
                     </tr>
                   </thead>
@@ -2182,8 +2307,9 @@ export default function ItemsPage() {
                               {isVendorItemsRowEditable(vp) && vp.isNew ? (
                                 <VendorItemsTruncatedHover
                                   label={
-                                    baseItems.find((b) => b.id === vp.base_item_id)
-                                      ?.name ?? ""
+                                    baseItems.find(
+                                      (b) => b.id === vp.base_item_id,
+                                    )?.name ?? ""
                                   }
                                   isDark={isDark}
                                   className="w-full"
@@ -2658,84 +2784,88 @@ export default function ItemsPage() {
                                     isDark={isDark}
                                     className="min-w-0 flex-1"
                                   >
-                                  <select
-                                    {...vendorItemsGridCellDataAttrs(
-                                      rowIndex,
-                                      "unit",
-                                    )}
-                                    value={vp.purchase_unit}
-                                    onChange={(e) =>
-                                      handleVendorProductChange(
-                                        vp.id,
-                                        "purchase_unit",
-                                        e.target.value,
-                                      )
-                                    }
-                                    className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    style={{
-                                      height: "20px",
-                                      minHeight: "20px",
-                                      maxHeight: "20px",
-                                      lineHeight: "20px",
-                                      padding: "0 4px",
-                                      fontSize: "0.875rem",
-                                      boxSizing: "border-box",
-                                      margin: 0,
-                                    }}
-                                  >
-                                    {unitOptions.map((unit) => {
-                                      // eachの場合、対応するitemsレコードのeach_gramsを確認
-                                      let isDisabled = false;
-                                      let disabledReason = "";
-
-                                      if (unit === "each" && vp.base_item_id) {
-                                        const correspondingItem = items.find(
-                                          (i) =>
-                                            i.base_item_id === vp.base_item_id,
-                                        );
-                                        isDisabled =
-                                          !correspondingItem?.each_grams ||
-                                          correspondingItem.each_grams === 0;
-                                        if (isDisabled) {
-                                          disabledReason =
-                                            "Please set each_grams in the Base Items tab";
-                                        }
-                                      } else if (
-                                        [
-                                          "gallon",
-                                          "liter",
-                                          "floz",
-                                          "ml",
-                                        ].includes(unit) &&
-                                        vp.base_item_id
-                                      ) {
-                                        // 非質量単位の場合、base_itemのspecific_weightを確認
-                                        const correspondingBaseItem =
-                                          baseItems.find(
-                                            (bi) => bi.id === vp.base_item_id,
-                                          );
-                                        isDisabled =
-                                          !correspondingBaseItem?.specific_weight ||
-                                          correspondingBaseItem.specific_weight ===
-                                            0;
-                                        if (isDisabled) {
-                                          disabledReason =
-                                            "Please set by liquid specific weight (g/ml) in the Base Items tab";
-                                        }
+                                    <select
+                                      {...vendorItemsGridCellDataAttrs(
+                                        rowIndex,
+                                        "unit",
+                                      )}
+                                      value={vp.purchase_unit}
+                                      onChange={(e) =>
+                                        handleVendorProductChange(
+                                          vp.id,
+                                          "purchase_unit",
+                                          e.target.value,
+                                        )
                                       }
+                                      className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      style={{
+                                        height: "20px",
+                                        minHeight: "20px",
+                                        maxHeight: "20px",
+                                        lineHeight: "20px",
+                                        padding: "0 4px",
+                                        fontSize: "0.875rem",
+                                        boxSizing: "border-box",
+                                        margin: 0,
+                                      }}
+                                    >
+                                      {unitOptions.map((unit) => {
+                                        // eachの場合、対応するitemsレコードのeach_gramsを確認
+                                        let isDisabled = false;
+                                        let disabledReason = "";
 
-                                      return (
-                                        <option
-                                          key={unit}
-                                          value={unit}
-                                          disabled={isDisabled}
-                                          title={disabledReason}
-                                        >
-                                          {unit}
-                                        </option>
-                                      );
-                                    })}
-                                  </select>
+                                        if (
+                                          unit === "each" &&
+                                          vp.base_item_id
+                                        ) {
+                                          const correspondingItem = items.find(
+                                            (i) =>
+                                              i.base_item_id ===
+                                              vp.base_item_id,
+                                          );
+                                          isDisabled =
+                                            !correspondingItem?.each_grams ||
+                                            correspondingItem.each_grams === 0;
+                                          if (isDisabled) {
+                                            disabledReason =
+                                              "Please set each_grams in the Base Items tab";
+                                          }
+                                        } else if (
+                                          [
+                                            "gallon",
+                                            "liter",
+                                            "floz",
+                                            "ml",
+                                          ].includes(unit) &&
+                                          vp.base_item_id
+                                        ) {
+                                          // 非質量単位の場合、base_itemのspecific_weightを確認
+                                          const correspondingBaseItem =
+                                            baseItems.find(
+                                              (bi) => bi.id === vp.base_item_id,
+                                            );
+                                          isDisabled =
+                                            !correspondingBaseItem?.specific_weight ||
+                                            correspondingBaseItem.specific_weight ===
+                                              0;
+                                          if (isDisabled) {
+                                            disabledReason =
+                                              "Please set by liquid specific weight (g/ml) in the Base Items tab";
+                                          }
+                                        }
+
+                                        return (
+                                          <option
+                                            key={unit}
+                                            value={unit}
+                                            disabled={isDisabled}
+                                            title={disabledReason}
+                                          >
+                                            {unit}
+                                          </option>
+                                        );
+                                      })}
+                                    </select>
                                   </VendorProductEachGramsHover>
                                 ) : (
                                   <div
@@ -2748,19 +2878,19 @@ export default function ItemsPage() {
                                       isDark={isDark}
                                       className="min-w-0"
                                     >
-                                    <span
-                                      className={`min-w-0 truncate text-sm ${
-                                        isDark
-                                          ? "text-slate-100"
-                                          : "text-gray-900"
-                                      }`}
-                                      style={{
-                                        height: "20px",
-                                        lineHeight: "20px",
-                                      }}
-                                    >
-                                      {vp.purchase_unit}
-                                    </span>
+                                      <span
+                                        className={`min-w-0 truncate text-sm ${
+                                          isDark
+                                            ? "text-slate-100"
+                                            : "text-gray-900"
+                                        }`}
+                                        style={{
+                                          height: "20px",
+                                          lineHeight: "20px",
+                                        }}
+                                      >
+                                        {vp.purchase_unit}
+                                      </span>
                                     </VendorProductEachGramsHover>
                                     {/* 警告（赤点） */}
                                     {vp.needsWarning && (
@@ -2868,7 +2998,7 @@ export default function ItemsPage() {
 
                           {/* Unit cost */}
                           <td
-                            className="px-6 whitespace-nowrap"
+                            className="px-6 whitespace-nowrap text-right"
                             style={{
                               paddingTop: "16px",
                               paddingBottom: "16px",
@@ -2876,12 +3006,11 @@ export default function ItemsPage() {
                             }}
                           >
                             <div
+                              className="flex items-center justify-end"
                               style={{
                                 height: "20px",
                                 minHeight: "20px",
                                 maxHeight: "20px",
-                                display: "flex",
-                                alignItems: "center",
                               }}
                             >
                               {(() => {
@@ -2902,11 +3031,11 @@ export default function ItemsPage() {
                                     : vp.current_price;
                                 return unitCostEditable ? (
                                   <div
-                                    className="flex w-full items-center gap-1"
+                                    className="flex w-full max-w-full items-center justify-end gap-1"
                                     style={{ height: "20px" }}
                                   >
                                     <span
-                                      className="text-gray-500"
+                                      className="shrink-0 text-gray-500 tabular-nums"
                                       style={{ lineHeight: "20px" }}
                                     >
                                       $
@@ -2954,7 +3083,7 @@ export default function ItemsPage() {
                                           return newMap;
                                         });
                                       }}
-                                      className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      className="min-w-0 max-w-[6.5rem] flex-1 border border-gray-300 rounded-md text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500"
                                       placeholder="0.00"
                                       style={{
                                         height: "20px",
@@ -2970,7 +3099,7 @@ export default function ItemsPage() {
                                   </div>
                                 ) : (
                                   <div
-                                    className={`text-sm ${
+                                    className={`w-full text-right text-sm tabular-nums ${
                                       isCase
                                         ? isDark
                                           ? "text-slate-500"
@@ -2985,7 +3114,7 @@ export default function ItemsPage() {
                                     }}
                                     title={
                                       isEditModeItems && !vp.isNew
-                                        ? "Change price using Record new price"
+                                        ? "Change cost using Record new cost"
                                         : undefined
                                     }
                                   >
@@ -3000,7 +3129,7 @@ export default function ItemsPage() {
 
                           {/* Case cost */}
                           <td
-                            className="px-6 whitespace-nowrap"
+                            className="px-6 whitespace-nowrap text-right"
                             style={{
                               paddingTop: "16px",
                               paddingBottom: "16px",
@@ -3008,12 +3137,11 @@ export default function ItemsPage() {
                             }}
                           >
                             <div
+                              className="flex items-center justify-end"
                               style={{
                                 height: "20px",
                                 minHeight: "20px",
                                 maxHeight: "20px",
-                                display: "flex",
-                                alignItems: "center",
                               }}
                             >
                               {(() => {
@@ -3024,11 +3152,11 @@ export default function ItemsPage() {
                                   isCase;
                                 return caseCostEditable ? (
                                   <div
-                                    className="flex w-full items-center gap-1"
+                                    className="flex w-full max-w-full items-center justify-end gap-1"
                                     style={{ height: "20px" }}
                                   >
                                     <span
-                                      className="text-gray-500"
+                                      className="shrink-0 text-gray-500 tabular-nums"
                                       style={{ lineHeight: "20px" }}
                                     >
                                       $
@@ -3094,7 +3222,7 @@ export default function ItemsPage() {
                                           return newMap;
                                         });
                                       }}
-                                      className="w-full border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      className="min-w-0 max-w-[6.5rem] flex-1 border border-gray-300 rounded-md text-right tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500"
                                       placeholder="0.00"
                                       style={{
                                         height: "20px",
@@ -3110,7 +3238,7 @@ export default function ItemsPage() {
                                   </div>
                                 ) : (
                                   <div
-                                    className={`text-sm ${
+                                    className={`w-full text-right text-sm tabular-nums ${
                                       !isCase
                                         ? isDark
                                           ? "text-slate-500"
@@ -3215,8 +3343,8 @@ export default function ItemsPage() {
                                     }`}
                                     placeholder={
                                       vendorProductIsCase(vp)
-                                        ? "Case cost"
-                                        : "Unit cost"
+                                        ? "New case cost"
+                                        : "New unit cost"
                                     }
                                     style={{
                                       height: "20px",
@@ -3305,600 +3433,608 @@ export default function ItemsPage() {
         {/* Base Itemsタブ */}
         {activeTab === "raw-items" && (
           <div className="mx-auto w-full max-w-7xl">
-          <>
-            {loadingBaseItems ? (
-              <div
-                className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
-                  isDark
-                    ? "bg-slate-800 border-slate-700 text-slate-300"
-                    : "bg-white border-gray-200"
-                }`}
-              >
-                Loading...
-              </div>
-            ) : (
-              <div
-                className={`rounded-lg shadow-sm border transition-colors ${
-                  isDark
-                    ? "bg-slate-800 border-slate-700"
-                    : "bg-white border-gray-200"
-                }`}
-              >
-                <table
-                  className="w-full"
-                  style={{ tableLayout: "fixed", width: "100%" }}
+            <>
+              {loadingBaseItems ? (
+                <div
+                  className={`rounded-lg shadow-sm border p-8 text-center transition-colors ${
+                    isDark
+                      ? "bg-slate-800 border-slate-700 text-slate-300"
+                      : "bg-white border-gray-200"
+                  }`}
                 >
-                  <thead
-                    className={`border-b transition-colors sticky z-10 ${
-                      isDark
-                        ? "bg-slate-700 border-slate-600"
-                        : "bg-gray-50 border-gray-200"
-                    }`}
-                    style={{ top: `${fixedHeaderHeight}px` }}
+                  Loading...
+                </div>
+              ) : (
+                <div
+                  className={`rounded-lg shadow-sm border transition-colors ${
+                    isDark
+                      ? "bg-slate-800 border-slate-700"
+                      : "bg-white border-gray-200"
+                  }`}
+                >
+                  <table
+                    className="w-full"
+                    style={{ tableLayout: "fixed", width: "100%" }}
                   >
-                    <tr>
-                      <th
-                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                          isDark ? "text-slate-300" : "text-gray-500"
-                        }`}
-                        style={{ width: "30%" }}
-                      >
-                        <button
-                          type="button"
-                          onClick={handleBaseItemsNameSortClick}
-                          className={`flex w-full min-w-0 justify-start text-left text-xs font-medium uppercase tracking-wider ${
-                            isDark
-                              ? "text-slate-300 hover:text-slate-100"
-                              : "text-gray-500 hover:text-gray-800"
+                    <thead
+                      className={`border-b transition-colors sticky z-10 ${
+                        isDark
+                          ? "bg-slate-700 border-slate-600"
+                          : "bg-gray-50 border-gray-200"
+                      }`}
+                      style={{ top: `${fixedHeaderHeight}px` }}
+                    >
+                      <tr>
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                            isDark ? "text-slate-300" : "text-gray-500"
                           }`}
+                          style={{ width: "30%" }}
                         >
-                          <span className="flex min-w-0 max-w-full items-center gap-1.5">
-                            <span className="min-w-0 truncate">NAME</span>
-                            {baseItemsSort.key === "name" ? (
-                              baseItemsSort.ascending ? (
-                                <ChevronUp
-                                  className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-100" : "text-gray-800"}`}
-                                  aria-hidden
-                                />
+                          <button
+                            type="button"
+                            onClick={handleBaseItemsNameSortClick}
+                            className={`flex w-full min-w-0 justify-start text-left text-xs font-medium uppercase tracking-wider ${
+                              isDark
+                                ? "text-slate-300 hover:text-slate-100"
+                                : "text-gray-500 hover:text-gray-800"
+                            }`}
+                          >
+                            <span className="flex min-w-0 max-w-full items-center gap-1.5">
+                              <span className="min-w-0 truncate">NAME</span>
+                              {baseItemsSort.key === "name" ? (
+                                baseItemsSort.ascending ? (
+                                  <ChevronUp
+                                    className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-100" : "text-gray-800"}`}
+                                    aria-hidden
+                                  />
+                                ) : (
+                                  <ChevronDown
+                                    className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-100" : "text-gray-800"}`}
+                                    aria-hidden
+                                  />
+                                )
                               ) : (
                                 <ChevronDown
-                                  className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-100" : "text-gray-800"}`}
+                                  className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-500" : "text-gray-400"}`}
                                   aria-hidden
                                 />
-                              )
-                            ) : (
-                              <ChevronDown
-                                className={`h-4 w-4 shrink-0 ${isDark ? "text-slate-500" : "text-gray-400"}`}
-                                aria-hidden
-                              />
-                            )}
-                          </span>
-                        </button>
-                      </th>
-                      <th
-                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                          isDark ? "text-slate-300" : "text-gray-500"
-                        }`}
-                        style={{ width: "20%" }}
-                      >
-                        SOLID ITEM WEIGHT
-                      </th>
-                      <th
-                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                          isDark ? "text-slate-300" : "text-gray-500"
-                        }`}
-                        style={{ width: "25%" }}
-                      >
-                        <div className="flex items-center gap-1">
-                          <span>BY LIQUID SPECIFIC WEIGHT (g/ml)</span>
-                          <div className="relative group">
-                            <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center text-gray-400 text-xs cursor-help">
-                              ?
-                            </div>
-                            <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
-                              By liquid specific weight: for volume-based items
-                              (e.g., liquids, powders). Used to convert ml to
-                              grams.
+                              )}
+                            </span>
+                          </button>
+                        </th>
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                          style={{ width: "20%" }}
+                        >
+                          SOLID ITEM WEIGHT
+                        </th>
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                          style={{ width: "25%" }}
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>BY LIQUID SPECIFIC WEIGHT (g/ml)</span>
+                            <div className="relative group">
+                              <div className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center text-gray-400 text-xs cursor-help">
+                                ?
+                              </div>
+                              <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
+                                By liquid specific weight: for volume-based
+                                items (e.g., liquids, powders). Used to convert
+                                ml to grams.
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </th>
-                      <th
-                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
-                          isDark ? "text-slate-300" : "text-gray-500"
-                        }`}
-                        style={{ width: "25%" }}
-                      >
-                        <div className="flex items-center gap-1">
-                          <span>BY EACH (g)</span>
-                          <div className="relative group">
-                            <div
-                              className={`w-4 h-4 rounded-full border flex items-center justify-center text-xs cursor-help ${
-                                isDark
-                                  ? "border-slate-500 text-slate-400"
-                                  : "border-gray-400 text-gray-400"
-                              }`}
-                            >
-                              ?
-                            </div>
-                            <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
-                              Weight per piece for count-based items (e.g.,
-                              eggs, fruits). Used to convert &apos;each&apos; to
-                              grams.
+                        </th>
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium tracking-wider ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                          style={{ width: "25%" }}
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>BY EACH (g)</span>
+                            <div className="relative group">
+                              <div
+                                className={`w-4 h-4 rounded-full border flex items-center justify-center text-xs cursor-help ${
+                                  isDark
+                                    ? "border-slate-500 text-slate-400"
+                                    : "border-gray-400 text-gray-400"
+                                }`}
+                              >
+                                ?
+                              </div>
+                              <div className="absolute left-0 top-full mt-1 w-64 p-2 bg-gray-800 text-white text-xs rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
+                                Weight per piece for count-based items (e.g.,
+                                eggs, fruits). Used to convert &apos;each&apos;
+                                to grams.
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </th>
-                      <th
-                        className={`px-6 py-3 text-left text-xs font-medium tracking-wider w-16 ${
-                          isDark ? "text-slate-300" : "text-gray-500"
-                        }`}
-                        aria-label="Row actions"
-                      />
-                    </tr>
-                  </thead>
-                  <tbody
-                    className={`divide-y transition-colors ${
-                      isDark ? "divide-slate-700" : "divide-gray-200"
-                    }`}
-                  >
-                    {isEditModeBaseItems && (
-                      <tr
-                        style={{
-                          height: "52px",
-                          minHeight: "52px",
-                          maxHeight: "52px",
-                        }}
-                      >
-                        <td
-                          colSpan={5}
-                          className="px-6 whitespace-nowrap"
+                        </th>
+                        <th
+                          className={`px-6 py-3 text-left text-xs font-medium tracking-wider w-16 ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                          aria-label="Row actions"
+                        />
+                      </tr>
+                    </thead>
+                    <tbody
+                      className={`divide-y transition-colors ${
+                        isDark ? "divide-slate-700" : "divide-gray-200"
+                      }`}
+                    >
+                      {isEditModeBaseItems && (
+                        <tr
                           style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
+                            height: "52px",
+                            minHeight: "52px",
+                            maxHeight: "52px",
                           }}
                         >
-                          <div
+                          <td
+                            colSpan={5}
+                            className="px-6 whitespace-nowrap"
                             style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={handleAddClickBaseItems}
+                                className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 rounded-md transition-colors"
+                              >
+                                <Plus className="w-4 h-4 shrink-0" />
+                                <span>Add new base item</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {sortedBaseItemsUI.map((item) => (
+                        <tr
+                          key={item.id}
+                          className={`transition-colors ${
+                            item.isMarkedForDeletion
+                              ? isDark
+                                ? "bg-red-900/30"
+                                : "bg-red-50"
+                              : ""
+                          } ${
+                            isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
+                          }`}
+                          style={{
+                            height: "52px",
+                            minHeight: "52px",
+                            maxHeight: "52px",
+                          }}
+                        >
+                          {/* Name */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              {isEditModeBaseItems ? (
+                                <input
+                                  type="text"
+                                  value={item.name}
+                                  onChange={(e) =>
+                                    handleBaseItemChange(
+                                      item.id,
+                                      "name",
+                                      e.target.value,
+                                    )
+                                  }
+                                  className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
+                                    isDark
+                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
+                                      : "border-gray-300"
+                                  }`}
+                                  placeholder="Base item name"
+                                  style={{
+                                    height: "20px",
+                                    minHeight: "20px",
+                                    maxHeight: "20px",
+                                    lineHeight: "20px",
+                                    padding: "0 4px",
+                                    fontSize: "0.875rem",
+                                    boxSizing: "border-box",
+                                    margin: 0,
+                                  }}
+                                />
+                              ) : (
+                                <div
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {item.name}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Solid item weight */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "8px",
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name={`type-${item.id}`}
+                                checked={
+                                  (item.selectedType ?? "none") === "none"
+                                }
+                                onClick={() =>
+                                  handleBaseItemTypeChange(item.id, "none")
+                                }
+                                onChange={() =>
+                                  handleBaseItemTypeChange(item.id, "none")
+                                }
+                                disabled={!isEditModeBaseItems}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                              />
+                            </div>
+                          </td>
+
+                          {/* By liquid specific weight */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "8px",
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name={`type-${item.id}`}
+                                checked={
+                                  (item.selectedType ?? "none") ===
+                                  "specific_weight"
+                                }
+                                onClick={() =>
+                                  handleBaseItemTypeChange(
+                                    item.id,
+                                    "specific_weight",
+                                  )
+                                }
+                                onChange={() =>
+                                  handleBaseItemTypeChange(
+                                    item.id,
+                                    "specific_weight",
+                                  )
+                                }
+                                disabled={!isEditModeBaseItems}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                              />
+                              {isEditModeBaseItems ? (
+                                <>
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      specificWeightInputs.has(item.id)
+                                        ? specificWeightInputs.get(item.id)!
+                                        : item.specific_weight === null ||
+                                            item.specific_weight === undefined
+                                          ? ""
+                                          : String(item.specific_weight)
+                                    }
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      // 数字と小数点のみを許可（空文字列も許可）
+                                      const numericPattern =
+                                        /^(\d+\.?\d*|\.\d+)?$/;
+                                      if (numericPattern.test(value)) {
+                                        setSpecificWeightInputs((prev) => {
+                                          const newMap = new Map(prev);
+                                          newMap.set(item.id, value);
+                                          return newMap;
+                                        });
+                                      }
+                                      // マッチしない場合は何もしない（前の値を保持）
+                                    }}
+                                    onBlur={(e) => {
+                                      const numValue =
+                                        parseDecimalInputForCommit(
+                                          e.target.value,
+                                        );
+                                      setBaseItemsUI((prev) =>
+                                        prev.map((row) => {
+                                          if (row.id !== item.id) return row;
+                                          if (numValue !== null) {
+                                            return {
+                                              ...row,
+                                              selectedType: "specific_weight",
+                                              specific_weight: numValue,
+                                              each_grams: null,
+                                            };
+                                          }
+                                          // 空で blur してもラジオ選択は維持（Save で未入力エラーにできる）
+                                          return {
+                                            ...row,
+                                            selectedType: "specific_weight",
+                                            specific_weight: null,
+                                            each_grams: null,
+                                          };
+                                        }),
+                                      );
+                                      setSpecificWeightInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.delete(item.id);
+                                        return newMap;
+                                      });
+                                    }}
+                                    disabled={
+                                      (item.selectedType ?? "none") !==
+                                      "specific_weight"
+                                    }
+                                    className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
+                                      isDark
+                                        ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
+                                        : "border-gray-300 disabled:bg-gray-100"
+                                    }`}
+                                    placeholder="0.00"
+                                    style={{
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
+                                  />
+                                </>
+                              ) : (
+                                <div
+                                  className={`text-sm ${
+                                    isDark ? "text-slate-100" : "text-gray-900"
+                                  }`}
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {item.specific_weight
+                                    ? item.specific_weight.toFixed(2)
+                                    : "-"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* By each (g) */}
+                          <td
+                            className="px-6 whitespace-nowrap"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
+                            }}
+                          >
+                            <div
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "8px",
+                              }}
+                            >
+                              <input
+                                type="radio"
+                                name={`type-${item.id}`}
+                                checked={
+                                  (item.selectedType ?? "none") === "each"
+                                }
+                                onClick={() =>
+                                  handleBaseItemTypeChange(item.id, "each")
+                                }
+                                onChange={() =>
+                                  handleBaseItemTypeChange(item.id, "each")
+                                }
+                                disabled={!isEditModeBaseItems}
+                                className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
+                              />
+                              {isEditModeBaseItems ? (
+                                <>
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={
+                                      eachGramsInputs.has(item.id)
+                                        ? eachGramsInputs.get(item.id)!
+                                        : item.each_grams === null ||
+                                            item.each_grams === undefined
+                                          ? ""
+                                          : String(item.each_grams)
+                                    }
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      // 数字と小数点のみを許可（空文字列も許可）
+                                      const numericPattern =
+                                        /^(\d+\.?\d*|\.\d+)?$/;
+                                      if (numericPattern.test(value)) {
+                                        setEachGramsInputs((prev) => {
+                                          const newMap = new Map(prev);
+                                          newMap.set(item.id, value);
+                                          return newMap;
+                                        });
+                                      }
+                                      // マッチしない場合は何もしない（前の値を保持）
+                                    }}
+                                    onBlur={(e) => {
+                                      const numValue =
+                                        parseDecimalInputForCommit(
+                                          e.target.value,
+                                        );
+                                      setBaseItemsUI((prev) =>
+                                        prev.map((row) => {
+                                          if (row.id !== item.id) return row;
+                                          if (numValue !== null) {
+                                            return {
+                                              ...row,
+                                              selectedType: "each",
+                                              each_grams: numValue,
+                                              specific_weight: null,
+                                            };
+                                          }
+                                          // 空で blur してもラジオ選択は維持（Save で未入力エラーにできる）
+                                          return {
+                                            ...row,
+                                            selectedType: "each",
+                                            specific_weight: null,
+                                            each_grams: null,
+                                          };
+                                        }),
+                                      );
+                                      setEachGramsInputs((prev) => {
+                                        const newMap = new Map(prev);
+                                        newMap.delete(item.id);
+                                        return newMap;
+                                      });
+                                    }}
+                                    disabled={
+                                      (item.selectedType ?? "none") !== "each"
+                                    }
+                                    className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
+                                      isDark
+                                        ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
+                                        : "border-gray-300 disabled:bg-gray-100"
+                                    }`}
+                                    placeholder="0"
+                                    style={{
+                                      height: "20px",
+                                      minHeight: "20px",
+                                      maxHeight: "20px",
+                                      lineHeight: "20px",
+                                      padding: "0 4px",
+                                      fontSize: "0.875rem",
+                                      boxSizing: "border-box",
+                                      margin: 0,
+                                    }}
+                                  />
+                                </>
+                              ) : (
+                                <div
+                                  className="text-sm text-gray-900"
+                                  style={{ height: "20px", lineHeight: "20px" }}
+                                >
+                                  {item.each_grams
+                                    ? item.each_grams.toFixed(2)
+                                    : "-"}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* ゴミ箱（列幅は常に確保し、編集時のみ表示・操作可） */}
+                          <td
+                            className="px-6 whitespace-nowrap w-16"
+                            style={{
+                              paddingTop: "16px",
+                              paddingBottom: "16px",
+                              boxSizing: "border-box",
                             }}
                           >
                             <button
                               type="button"
-                              onClick={handleAddClickBaseItems}
-                              className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 rounded-md transition-colors"
+                              onClick={() =>
+                                handleDeleteClickBaseItems(item.id)
+                              }
+                              disabled={!isEditModeBaseItems}
+                              className={`p-2 rounded-md transition-colors ${
+                                item.isMarkedForDeletion
+                                  ? "bg-red-500 text-white hover:bg-red-600"
+                                  : "text-gray-400 hover:text-red-500 hover:bg-red-50"
+                              } ${
+                                !isEditModeBaseItems
+                                  ? "invisible pointer-events-none"
+                                  : ""
+                              }`}
+                              style={{
+                                height: "20px",
+                                minHeight: "20px",
+                                maxHeight: "20px",
+                                boxSizing: "border-box",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                padding: "0",
+                              }}
+                              title={
+                                isEditModeBaseItems
+                                  ? "Mark for deletion"
+                                  : undefined
+                              }
+                              aria-hidden={!isEditModeBaseItems}
                             >
-                              <Plus className="w-4 h-4 shrink-0" />
-                              <span>Add new base item</span>
+                              <Trash2 className="w-5 h-5" />
                             </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                    {sortedBaseItemsUI.map((item) => (
-                      <tr
-                        key={item.id}
-                        className={`transition-colors ${
-                          item.isMarkedForDeletion
-                            ? isDark
-                              ? "bg-red-900/30"
-                              : "bg-red-50"
-                            : ""
-                        } ${
-                          isDark ? "hover:bg-slate-700" : "hover:bg-gray-50"
-                        }`}
-                        style={{
-                          height: "52px",
-                          minHeight: "52px",
-                          maxHeight: "52px",
-                        }}
-                      >
-                        {/* Name */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            {isEditModeBaseItems ? (
-                              <input
-                                type="text"
-                                value={item.name}
-                                onChange={(e) =>
-                                  handleBaseItemChange(
-                                    item.id,
-                                    "name",
-                                    e.target.value,
-                                  )
-                                }
-                                className={`w-full border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors ${
-                                  isDark
-                                    ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400"
-                                    : "border-gray-300"
-                                }`}
-                                placeholder="Base item name"
-                                style={{
-                                  height: "20px",
-                                  minHeight: "20px",
-                                  maxHeight: "20px",
-                                  lineHeight: "20px",
-                                  padding: "0 4px",
-                                  fontSize: "0.875rem",
-                                  boxSizing: "border-box",
-                                  margin: 0,
-                                }}
-                              />
-                            ) : (
-                              <div
-                                className={`text-sm ${
-                                  isDark ? "text-slate-100" : "text-gray-900"
-                                }`}
-                                style={{ height: "20px", lineHeight: "20px" }}
-                              >
-                                {item.name}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* Solid item weight */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                            }}
-                          >
-                            <input
-                              type="radio"
-                              name={`type-${item.id}`}
-                              checked={(item.selectedType ?? "none") === "none"}
-                              onClick={() =>
-                                handleBaseItemTypeChange(item.id, "none")
-                              }
-                              onChange={() =>
-                                handleBaseItemTypeChange(item.id, "none")
-                              }
-                              disabled={!isEditModeBaseItems}
-                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-                            />
-                          </div>
-                        </td>
-
-                        {/* By liquid specific weight */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                            }}
-                          >
-                            <input
-                              type="radio"
-                              name={`type-${item.id}`}
-                              checked={
-                                (item.selectedType ?? "none") ===
-                                "specific_weight"
-                              }
-                              onClick={() =>
-                                handleBaseItemTypeChange(
-                                  item.id,
-                                  "specific_weight",
-                                )
-                              }
-                              onChange={() =>
-                                handleBaseItemTypeChange(
-                                  item.id,
-                                  "specific_weight",
-                                )
-                              }
-                              disabled={!isEditModeBaseItems}
-                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-                            />
-                            {isEditModeBaseItems ? (
-                              <>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={
-                                    specificWeightInputs.has(item.id)
-                                      ? specificWeightInputs.get(item.id)!
-                                      : item.specific_weight === null ||
-                                          item.specific_weight === undefined
-                                        ? ""
-                                        : String(item.specific_weight)
-                                  }
-                                  onChange={(e) => {
-                                    const value = e.target.value;
-                                    // 数字と小数点のみを許可（空文字列も許可）
-                                    const numericPattern =
-                                      /^(\d+\.?\d*|\.\d+)?$/;
-                                    if (numericPattern.test(value)) {
-                                      setSpecificWeightInputs((prev) => {
-                                        const newMap = new Map(prev);
-                                        newMap.set(item.id, value);
-                                        return newMap;
-                                      });
-                                    }
-                                    // マッチしない場合は何もしない（前の値を保持）
-                                  }}
-                                  onBlur={(e) => {
-                                    const numValue = parseDecimalInputForCommit(
-                                      e.target.value,
-                                    );
-                                    setBaseItemsUI((prev) =>
-                                      prev.map((row) => {
-                                        if (row.id !== item.id) return row;
-                                        if (numValue !== null) {
-                                          return {
-                                            ...row,
-                                            selectedType: "specific_weight",
-                                            specific_weight: numValue,
-                                            each_grams: null,
-                                          };
-                                        }
-                                        // 空で blur してもラジオ選択は維持（Save で未入力エラーにできる）
-                                        return {
-                                          ...row,
-                                          selectedType: "specific_weight",
-                                          specific_weight: null,
-                                          each_grams: null,
-                                        };
-                                      }),
-                                    );
-                                    setSpecificWeightInputs((prev) => {
-                                      const newMap = new Map(prev);
-                                      newMap.delete(item.id);
-                                      return newMap;
-                                    });
-                                  }}
-                                  disabled={
-                                    (item.selectedType ?? "none") !==
-                                    "specific_weight"
-                                  }
-                                  className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
-                                    isDark
-                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
-                                      : "border-gray-300 disabled:bg-gray-100"
-                                  }`}
-                                  placeholder="0.00"
-                                  style={{
-                                    height: "20px",
-                                    minHeight: "20px",
-                                    maxHeight: "20px",
-                                    lineHeight: "20px",
-                                    padding: "0 4px",
-                                    fontSize: "0.875rem",
-                                    boxSizing: "border-box",
-                                    margin: 0,
-                                  }}
-                                />
-                              </>
-                            ) : (
-                              <div
-                                className={`text-sm ${
-                                  isDark ? "text-slate-100" : "text-gray-900"
-                                }`}
-                                style={{ height: "20px", lineHeight: "20px" }}
-                              >
-                                {item.specific_weight
-                                  ? item.specific_weight.toFixed(2)
-                                  : "-"}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* By each (g) */}
-                        <td
-                          className="px-6 whitespace-nowrap"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                            }}
-                          >
-                            <input
-                              type="radio"
-                              name={`type-${item.id}`}
-                              checked={(item.selectedType ?? "none") === "each"}
-                              onClick={() =>
-                                handleBaseItemTypeChange(item.id, "each")
-                              }
-                              onChange={() =>
-                                handleBaseItemTypeChange(item.id, "each")
-                              }
-                              disabled={!isEditModeBaseItems}
-                              className="w-4 h-4 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed"
-                            />
-                            {isEditModeBaseItems ? (
-                              <>
-                                <input
-                                  type="text"
-                                  inputMode="decimal"
-                                  value={
-                                    eachGramsInputs.has(item.id)
-                                      ? eachGramsInputs.get(item.id)!
-                                      : item.each_grams === null ||
-                                          item.each_grams === undefined
-                                        ? ""
-                                        : String(item.each_grams)
-                                  }
-                                  onChange={(e) => {
-                                    const value = e.target.value;
-                                    // 数字と小数点のみを許可（空文字列も許可）
-                                    const numericPattern =
-                                      /^(\d+\.?\d*|\.\d+)?$/;
-                                    if (numericPattern.test(value)) {
-                                      setEachGramsInputs((prev) => {
-                                        const newMap = new Map(prev);
-                                        newMap.set(item.id, value);
-                                        return newMap;
-                                      });
-                                    }
-                                    // マッチしない場合は何もしない（前の値を保持）
-                                  }}
-                                  onBlur={(e) => {
-                                    const numValue = parseDecimalInputForCommit(
-                                      e.target.value,
-                                    );
-                                    setBaseItemsUI((prev) =>
-                                      prev.map((row) => {
-                                        if (row.id !== item.id) return row;
-                                        if (numValue !== null) {
-                                          return {
-                                            ...row,
-                                            selectedType: "each",
-                                            each_grams: numValue,
-                                            specific_weight: null,
-                                          };
-                                        }
-                                        // 空で blur してもラジオ選択は維持（Save で未入力エラーにできる）
-                                        return {
-                                          ...row,
-                                          selectedType: "each",
-                                          specific_weight: null,
-                                          each_grams: null,
-                                        };
-                                      }),
-                                    );
-                                    setEachGramsInputs((prev) => {
-                                      const newMap = new Map(prev);
-                                      newMap.delete(item.id);
-                                      return newMap;
-                                    });
-                                  }}
-                                  disabled={
-                                    (item.selectedType ?? "none") !== "each"
-                                  }
-                                  className={`flex-1 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed transition-colors ${
-                                    isDark
-                                      ? "bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 disabled:bg-slate-800"
-                                      : "border-gray-300 disabled:bg-gray-100"
-                                  }`}
-                                  placeholder="0"
-                                  style={{
-                                    height: "20px",
-                                    minHeight: "20px",
-                                    maxHeight: "20px",
-                                    lineHeight: "20px",
-                                    padding: "0 4px",
-                                    fontSize: "0.875rem",
-                                    boxSizing: "border-box",
-                                    margin: 0,
-                                  }}
-                                />
-                              </>
-                            ) : (
-                              <div
-                                className="text-sm text-gray-900"
-                                style={{ height: "20px", lineHeight: "20px" }}
-                              >
-                                {item.each_grams
-                                  ? item.each_grams.toFixed(2)
-                                  : "-"}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* ゴミ箱（列幅は常に確保し、編集時のみ表示・操作可） */}
-                        <td
-                          className="px-6 whitespace-nowrap w-16"
-                          style={{
-                            paddingTop: "16px",
-                            paddingBottom: "16px",
-                            boxSizing: "border-box",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteClickBaseItems(item.id)}
-                            disabled={!isEditModeBaseItems}
-                            className={`p-2 rounded-md transition-colors ${
-                              item.isMarkedForDeletion
-                                ? "bg-red-500 text-white hover:bg-red-600"
-                                : "text-gray-400 hover:text-red-500 hover:bg-red-50"
-                            } ${
-                              !isEditModeBaseItems
-                                ? "invisible pointer-events-none"
-                                : ""
-                            }`}
-                            style={{
-                              height: "20px",
-                              minHeight: "20px",
-                              maxHeight: "20px",
-                              boxSizing: "border-box",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              padding: "0",
-                            }}
-                            title={
-                              isEditModeBaseItems
-                                ? "Mark for deletion"
-                                : undefined
-                            }
-                            aria-hidden={!isEditModeBaseItems}
-                          >
-                            <Trash2 className="w-5 h-5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           </div>
         )}
       </div>

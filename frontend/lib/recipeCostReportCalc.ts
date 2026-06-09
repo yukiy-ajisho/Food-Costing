@@ -203,3 +203,97 @@ export function lcogPercent(
   if (pct == null) return "—";
   return `${pct.toFixed(1)}%`;
 }
+
+export type ListPriceKind = "wholesale" | "retail";
+
+/** Saved ledger $/kg (wholesale or retail list line). */
+export function ledgerListPricePerKg(
+  row: ListMemberRow,
+  listKind: ListPriceKind,
+): number | null {
+  const stored =
+    listKind === "wholesale"
+      ? row.latest_wholesale_price
+      : row.latest_retail_price;
+  if (stored == null || !Number.isFinite(stored) || stored <= 0) return null;
+  return stored;
+}
+
+/**
+ * $/kg for LCOG% display and sort. Ledger price is truth; pass editResolvedPerKg
+ * only while actively drafting a new price in Edit mode.
+ */
+export function pricePerKgForLcog(
+  row: ListMemberRow,
+  listKind: ListPriceKind,
+  editResolvedPerKg?: number | null,
+): number | null {
+  if (
+    editResolvedPerKg != null &&
+    Number.isFinite(editResolvedPerKg) &&
+    editResolvedPerKg > 0
+  ) {
+    return editResolvedPerKg;
+  }
+  return ledgerListPricePerKg(row, listKind);
+}
+
+export type ListPriceInputMode = "price" | "lcog";
+
+/** Parse LCOG% edit field (optional trailing %). */
+export function parseLcogPercentInput(raw: string): number | null {
+  const trimmed = raw.trim().replace(/%$/, "").trim();
+  if (trimmed === "" || trimmed === ".") return null;
+  const n = parseFloat(trimmed);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+/** Inverse of lcogPercentValue: target LCOG% → stored $/kg. */
+export function storedPerKgFromLcogPercent(
+  lcogPercent: number,
+  breakdown: CostBreakdown | undefined,
+): number | null {
+  if (lcogPercent <= 0 || !breakdown?.total_cost_per_gram) return null;
+  return (breakdown.total_cost_per_gram * 100000) / lcogPercent;
+}
+
+export function lcogPercentInputDisplay(
+  breakdown: CostBreakdown | undefined,
+  storedPerKg: number | null | undefined,
+): string {
+  const pct = lcogPercentValue(breakdown, storedPerKg);
+  if (pct == null) return "";
+  return pct.toFixed(1);
+}
+
+export function resolveListPriceStoredPerKg(params: {
+  mode: ListPriceInputMode;
+  priceRaw: string;
+  lcogRaw: string;
+  row: ListMemberRow;
+  breakdown: CostBreakdown | undefined;
+  eachMode: boolean;
+  menuPricingEach?: boolean;
+}): number | null {
+  const {
+    mode,
+    priceRaw,
+    lcogRaw,
+    row,
+    breakdown,
+    eachMode,
+    menuPricingEach = false,
+  } = params;
+  if (mode === "lcog") {
+    const lcog = parseLcogPercentInput(lcogRaw);
+    if (lcog == null) return null;
+    return storedPerKgFromLcogPercent(lcog, breakdown);
+  }
+  return listPriceInputToStoredPerKg(
+    priceRaw,
+    row,
+    eachMode,
+    menuPricingEach,
+  );
+}

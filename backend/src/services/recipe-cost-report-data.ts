@@ -225,6 +225,14 @@ export async function getMenuCostListMode(
 
 export type CostBasis = "corporate" | "wholesale";
 
+export type PriceInputMode = "price" | "lcog";
+
+export function normalizePriceInputMode(
+  raw: string | null | undefined,
+): PriceInputMode {
+  return raw === "lcog" ? "lcog" : "price";
+}
+
 export type ListMemberRow = {
   item_id: string;
   name: string;
@@ -245,6 +253,8 @@ export type ListMemberRow = {
   wholesale_cost_basis_selectable?: boolean;
   /** Set when item is indirectly deprecated (affected by ingredient); direct members are removed. */
   deprecation_reason?: "indirect" | null;
+  /** How price vs LCOG% is entered for this row on the list. */
+  price_input_mode?: PriceInputMode;
 };
 
 export function defaultCostBasisForMenuMember(
@@ -467,16 +477,21 @@ export async function loadMenuListMemberRows(
 
   const { data: memberRows, error: memErr } = await supabase
     .from("menu_cost_list_members")
-    .select("item_id, cost_basis")
+    .select("item_id, cost_basis, price_input_mode")
     .eq("menu_cost_list_id", menuCostListId)
     .in("item_id", activeIds);
   if (memErr) throw new Error(memErr.message);
 
   const costBasisByItem = new Map<string, CostBasis>();
+  const priceInputModeByItem = new Map<string, PriceInputMode>();
   for (const row of memberRows ?? []) {
     const basis =
       row.cost_basis === "wholesale" ? "wholesale" : "corporate";
     costBasisByItem.set(row.item_id, basis);
+    priceInputModeByItem.set(
+      row.item_id,
+      normalizePriceInputMode(row.price_input_mode),
+    );
   }
 
   const retailLatest = await fetchLatestRetailPrices(menuCostListId, activeIds);
@@ -524,6 +539,7 @@ export async function loadMenuListMemberRows(
     return {
       ...row,
       cost_basis,
+      price_input_mode: priceInputModeByItem.get(row.item_id) ?? "price",
       on_linked_wholesale_list: onWl,
       linked_wholesale_price: linkedPrice,
       wholesale_cost_basis_selectable: selectable,
@@ -561,10 +577,34 @@ export async function loadListMemberRows(
     listKind === "wholesale"
       ? await fetchLatestWholesalePrices(listId, activeIds)
       : await fetchLatestRetailPrices(listId, activeIds);
-  return enrichMemberRows(
+  const rows = await enrichMemberRows(
     tenantId,
     activeIds,
     latest,
     listKind === "wholesale" ? "wholesale" : "retail",
   );
+
+  if (listKind !== "wholesale" || activeIds.length === 0) {
+    return rows;
+  }
+
+  const { data: memberRows, error: memErr } = await supabase
+    .from("wholesale_list_members")
+    .select("item_id, price_input_mode")
+    .eq("wholesale_list_id", listId)
+    .in("item_id", activeIds);
+  if (memErr) throw new Error(memErr.message);
+
+  const priceInputModeByItem = new Map<string, PriceInputMode>();
+  for (const row of memberRows ?? []) {
+    priceInputModeByItem.set(
+      row.item_id,
+      normalizePriceInputMode(row.price_input_mode),
+    );
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    price_input_mode: priceInputModeByItem.get(row.item_id) ?? "price",
+  }));
 }

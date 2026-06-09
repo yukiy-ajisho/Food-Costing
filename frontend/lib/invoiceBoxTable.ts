@@ -1,4 +1,5 @@
 import type { BoxInvoiceSummary } from "@/lib/invoicing";
+import { invoiceDateCalendarYmd } from "@/lib/invoicingDateTime";
 
 export type InvoiceBoxSortKey =
   | "date"
@@ -112,7 +113,11 @@ export function filterInvoiceBoxRows(
 ): BoxInvoiceSummary[] {
   return rows.filter((row) => {
     if (
-      !matchesDateRange(row.invoice_date, filters.dateMin, filters.dateMax)
+      !matchesDateRange(
+        invoiceDateCalendarYmd(row.invoice_date),
+        filters.dateMin,
+        filters.dateMax,
+      )
     ) {
       return false;
     }

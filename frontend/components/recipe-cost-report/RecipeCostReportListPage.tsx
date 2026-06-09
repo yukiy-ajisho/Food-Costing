@@ -25,11 +25,17 @@ import {
   convertPriceDraftMapOnEachToggle,
   formatCostDisplay,
   formatListPriceDisplay,
+  lcogPercentInputDisplay,
   listPriceInputDisplay,
-  listPriceInputToStoredPerKg,
   lcogPercent,
   lcogPercentValue,
+  parseLcogPercentInput,
+  pricePerKgForLcog,
+  resolveListPriceStoredPerKg,
+  storedPerKgFromLcogPercent,
+  type ListPriceInputMode,
 } from "@/lib/recipeCostReportCalc";
+import { PricingInputModeCell } from "./PricingInputModeCell";
 import {
   defaultCostBasisForMenuMember,
   effectiveCostBasis,
@@ -80,6 +86,8 @@ type PendingMemberRow = {
   localId: string;
   item_id: string;
   price: string;
+  lcog: string;
+  price_input_mode: ListPriceInputMode;
   cost_basis?: CostBasis;
 };
 
@@ -149,6 +157,18 @@ export function RecipeCostReportListPage({
   const [draftRetail, setDraftRetail] = useState<Map<string, string>>(
     new Map(),
   );
+  const [draftLcogWholesale, setDraftLcogWholesale] = useState<
+    Map<string, string>
+  >(new Map());
+  const [draftLcogRetail, setDraftLcogRetail] = useState<Map<string, string>>(
+    new Map(),
+  );
+  const [draftPriceInputMode, setDraftPriceInputMode] = useState<
+    Map<string, ListPriceInputMode>
+  >(new Map());
+  const [savedPriceInputModeByItem, setSavedPriceInputModeByItem] = useState<
+    Map<string, ListPriceInputMode>
+  >(new Map());
   /** Edit-mode drafts for corporate/wholesale; persisted on Save (not on radio change). */
   const [draftCostBasis, setDraftCostBasis] = useState<Map<string, CostBasis>>(
     new Map(),
@@ -202,6 +222,148 @@ export function RecipeCostReportListPage({
   );
 
   const menuPricingEach = pageMode === "menu";
+
+  const listPriceKind = pageMode === "wholesale" ? "wholesale" : "retail";
+
+  const priceColumnLabel: "Wholesale" | "Retail" =
+    pageMode === "wholesale" ? "Wholesale" : "Retail";
+
+  const getPriceInputMode = useCallback(
+    (itemId: string, row?: ListMemberRow): ListPriceInputMode =>
+      draftPriceInputMode.get(itemId) ??
+      savedPriceInputModeByItem.get(itemId) ??
+      row?.price_input_mode ??
+      "price",
+    [draftPriceInputMode, savedPriceInputModeByItem],
+  );
+
+  const getLcogDraftMap = useCallback(
+    () => (pageMode === "wholesale" ? draftLcogWholesale : draftLcogRetail),
+    [pageMode, draftLcogWholesale, draftLcogRetail],
+  );
+
+  const resolveMemberStoredPerKg = useCallback(
+    (
+      row: ListMemberRow,
+      breakdown: CostBreakdown | undefined,
+      priceDisplayRaw: string,
+      itemId: string,
+      modeOverride?: ListPriceInputMode,
+      lcogRawOverride?: string,
+    ): number | null => {
+      const mode = modeOverride ?? getPriceInputMode(itemId);
+      const lcogMap = getLcogDraftMap();
+      return resolveListPriceStoredPerKg({
+        mode,
+        priceRaw: priceDisplayRaw,
+        lcogRaw: lcogRawOverride ?? lcogMap.get(itemId) ?? "",
+        row,
+        breakdown,
+        eachMode,
+        menuPricingEach,
+      });
+    },
+    [getPriceInputMode, getLcogDraftMap, eachMode, menuPricingEach],
+  );
+
+  const syncPriceDraftFromStored = useCallback(
+    (
+      itemId: string,
+      row: ListMemberRow,
+      storedPerKg: number | null | undefined,
+    ) => {
+      if (storedPerKg == null) return;
+      const display = listPriceInputDisplay(
+        storedPerKg,
+        row,
+        eachMode,
+        menuPricingEach,
+      );
+      if (pageMode === "wholesale") {
+        setDraftWholesale((prev) => new Map(prev).set(itemId, display));
+      } else {
+        setDraftRetail((prev) => new Map(prev).set(itemId, display));
+      }
+    },
+    [pageMode, eachMode, menuPricingEach],
+  );
+
+  const setMemberPriceInputMode = useCallback(
+    (
+      itemId: string,
+      row: ListMemberRow,
+      breakdown: CostBreakdown | undefined,
+      priceDisplayRaw: string,
+      mode: ListPriceInputMode,
+    ) => {
+      const currentMode = getPriceInputMode(itemId, row);
+      const lcogMap = getLcogDraftMap();
+      const stored = resolveMemberStoredPerKg(
+        row,
+        breakdown,
+        priceDisplayRaw,
+        itemId,
+        currentMode,
+        lcogMap.get(itemId) ?? "",
+      );
+
+      setDraftPriceInputMode((prev) => new Map(prev).set(itemId, mode));
+
+      if (pageMode === "wholesale") {
+        setDraftLcogWholesale((prev) => {
+          const next = new Map(prev);
+          next.delete(itemId);
+          return next;
+        });
+      } else {
+        setDraftLcogRetail((prev) => {
+          const next = new Map(prev);
+          next.delete(itemId);
+          return next;
+        });
+      }
+
+      syncPriceDraftFromStored(itemId, row, stored);
+    },
+    [
+      pageMode,
+      getPriceInputMode,
+      getLcogDraftMap,
+      resolveMemberStoredPerKg,
+      syncPriceDraftFromStored,
+    ],
+  );
+
+  const updateMemberLcogDraft = useCallback(
+    (
+      itemId: string,
+      row: ListMemberRow,
+      breakdown: CostBreakdown | undefined,
+      lcogRaw: string,
+    ) => {
+      if (pageMode === "wholesale") {
+        setDraftLcogWholesale((prev) => new Map(prev).set(itemId, lcogRaw));
+      } else {
+        setDraftLcogRetail((prev) => new Map(prev).set(itemId, lcogRaw));
+      }
+      const lcog = parseLcogPercentInput(lcogRaw);
+      if (lcog == null) return;
+      const stored = storedPerKgFromLcogPercent(lcog, breakdown);
+      if (stored == null) return;
+      const display = listPriceInputDisplay(
+        stored,
+        row,
+        eachMode,
+        menuPricingEach,
+      );
+      if (pageMode === "wholesale") {
+        setDraftWholesale((prev) => new Map(prev).set(itemId, display));
+      } else {
+        setDraftRetail((prev) => new Map(prev).set(itemId, display));
+      }
+    },
+    [pageMode, eachMode, menuPricingEach],
+  );
 
   const costDisplayOptions = useMemo(
     () => ({ costUnit, eachMode, menuPricingEach }),
@@ -357,6 +519,11 @@ export function RecipeCostReportListPage({
           setSavedListName(list.name);
           setMembers(m);
           applyListThresholds(list.caution, list.over);
+          const modeMap = new Map<string, ListPriceInputMode>();
+          for (const row of m) {
+            modeMap.set(row.item_id, row.price_input_mode ?? "price");
+          }
+          setSavedPriceInputModeByItem(modeMap);
         } else {
           const { list, members: m } =
             await recipeCostReportAPI.getMenuCostList(listId);
@@ -378,9 +545,17 @@ export function RecipeCostReportListPage({
             );
           }
           setSavedCostBasisByItem(basisMap);
+          const modeMap = new Map<string, ListPriceInputMode>();
+          for (const row of m) {
+            modeMap.set(row.item_id, row.price_input_mode ?? "price");
+          }
+          setSavedPriceInputModeByItem(modeMap);
         }
         setDraftWholesale(new Map());
         setDraftRetail(new Map());
+        setDraftLcogWholesale(new Map());
+        setDraftLcogRetail(new Map());
+        setDraftPriceInputMode(new Map());
         setDraftCostBasis(new Map());
       } finally {
         setLoading(false);
@@ -541,27 +716,37 @@ export function RecipeCostReportListPage({
     const { key, ascending } = listSort;
     const dir = ascending ? 1 : -1;
 
-    const pricePerKgForLcog = (row: ListMemberRow): number | null => {
-      if (pageMode === "wholesale") {
-        const ws = draftWholesale.has(row.item_id)
-          ? draftWholesale.get(row.item_id)!
-          : listPriceInputDisplay(
-              row.latest_wholesale_price,
+    const pricePerKgForLcogSort = (row: ListMemberRow): number | null => {
+      const priceRaw =
+        pageMode === "wholesale"
+          ? draftWholesale.has(row.item_id)
+            ? draftWholesale.get(row.item_id)!
+            : listPriceInputDisplay(
+                row.latest_wholesale_price,
+                row,
+                eachMode,
+                menuPricingEach,
+              )
+          : draftRetail.has(row.item_id)
+            ? draftRetail.get(row.item_id)!
+            : listPriceInputDisplay(
+                row.latest_retail_price,
+                row,
+                eachMode,
+                menuPricingEach,
+              );
+      return pricePerKgForLcog(
+        row,
+        listPriceKind,
+        isEditMode
+          ? resolveMemberStoredPerKg(
               row,
-              eachMode,
-              menuPricingEach,
-            );
-        return listPriceInputToStoredPerKg(ws, row, eachMode, menuPricingEach);
-      }
-      const rt = draftRetail.has(row.item_id)
-        ? draftRetail.get(row.item_id)!
-        : listPriceInputDisplay(
-            row.latest_retail_price,
-            row,
-            eachMode,
-            menuPricingEach,
-          );
-      return listPriceInputToStoredPerKg(rt, row, eachMode, menuPricingEach);
+              costs[row.item_id],
+              priceRaw,
+              row.item_id,
+            )
+          : undefined,
+      );
     };
 
     return [...filteredMembers].sort((a, b) => {
@@ -572,8 +757,8 @@ export function RecipeCostReportListPage({
         if (cmp !== 0) return dir * cmp;
         return a.item_id.localeCompare(b.item_id);
       }
-      const aVal = lcogPercentValue(costs[a.item_id], pricePerKgForLcog(a));
-      const bVal = lcogPercentValue(costs[b.item_id], pricePerKgForLcog(b));
+      const aVal = lcogPercentValue(costs[a.item_id], pricePerKgForLcogSort(a));
+      const bVal = lcogPercentValue(costs[b.item_id], pricePerKgForLcogSort(b));
       if (aVal === null && bVal === null) {
         return a.name
           .trim()
@@ -594,8 +779,15 @@ export function RecipeCostReportListPage({
     pageMode,
     draftWholesale,
     draftRetail,
+    draftLcogWholesale,
+    draftLcogRetail,
+    draftPriceInputMode,
+    savedPriceInputModeByItem,
     eachMode,
     menuPricingEach,
+    isEditMode,
+    listPriceKind,
+    resolveMemberStoredPerKg,
   ]);
 
   const printSortedMembers = useMemo(() => {
@@ -661,30 +853,62 @@ export function RecipeCostReportListPage({
       membersRef.current.map((m) => [m.item_id, m] as const),
     );
 
-    setDraftWholesale((drafts) =>
-      convertPriceDraftMapOnEachToggle(
-        drafts,
+    const filterPriceModeDrafts = (
+      drafts: Map<string, string>,
+    ): Map<string, string> => {
+      const filtered = new Map<string, string>();
+      for (const [itemId, raw] of drafts) {
+        if (
+          (draftPriceInputMode.get(itemId) ??
+            savedPriceInputModeByItem.get(itemId) ??
+            "price") === "price"
+        ) {
+          filtered.set(itemId, raw);
+        }
+      }
+      return filtered;
+    };
+
+    setDraftWholesale((drafts) => {
+      const converted = convertPriceDraftMapOnEachToggle(
+        filterPriceModeDrafts(drafts),
         memberById,
         prev,
         eachMode,
         menuPricingEach,
-      ),
-    );
-    setDraftRetail((drafts) =>
-      convertPriceDraftMapOnEachToggle(
-        drafts,
+      );
+      const next = new Map(drafts);
+      for (const [itemId, raw] of converted) {
+        next.set(itemId, raw);
+      }
+      return next;
+    });
+    setDraftRetail((drafts) => {
+      const converted = convertPriceDraftMapOnEachToggle(
+        filterPriceModeDrafts(drafts),
         memberById,
         prev,
         eachMode,
         menuPricingEach,
-      ),
-    );
+      );
+      const next = new Map(drafts);
+      for (const [itemId, raw] of converted) {
+        next.set(itemId, raw);
+      }
+      return next;
+    });
 
     setPendingNewRows((rows) => {
       if (rows.length === 0) return rows;
       let changed = false;
       const next = rows.map((p) => {
-        if (!p.price.trim() || !p.item_id) return p;
+        if (
+          p.price_input_mode !== "price" ||
+          !p.price.trim() ||
+          !p.item_id
+        ) {
+          return p;
+        }
         const c = candidateById.get(p.item_id);
         if (!c) return p;
         const row = memberRowFromCandidate(p.item_id, c);
@@ -701,7 +925,13 @@ export function RecipeCostReportListPage({
       });
       return changed ? next : rows;
     });
-  }, [eachMode, candidateById, menuPricingEach]);
+  }, [
+    eachMode,
+    candidateById,
+    menuPricingEach,
+    draftPriceInputMode,
+    savedPriceInputModeByItem,
+  ]);
 
   const hasDraftPrices = useMemo(() => {
     const drafts = pageMode === "wholesale" ? draftWholesale : draftRetail;
@@ -709,8 +939,20 @@ export function RecipeCostReportListPage({
       const n = parseFloat(v);
       if (v !== "" && Number.isFinite(n) && n >= 0) return true;
     }
+    const lcogDrafts =
+      pageMode === "wholesale" ? draftLcogWholesale : draftLcogRetail;
+    for (const [, v] of lcogDrafts) {
+      if (parseLcogPercentInput(v) != null) return true;
+    }
     return false;
-  }, [pageMode, draftWholesale, draftRetail]);
+  }, [pageMode, draftWholesale, draftRetail, draftLcogWholesale, draftLcogRetail]);
+
+  const hasPriceInputModeChanges = useMemo(() => {
+    for (const [itemId, mode] of draftPriceInputMode) {
+      if (savedPriceInputModeByItem.get(itemId) !== mode) return true;
+    }
+    return false;
+  }, [draftPriceInputMode, savedPriceInputModeByItem]);
 
   const effectiveThresholds = useMemo(
     () => getEffectiveLcogThresholds(draftCaution, draftOver),
@@ -730,7 +972,7 @@ export function RecipeCostReportListPage({
 
   const showThresholdColumn = thresholdColumnVisible;
 
-  const tableColSpan = showThresholdColumn ? 7 : 6;
+  const tableColSpan = showThresholdColumn ? 8 : 7;
 
   const draftThresholdsEdited = useMemo(
     () =>
@@ -794,7 +1036,8 @@ export function RecipeCostReportListPage({
       hasMetaChanges ||
       hasPendingAdds ||
       hasPendingRemovals ||
-      hasCostBasisChanges);
+      hasCostBasisChanges ||
+      hasPriceInputModeChanges);
 
   const handleEditClick = () => {
     setPendingRemovals(new Set());
@@ -809,6 +1052,9 @@ export function RecipeCostReportListPage({
     setDraftOver(thresholdToDraftString(savedOver));
     setDraftWholesale(new Map());
     setDraftRetail(new Map());
+    setDraftLcogWholesale(new Map());
+    setDraftLcogRetail(new Map());
+    setDraftPriceInputMode(new Map());
     setDraftCostBasis(new Map());
     setPendingNewRows([]);
     setPendingRemovals(new Set());
@@ -831,6 +1077,21 @@ export function RecipeCostReportListPage({
       return next;
     });
     setDraftRetail((prev) => {
+      const next = new Map(prev);
+      next.delete(itemId);
+      return next;
+    });
+    setDraftLcogWholesale((prev) => {
+      const next = new Map(prev);
+      next.delete(itemId);
+      return next;
+    });
+    setDraftLcogRetail((prev) => {
+      const next = new Map(prev);
+      next.delete(itemId);
+      return next;
+    });
+    setDraftPriceInputMode((prev) => {
       const next = new Map(prev);
       next.delete(itemId);
       return next;
@@ -865,7 +1126,13 @@ export function RecipeCostReportListPage({
 
   const handleAddPendingRow = () => {
     setPendingNewRows((prev) => [
-      { localId: newPendingLocalId(), item_id: "", price: "" },
+      {
+        localId: newPendingLocalId(),
+        item_id: "",
+        price: "",
+        lcog: "",
+        price_input_mode: "price",
+      },
       ...prev,
     ]);
   };
@@ -1017,7 +1284,77 @@ export function RecipeCostReportListPage({
 
   const updatePendingPrice = (localId: string, price: string) => {
     setPendingNewRows((prev) =>
-      prev.map((p) => (p.localId === localId ? { ...p, price } : p)),
+      prev.map((p) =>
+        p.localId === localId ? { ...p, price, lcog: "" } : p,
+      ),
+    );
+  };
+
+  const updatePendingLcog = (
+    localId: string,
+    lcog: string,
+    pendingRow: ListMemberRow,
+    breakdown: CostBreakdown | undefined,
+  ) => {
+    setPendingNewRows((prev) =>
+      prev.map((p) => {
+        if (p.localId !== localId) return p;
+        const next = { ...p, lcog };
+        const parsed = parseLcogPercentInput(lcog);
+        if (parsed == null) return next;
+        const stored = storedPerKgFromLcogPercent(parsed, breakdown);
+        if (stored == null) return next;
+        return {
+          ...next,
+          price: listPriceInputDisplay(
+            stored,
+            pendingRow,
+            eachMode,
+            menuPricingEach,
+          ),
+        };
+      }),
+    );
+  };
+
+  const updatePendingInputMode = (
+    localId: string,
+    mode: ListPriceInputMode,
+    pendingRow: ListMemberRow | null,
+    breakdown: CostBreakdown | undefined,
+  ) => {
+    setPendingNewRows((prev) =>
+      prev.map((p) => {
+        if (p.localId !== localId) return p;
+        const stored =
+          pendingRow &&
+          (p.price !== "" || p.lcog !== "")
+            ? resolveListPriceStoredPerKg({
+                mode: p.price_input_mode,
+                priceRaw: p.price,
+                lcogRaw: p.lcog,
+                row: pendingRow,
+                breakdown,
+                eachMode,
+                menuPricingEach,
+              })
+            : null;
+        const display =
+          pendingRow && stored != null
+            ? listPriceInputDisplay(
+                stored,
+                pendingRow,
+                eachMode,
+                menuPricingEach,
+              )
+            : p.price;
+        return {
+          ...p,
+          price_input_mode: mode,
+          lcog: mode === "lcog" ? "" : p.lcog,
+          price: display,
+        };
+      }),
     );
   };
 
@@ -1118,19 +1455,24 @@ export function RecipeCostReportListPage({
       const c = candidateById.get(row.item_id);
       const pendingMember = c ? memberRowFromCandidate(row.item_id, c) : null;
       if (!pendingMember) continue;
-      const stored = listPriceInputToStoredPerKg(
-        row.price,
-        pendingMember,
+      const stored = resolveListPriceStoredPerKg({
+        mode: row.price_input_mode,
+        priceRaw: row.price,
+        lcogRaw: row.lcog,
+        row: pendingMember,
+        breakdown: costs[row.item_id],
         eachMode,
         menuPricingEach,
-      );
+      });
       if (stored == null) {
         const name = c?.name ?? "Item";
-        alert(
-          `Enter ${
-            pageMode === "wholesale" ? "wholesale" : "retail"
-          } price for "${name}" before saving.`,
-        );
+        const field =
+          row.price_input_mode === "lcog"
+            ? "LCOG%"
+            : pageMode === "wholesale"
+              ? "wholesale"
+              : "retail";
+        alert(`Enter ${field} for "${name}" before saving.`);
         return;
       }
     }
@@ -1204,26 +1546,49 @@ export function RecipeCostReportListPage({
             row.item_id,
           );
           const c = candidateById.get(row.item_id)!;
-          const n = listPriceInputToStoredPerKg(
-            row.price,
-            memberRowFromCandidate(row.item_id, c),
+          const memberRow = memberRowFromCandidate(row.item_id, c);
+          const n = resolveListPriceStoredPerKg({
+            mode: row.price_input_mode,
+            priceRaw: row.price,
+            lcogRaw: row.lcog,
+            row: memberRow,
+            breakdown: costs[row.item_id],
             eachMode,
             menuPricingEach,
-          )!;
+          })!;
           await recipeCostReportAPI.saveWholesalePrice(
             selectedListId,
             row.item_id,
             n,
           );
+          if (row.price_input_mode !== "price") {
+            await recipeCostReportAPI.updateWholesaleMemberPriceInputMode(
+              selectedListId,
+              row.item_id,
+              row.price_input_mode,
+            );
+          }
         }
-        for (const [itemId, raw] of draftWholesale) {
+        const wholesalePriceItemIds = new Set([
+          ...draftWholesale.keys(),
+          ...draftLcogWholesale.keys(),
+        ]);
+        for (const itemId of wholesalePriceItemIds) {
           const memberRow = members.find((m) => m.item_id === itemId);
           if (!memberRow) continue;
-          const n = listPriceInputToStoredPerKg(
-            raw,
+          const raw =
+            draftWholesale.get(itemId) ??
+            listPriceInputDisplay(
+              memberRow.latest_wholesale_price,
+              memberRow,
+              eachMode,
+              menuPricingEach,
+            );
+          const n = resolveMemberStoredPerKg(
             memberRow,
-            eachMode,
-            menuPricingEach,
+            costs[itemId],
+            raw,
+            itemId,
           );
           if (n == null) continue;
           await recipeCostReportAPI.saveWholesalePrice(
@@ -1232,6 +1597,15 @@ export function RecipeCostReportListPage({
             n,
           );
         }
+        for (const [itemId, mode] of draftPriceInputMode) {
+          if (savedPriceInputModeByItem.get(itemId) === mode) continue;
+          await recipeCostReportAPI.updateWholesaleMemberPriceInputMode(
+            selectedListId,
+            itemId,
+            mode,
+          );
+        }
+        setDraftPriceInputMode(new Map());
       } else {
         const menuPatch: Partial<{
           name: string;
@@ -1310,30 +1684,62 @@ export function RecipeCostReportListPage({
             );
           }
           const c = candidateById.get(row.item_id)!;
-          const n = listPriceInputToStoredPerKg(
-            row.price,
-            memberRowFromCandidate(row.item_id, c),
+          const memberRow = memberRowFromCandidate(row.item_id, c);
+          const n = resolveListPriceStoredPerKg({
+            mode: row.price_input_mode,
+            priceRaw: row.price,
+            lcogRaw: row.lcog,
+            row: memberRow,
+            breakdown: costs[row.item_id],
             eachMode,
             menuPricingEach,
-          )!;
+          })!;
           await recipeCostReportAPI.saveRetailPrice(
             selectedListId,
             row.item_id,
             n,
           );
+          if (row.price_input_mode !== "price") {
+            await recipeCostReportAPI.updateMenuMemberPriceInputMode(
+              selectedListId,
+              row.item_id,
+              row.price_input_mode,
+            );
+          }
         }
-        for (const [itemId, raw] of draftRetail) {
+        const retailPriceItemIds = new Set([
+          ...draftRetail.keys(),
+          ...draftLcogRetail.keys(),
+        ]);
+        for (const itemId of retailPriceItemIds) {
           const memberRow = members.find((m) => m.item_id === itemId);
           if (!memberRow) continue;
-          const n = listPriceInputToStoredPerKg(
-            raw,
+          const raw =
+            draftRetail.get(itemId) ??
+            listPriceInputDisplay(
+              memberRow.latest_retail_price,
+              memberRow,
+              eachMode,
+              menuPricingEach,
+            );
+          const n = resolveMemberStoredPerKg(
             memberRow,
-            eachMode,
-            menuPricingEach,
+            costs[itemId],
+            raw,
+            itemId,
           );
           if (n == null) continue;
           await recipeCostReportAPI.saveRetailPrice(selectedListId, itemId, n);
         }
+        for (const [itemId, mode] of draftPriceInputMode) {
+          if (savedPriceInputModeByItem.get(itemId) === mode) continue;
+          await recipeCostReportAPI.updateMenuMemberPriceInputMode(
+            selectedListId,
+            itemId,
+            mode,
+          );
+        }
+        setDraftPriceInputMode(new Map());
         for (const [itemId, basis] of draftCostBasis) {
           if (savedCostBasisByItem.get(itemId) === basis) continue;
           await recipeCostReportAPI.updateMenuMemberCostBasis(
@@ -1849,7 +2255,11 @@ export function RecipeCostReportListPage({
                       </div>
                     </div>
                   </th>
-                  <th className={`${thCls} text-left w-40`}>
+                  <th
+                    className={`${thCls} w-[8.5rem] min-w-[8.5rem] px-2`}
+                    aria-label="Price or LCOG input mode"
+                  />
+                  <th className={`${thCls} text-left w-36`}>
                     {pageMode === "wholesale" ? (
                       "Wholesale"
                     ) : (
@@ -1861,7 +2271,7 @@ export function RecipeCostReportListPage({
                       </HeaderHoverHint>
                     )}
                   </th>
-                  <th className={`${thCls} text-left w-24`}>
+                  <th className={`${thCls} text-left w-28`}>
                     {renderListSortHeader("lcog", "LCOG%", LCOG_HEADER_TOOLTIP)}
                   </th>
                   {showThresholdColumn ? (
@@ -1921,14 +2331,24 @@ export function RecipeCostReportListPage({
                     ? costs[pending.item_id]
                     : undefined;
                   const pendingPriceStored =
-                    pendingRow && pending.price !== ""
-                      ? listPriceInputToStoredPerKg(
-                          pending.price,
-                          pendingRow,
+                    pendingRow &&
+                    (pending.price !== "" || pending.lcog !== "")
+                      ? resolveListPriceStoredPerKg({
+                          mode: pending.price_input_mode,
+                          priceRaw: pending.price,
+                          lcogRaw: pending.lcog,
+                          row: pendingRow,
+                          breakdown: pendingBd,
                           eachMode,
                           menuPricingEach,
-                        )
+                        })
                       : null;
+                  const pendingLcogDisplay =
+                    pendingRow && pending.price_input_mode === "lcog"
+                      ? pending.lcog !== ""
+                        ? pending.lcog
+                        : lcogPercentInputDisplay(pendingBd, pendingPriceStored)
+                      : "";
                   const rowOptions = addableCandidatesForPendingRow(
                     pending.localId,
                     pending.item_id,
@@ -2011,29 +2431,84 @@ export function RecipeCostReportListPage({
                           "—"
                         )}
                       </td>
+                      <td className="px-2 py-2 align-top">
+                        {isEditMode ? (
+                          <PricingInputModeCell
+                            groupName={`pending-mode-${pending.localId}`}
+                            mode={pending.price_input_mode}
+                            priceLabel={priceColumnLabel}
+                            isDark={isDark}
+                            disabled={!pending.item_id}
+                            onChange={(mode) =>
+                              updatePendingInputMode(
+                                pending.localId,
+                                mode,
+                                pendingRow,
+                                pendingBd,
+                              )
+                            }
+                          />
+                        ) : null}
+                      </td>
                       <td className="px-4 py-2 text-left tabular-nums">
-                        <input
-                          type="number"
-                          step="any"
-                          min="0"
-                          placeholder="0.00"
-                          disabled={!pending.item_id}
-                          aria-label={`${
-                            pageMode === "wholesale" ? "Wholesale" : "Retail"
-                          } price`}
-                          className={`${inputCls} w-full max-w-34 text-left tabular-nums disabled:opacity-50`}
-                          value={pending.price}
-                          onChange={(e) =>
-                            updatePendingPrice(pending.localId, e.target.value)
-                          }
-                        />
+                        {pending.price_input_mode === "price" ? (
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="0.00"
+                            disabled={!pending.item_id}
+                            aria-label={`${priceColumnLabel} price`}
+                            className={`${inputCls} w-full max-w-32 text-left tabular-nums disabled:opacity-50`}
+                            value={pending.price}
+                            onChange={(e) =>
+                              updatePendingPrice(
+                                pending.localId,
+                                e.target.value,
+                              )
+                            }
+                          />
+                        ) : (
+                          <span className={textMain}>
+                            {pendingRow && pendingPriceStored != null
+                              ? formatListPriceDisplay(
+                                  pendingPriceStored,
+                                  pendingRow,
+                                  eachMode,
+                                  menuPricingEach,
+                                )
+                              : "—"}
+                          </span>
+                        )}
                       </td>
                       <td
                         className={`px-4 py-2 text-left tabular-nums font-medium ${textMain}`}
                       >
-                        {pendingRow
-                          ? lcogPercent(pendingBd, pendingPriceStored)
-                          : "—"}
+                        {pending.price_input_mode === "lcog" ? (
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="0.0"
+                            disabled={!pending.item_id}
+                            aria-label="LCOG percent"
+                            className={`${inputCls} w-full max-w-32 text-left tabular-nums disabled:opacity-50`}
+                            value={pendingLcogDisplay}
+                            onChange={(e) =>
+                              pendingRow &&
+                              updatePendingLcog(
+                                pending.localId,
+                                e.target.value,
+                                pendingRow,
+                                pendingBd,
+                              )
+                            }
+                          />
+                        ) : pendingRow ? (
+                          lcogPercent(pendingBd, pendingPriceStored)
+                        ) : (
+                          "—"
+                        )}
                       </td>
                       {showThresholdColumn ? (
                         <LcogThresholdDataCell
@@ -2087,24 +2562,43 @@ export function RecipeCostReportListPage({
                         eachMode,
                         menuPricingEach,
                       );
-                  const priceForLcog =
-                    pageMode === "wholesale"
-                      ? listPriceInputToStoredPerKg(
-                          ws,
+                  const priceDisplayRaw =
+                    pageMode === "wholesale" ? ws : rt;
+                  const rowInputMode = getPriceInputMode(row.item_id, row);
+                  const lcogDraftMap = getLcogDraftMap();
+                  const savedMode =
+                    savedPriceInputModeByItem.get(row.item_id) ??
+                    row.price_input_mode ??
+                    "price";
+                  const draftedMode = draftPriceInputMode.get(row.item_id);
+                  const modeDrafted =
+                    draftedMode != null && draftedMode !== savedMode;
+                  const priceForLcog = pricePerKgForLcog(
+                    row,
+                    listPriceKind,
+                    isEditMode
+                      ? resolveMemberStoredPerKg(
                           row,
-                          eachMode,
-                          menuPricingEach,
+                          bd,
+                          priceDisplayRaw,
+                          row.item_id,
                         )
-                      : listPriceInputToStoredPerKg(
-                          rt,
-                          row,
-                          eachMode,
-                          menuPricingEach,
-                        );
+                      : undefined,
+                  );
+                  const lcogDisplayRaw =
+                    rowInputMode === "lcog"
+                      ? lcogDraftMap.has(row.item_id)
+                        ? lcogDraftMap.get(row.item_id)!
+                        : lcogPercentInputDisplay(bd, priceForLcog)
+                      : "";
                   const rowDrafted =
                     pageMode === "wholesale"
-                      ? draftWholesale.has(row.item_id)
+                      ? draftWholesale.has(row.item_id) ||
+                        draftLcogWholesale.has(row.item_id) ||
+                        modeDrafted
                       : draftRetail.has(row.item_id) ||
+                        draftLcogRetail.has(row.item_id) ||
+                        modeDrafted ||
                         (draftCostBasis.has(row.item_id) &&
                           draftCostBasis.get(row.item_id) !==
                             savedCostBasisByItem.get(row.item_id));
@@ -2156,17 +2650,34 @@ export function RecipeCostReportListPage({
                           formatCostDisplay(row, bd, costDisplayOptions)
                         )}
                       </td>
-                      <td className="px-4 py-2 text-left tabular-nums">
+                      <td className="px-2 py-2 align-top">
                         {isEditMode ? (
+                          <PricingInputModeCell
+                            groupName={`member-mode-${row.item_id}`}
+                            mode={rowInputMode}
+                            priceLabel={priceColumnLabel}
+                            isDark={isDark}
+                            onChange={(mode) =>
+                              setMemberPriceInputMode(
+                                row.item_id,
+                                row,
+                                bd,
+                                priceDisplayRaw,
+                                mode,
+                              )
+                            }
+                          />
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-2 text-left tabular-nums">
+                        {isEditMode && rowInputMode === "price" ? (
                           <input
                             type="number"
                             step="any"
                             min="0"
-                            aria-label={`${
-                              pageMode === "wholesale" ? "Wholesale" : "Retail"
-                            } for ${row.name}`}
-                            className={`${inputCls} w-full max-w-34 text-left tabular-nums`}
-                            value={pageMode === "wholesale" ? ws : rt}
+                            aria-label={`${priceColumnLabel} for ${row.name}`}
+                            className={`${inputCls} w-full max-w-32 text-left tabular-nums`}
+                            value={priceDisplayRaw}
                             onChange={(e) => {
                               const v = e.target.value;
                               if (pageMode === "wholesale") {
@@ -2175,10 +2686,20 @@ export function RecipeCostReportListPage({
                                   n.set(row.item_id, v);
                                   return n;
                                 });
+                                setDraftLcogWholesale((prev) => {
+                                  const n = new Map(prev);
+                                  n.delete(row.item_id);
+                                  return n;
+                                });
                               } else {
                                 setDraftRetail((prev) => {
                                   const n = new Map(prev);
                                   n.set(row.item_id, v);
+                                  return n;
+                                });
+                                setDraftLcogRetail((prev) => {
+                                  const n = new Map(prev);
+                                  n.delete(row.item_id);
                                   return n;
                                 });
                               }
@@ -2186,26 +2707,55 @@ export function RecipeCostReportListPage({
                           />
                         ) : (
                           <span className={textMain}>
-                            {pageMode === "wholesale"
-                              ? formatListPriceDisplay(
-                                  row.latest_wholesale_price,
-                                  row,
-                                  eachMode,
-                                  menuPricingEach,
-                                )
-                              : formatListPriceDisplay(
-                                  row.latest_retail_price,
-                                  row,
-                                  eachMode,
-                                  menuPricingEach,
-                                )}
+                            {isEditMode && rowInputMode === "lcog"
+                              ? priceForLcog != null
+                                ? formatListPriceDisplay(
+                                    priceForLcog,
+                                    row,
+                                    eachMode,
+                                    menuPricingEach,
+                                  )
+                                : "—"
+                              : pageMode === "wholesale"
+                                ? formatListPriceDisplay(
+                                    row.latest_wholesale_price,
+                                    row,
+                                    eachMode,
+                                    menuPricingEach,
+                                  )
+                                : formatListPriceDisplay(
+                                    row.latest_retail_price,
+                                    row,
+                                    eachMode,
+                                    menuPricingEach,
+                                  )}
                           </span>
                         )}
                       </td>
                       <td
                         className={`px-4 py-2 text-left tabular-nums font-medium ${textMain}`}
                       >
-                        {lcogPercent(bd, priceForLcog)}
+                        {isEditMode && rowInputMode === "lcog" ? (
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="0.0"
+                            aria-label={`LCOG% for ${row.name}`}
+                            className={`${inputCls} w-full max-w-32 text-left tabular-nums`}
+                            value={lcogDisplayRaw}
+                            onChange={(e) =>
+                              updateMemberLcogDraft(
+                                row.item_id,
+                                row,
+                                bd,
+                                e.target.value,
+                              )
+                            }
+                          />
+                        ) : (
+                          lcogPercent(bd, priceForLcog)
+                        )}
                       </td>
                       {showThresholdColumn ? (
                         <LcogThresholdDataCell

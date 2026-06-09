@@ -9,6 +9,8 @@ export type CostBreakdown = {
 
 export type CostBasis = "corporate" | "wholesale";
 
+export type PriceInputMode = "price" | "lcog";
+
 export type ListMemberRow = {
   item_id: string;
   name: string;
@@ -24,6 +26,7 @@ export type ListMemberRow = {
   linked_wholesale_price?: number | null;
   wholesale_cost_basis_selectable?: boolean;
   deprecation_reason?: "indirect" | null;
+  price_input_mode?: PriceInputMode;
 };
 
 export type RecipeCostListThresholds = {
@@ -125,6 +128,15 @@ export const recipeCostReportAPI = {
     apiRequest(`/recipe-cost-report/wholesale-lists/${listId}/members/${itemId}`, {
       method: "DELETE",
     }),
+  updateWholesaleMemberPriceInputMode: (
+    listId: string,
+    itemId: string,
+    price_input_mode: PriceInputMode,
+  ) =>
+    apiRequest<{ ok: true; price_input_mode: PriceInputMode }>(
+      `/recipe-cost-report/wholesale-lists/${listId}/members/${itemId}/price-input-mode`,
+      { method: "PATCH", body: JSON.stringify({ price_input_mode }) },
+    ),
   saveWholesalePrice: (listId: string, item_id: string, wholesale_price: number) =>
     apiRequest(`/recipe-cost-report/wholesale-lists/${listId}/wholesale-prices`, {
       method: "POST",
@@ -238,6 +250,15 @@ export const recipeCostReportAPI = {
     apiRequest<{ ok: true; cost_basis: CostBasis }>(
       `/recipe-cost-report/menu-cost-lists/${listId}/members/${itemId}/cost-basis`,
       { method: "PATCH", body: JSON.stringify({ cost_basis }) },
+    ),
+  updateMenuMemberPriceInputMode: (
+    listId: string,
+    itemId: string,
+    price_input_mode: PriceInputMode,
+  ) =>
+    apiRequest<{ ok: true; price_input_mode: PriceInputMode }>(
+      `/recipe-cost-report/menu-cost-lists/${listId}/members/${itemId}/price-input-mode`,
+      { method: "PATCH", body: JSON.stringify({ price_input_mode }) },
     ),
 
   listPrintPresets: (reportType: PrintReportType) =>

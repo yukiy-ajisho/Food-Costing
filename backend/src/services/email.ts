@@ -159,7 +159,7 @@ export async function sendInvoiceEmail(
 
   const resend = getResendClient();
 
-  const subject = `Invoice ${invoiceNumber} from ${deliverySiteName}`;
+  const subject = `Invoice ${invoiceNumber} for ${deliverySiteName}`;
   const html = `
     <p>Please find attached invoice <strong>${invoiceNumber}</strong>.</p>
     <p>Invoice date: ${invoiceDate}<br/>

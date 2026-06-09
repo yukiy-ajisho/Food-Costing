@@ -7,7 +7,13 @@ import type {
   InvoicingAccount,
   InvoicingItemCandidate,
 } from "@/lib/invoicing";
+import { recipeCostReportAPI } from "@/lib/recipeCostReport";
 import { ItemKindBadge } from "@/components/recipe-cost-report/ItemKindBadge";
+
+type WholesaleListOption = {
+  id: string;
+  name: string;
+};
 
 type Props = {
   isDark: boolean;
@@ -20,6 +26,7 @@ type Props = {
     name: string;
     account_id: string;
     delivery_site_id: string;
+    wholesale_list_id: string;
     item_ids: string[];
   }) => void;
 };
@@ -36,14 +43,79 @@ export function CreateInvoicingListModal({
   const [name, setName] = useState("");
   const [accountId, setAccountId] = useState(selectedAccountId || "");
   const [deliverySiteId, setDeliverySiteId] = useState("");
+  const [wholesaleListId, setWholesaleListId] = useState("");
+  const [wholesaleLists, setWholesaleLists] = useState<WholesaleListOption[]>([]);
+  const [pricedItemIds, setPricedItemIds] = useState<Set<string>>(new Set());
+  const [wholesaleLoading, setWholesaleLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showMenu, setShowMenu] = useState(true);
   const [showPrepped, setShowPrepped] = useState(true);
+  const [showDeliveryPreselect, setShowDeliveryPreselect] = useState(false);
 
   useEffect(() => {
     setAccountId(selectedAccountId || "");
   }, [selectedAccountId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void recipeCostReportAPI
+      .listWholesaleLists()
+      .then((data) => {
+        if (cancelled) return;
+        setWholesaleLists(
+          (data.lists ?? []).map((list) => ({ id: list.id, name: list.name })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setWholesaleLists([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!wholesaleListId) {
+      setPricedItemIds(new Set());
+      setSelected(new Set());
+      return;
+    }
+    let cancelled = false;
+    setWholesaleLoading(true);
+    void recipeCostReportAPI
+      .getWholesaleList(wholesaleListId)
+      .then((data) => {
+        if (cancelled) return;
+        const ids = new Set(
+          (data.members ?? [])
+            .filter(
+              (m) =>
+                m.latest_wholesale_price != null &&
+                Number.isFinite(m.latest_wholesale_price) &&
+                m.latest_wholesale_price > 0,
+            )
+            .map((m) => m.item_id),
+        );
+        setPricedItemIds(ids);
+        setSelected((prev) => {
+          const next = new Set<string>();
+          for (const id of prev) {
+            if (ids.has(id)) next.add(id);
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setPricedItemIds(new Set());
+      })
+      .finally(() => {
+        if (!cancelled) setWholesaleLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wholesaleListId]);
 
   const accountLocked = selectedAccountId.trim().length > 0;
 
@@ -61,19 +133,30 @@ export function CreateInvoicingListModal({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return candidates.filter((c) => {
+      if (!pricedItemIds.has(c.id)) return false;
       if (c.is_menu_item && !showMenu) return false;
       if (!c.is_menu_item && !showPrepped) return false;
+      if (showDeliveryPreselect && !c.delivery) return false;
       if (!q) return true;
       return c.name.toLowerCase().includes(q);
     });
-  }, [candidates, search, showMenu, showPrepped]);
+  }, [
+    candidates,
+    search,
+    showMenu,
+    showPrepped,
+    showDeliveryPreselect,
+    pricedItemIds,
+  ]);
 
   const canCreate =
     name.trim().length > 0 &&
     accountId.length > 0 &&
     deliverySiteId.length > 0 &&
+    wholesaleListId.length > 0 &&
     selected.size > 0 &&
-    deliverySitesForAccount.length > 0;
+    deliverySitesForAccount.length > 0 &&
+    !wholesaleLoading;
 
   const panel = isDark ? "bg-slate-800 text-slate-100" : "bg-white text-gray-900";
   const border = isDark ? "border-slate-600" : "border-gray-200";
@@ -100,7 +183,7 @@ export function CreateInvoicingListModal({
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium">
-              Delivery list template
+              Delivery List Template
             </label>
             <input
               className={inputCls}
@@ -118,7 +201,7 @@ export function CreateInvoicingListModal({
               onChange={(e) => setAccountId(e.target.value)}
               disabled={accountLocked || accounts.length === 0}
             >
-              <option value="">Select account</option>
+              <option value="">Select Account</option>
               {accounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.company_name}
@@ -129,7 +212,7 @@ export function CreateInvoicingListModal({
 
           <div>
             <label className="mb-1 block text-sm font-medium">
-              Delivery site
+              Primary Delivery Site
             </label>
             <select
               className={inputCls}
@@ -137,10 +220,29 @@ export function CreateInvoicingListModal({
               onChange={(e) => setDeliverySiteId(e.target.value)}
               disabled={deliverySitesForAccount.length === 0}
             >
-              <option value="">Select delivery site</option>
+              <option value="">Select Primary Delivery Site</option>
               {deliverySitesForAccount.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium">
+              Wholesale Price List
+            </label>
+            <select
+              className={inputCls}
+              value={wholesaleListId}
+              onChange={(e) => setWholesaleListId(e.target.value)}
+              disabled={wholesaleLists.length === 0}
+            >
+              <option value="">Select Wholesale Price List</option>
+              {wholesaleLists.map((list) => (
+                <option key={list.id} value={list.id}>
+                  {list.name}
                 </option>
               ))}
             </select>
@@ -164,17 +266,32 @@ export function CreateInvoicingListModal({
                 />
                 Menu
               </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={showDeliveryPreselect}
+                  onChange={(e) => setShowDeliveryPreselect(e.target.checked)}
+                />
+                Delivery preselect
+              </label>
             </div>
             <input
               className={inputCls}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search prepped & menu items…"
+              placeholder="Search items with wholesale price…"
+              disabled={!wholesaleListId || wholesaleLoading}
             />
             <ul
               className={`mt-2 max-h-56 overflow-y-auto rounded-md border ${border}`}
             >
-              {filtered.length === 0 ? (
+              {!wholesaleListId ? (
+                <li className="px-3 py-4 text-sm text-gray-500">
+                  Select a wholesale price list first.
+                </li>
+              ) : wholesaleLoading ? (
+                <li className="px-3 py-4 text-sm text-gray-500">Loading items…</li>
+              ) : filtered.length === 0 ? (
                 <li className="px-3 py-4 text-sm text-gray-500">
                   No items match.
                 </li>
@@ -233,6 +350,7 @@ export function CreateInvoicingListModal({
                 name: name.trim(),
                 account_id: accountId,
                 delivery_site_id: deliverySiteId,
+                wholesale_list_id: wholesaleListId,
                 item_ids: [...selected],
               })
             }

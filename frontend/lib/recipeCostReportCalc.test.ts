@@ -9,6 +9,10 @@ import {
   listPriceInputToStoredPerKg,
   listUsesEachDisplay,
   lcogPercentValue,
+  parseLcogPercentInput,
+  pricePerKgForLcog,
+  resolveListPriceStoredPerKg,
+  storedPerKgFromLcogPercent,
 } from "./recipeCostReportCalc";
 
 function row(overrides: Partial<ListMemberRow>): ListMemberRow {
@@ -319,5 +323,110 @@ describe("formatListPriceDisplay", () => {
     });
     expect(formatListPriceDisplay(14, menuG, true, true)).toBe("$4.90/each");
     expect(formatListPriceDisplay(14, menuG, false, true)).toBe("$14.00/kg");
+  });
+});
+
+describe("LCOG% ↔ price inverse", () => {
+  it("storedPerKgFromLcogPercent round-trips lcogPercentValue", () => {
+    const stored = 14;
+    const lcog = lcogPercentValue(breakdown, stored)!;
+    const back = storedPerKgFromLcogPercent(lcog, breakdown)!;
+    expect(back).toBeCloseTo(stored, 8);
+    expect(lcogPercentValue(breakdown, back)).toBeCloseTo(lcog, 8);
+  });
+
+  it("parseLcogPercentInput accepts optional %", () => {
+    expect(parseLcogPercentInput("40%")).toBe(40);
+    expect(parseLcogPercentInput(" 35.5 ")).toBe(35.5);
+  });
+
+  it("pricePerKgForLcog uses ledger when lcog draft is empty", () => {
+    const r = row({ latest_wholesale_price: 14 });
+    expect(
+      pricePerKgForLcog(
+        r,
+        "wholesale",
+        resolveListPriceStoredPerKg({
+          mode: "lcog",
+          priceRaw: "",
+          lcogRaw: "",
+          row: r,
+          breakdown,
+          eachMode: false,
+        }),
+      ),
+    ).toBe(14);
+    expect(lcogPercentValue(breakdown, pricePerKgForLcog(r, "wholesale"))).toBeCloseTo(
+      (0.01 / (14 / 1000)) * 100,
+      8,
+    );
+  });
+
+  it("pricePerKgForLcog prefers edit draft over ledger", () => {
+    const r = row({ latest_wholesale_price: 14 });
+    expect(pricePerKgForLcog(r, "wholesale", 20)).toBe(20);
+  });
+
+  it("view after lcog-mode save: empty lcog draft must not hide LCOG%", () => {
+    const r = row({
+      latest_wholesale_price: 25,
+      price_input_mode: "lcog",
+    });
+    const priceDisplay = listPriceInputDisplay(25, r, false, false);
+    const editResolved = resolveListPriceStoredPerKg({
+      mode: "lcog",
+      priceRaw: priceDisplay,
+      lcogRaw: "",
+      row: r,
+      breakdown,
+      eachMode: false,
+    });
+    expect(editResolved).toBeNull();
+
+    const viewPrice = pricePerKgForLcog(r, "wholesale", undefined);
+    expect(viewPrice).toBe(25);
+
+    const editPrice = pricePerKgForLcog(r, "wholesale", editResolved);
+    expect(editPrice).toBe(25);
+
+    const lcog = lcogPercentValue(breakdown, viewPrice);
+    expect(lcog).not.toBeNull();
+    expect(lcog!).toBeCloseTo((0.01 / (25 / 1000)) * 100, 8);
+  });
+
+  it("edit lcog draft still drives LCOG while typing", () => {
+    const r = row({ latest_wholesale_price: 14 });
+    const fromDraft = resolveListPriceStoredPerKg({
+      mode: "lcog",
+      priceRaw: "",
+      lcogRaw: "50",
+      row: r,
+      breakdown,
+      eachMode: false,
+    });
+    expect(fromDraft).not.toBeNull();
+    expect(pricePerKgForLcog(r, "wholesale", fromDraft)).toBe(fromDraft);
+    expect(pricePerKgForLcog(r, "wholesale", fromDraft)).not.toBe(14);
+  });
+
+  it("resolveListPriceStoredPerKg uses lcog in lcog mode", () => {
+    const r = row({ proceed_yield_unit: "g", proceed_yield_amount: 1000 });
+    const fromLcog = resolveListPriceStoredPerKg({
+      mode: "lcog",
+      priceRaw: "",
+      lcogRaw: "40",
+      row: r,
+      breakdown,
+      eachMode: false,
+    });
+    const fromPrice = resolveListPriceStoredPerKg({
+      mode: "price",
+      priceRaw: String(fromLcog!),
+      lcogRaw: "",
+      row: r,
+      breakdown,
+      eachMode: false,
+    });
+    expect(fromPrice).toBeCloseTo(fromLcog!, 8);
   });
 });

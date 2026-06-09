@@ -105,6 +105,14 @@ function isInvoicingPath(pathname: string): boolean {
   return pathname.startsWith("/invoicing");
 }
 
+function isLicensePath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/employee-requirements") ||
+    pathname.startsWith("/tenant-requirements") ||
+    pathname.startsWith("/company-requirements")
+  );
+}
+
 type InvoicingNavSection = "account" | "invoice";
 
 function isInvoicingSectionNavActive(
@@ -253,34 +261,33 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const isDashboardActive = isDashboardPath(pathname);
   const isInvoicingActive = isInvoicingPath(pathname);
 
-  const isLicenseSectionActive =
-    pathname.startsWith("/employee-requirements") ||
-    pathname.startsWith("/tenant-requirements") ||
-    pathname.startsWith("/company-requirements");
+  const isLicenseSectionActive = isLicensePath(pathname);
   const isTeamSectionActive = isTeamPath(pathname);
   const isSidebarSettingsActive = isSidebarSettingsPath(pathname);
 
-  // License 配下にいるときは開く／それ以外では閉じる（他ページ選択時はサブも畳む）
+  // 各セクション: 配下に入ったときだけ自動で開く（他ページへ移っても手動展開は維持）
   useEffect(() => {
-    setLicenseExpanded(
-      pathname.startsWith("/employee-requirements") ||
-        pathname.startsWith("/tenant-requirements") ||
-        pathname.startsWith("/company-requirements"),
-    );
-  }, [pathname]);
-
-  // Food costing 配下にいるときは開く／それ以外では閉じる
-  useEffect(() => {
-    setFoodCostingExpanded(isFoodCostingPath(pathname));
-  }, [pathname]);
-
-  // Team 配下にいるときは開く／それ以外では閉じる
-  useEffect(() => {
-    setTeamExpanded(isTeamPath(pathname));
+    if (isLicensePath(pathname)) {
+      setLicenseExpanded(true);
+    }
   }, [pathname]);
 
   useEffect(() => {
-    setInvoicingExpanded(isInvoicingPath(pathname));
+    if (isFoodCostingPath(pathname)) {
+      setFoodCostingExpanded(true);
+    }
+  }, [pathname]);
+
+  useEffect(() => {
+    if (isTeamPath(pathname)) {
+      setTeamExpanded(true);
+    }
+  }, [pathname]);
+
+  useEffect(() => {
+    if (isInvoicingPath(pathname)) {
+      setInvoicingExpanded(true);
+    }
   }, [pathname]);
 
   // サイドバー表示モード（ハンバーガー）をブラウザに永続化
@@ -1589,15 +1596,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
               </div>
             </nav>
 
-            {/* テーマ切り替えスイッチ（サイドバーの下の方） */}
+            {/* テーマ切り替え（内側は常に展開幅 — コンパクト時は左寄せで 64px クリップ内に収める） */}
             <div className="px-3 pb-3">
               <button
                 onClick={toggleTheme}
-                className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} justify-start px-3 py-2 rounded-md transition-colors ${
-                  isDark
-                    ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
-                    : "bg-gray-100 hover:bg-gray-200 text-gray-700"
-                }`}
+                className={
+                  isSidebarExpanded
+                    ? `w-full ${SIDEBAR_NAV_ROW_ALIGN} justify-start px-3 py-2 rounded-md transition-colors ${
+                        isDark
+                          ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                          : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                      }`
+                    : `flex w-10 ${SIDEBAR_NAV_ROW_MIN} shrink-0 items-center justify-center rounded-md transition-colors ${
+                        isDark
+                          ? "bg-slate-700 hover:bg-slate-600 text-slate-200"
+                          : "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                      }`
+                }
                 aria-label="Toggle theme"
               >
                 {isDark ? (
