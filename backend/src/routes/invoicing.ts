@@ -906,7 +906,7 @@ router.delete("/lists/:id", async (req, res) => {
  */
 router.get("/lists/:id/costs", async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
+    resolveTenantId(req);
     const listId = req.params.id?.trim();
     if (!listId) return res.status(400).json({ error: "id is required" });
 
@@ -954,20 +954,6 @@ function parseOptionalIsoDate(
   field: string,
 ): string | null | { error: string } {
   if (value == null || value === "") return null;
-  const s = String(value).trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    return { error: `${field} must be YYYY-MM-DD` };
-  }
-  return s;
-}
-
-function parseRequiredIsoDate(
-  value: unknown,
-  field: string,
-): string | { error: string } {
-  if (value == null || value === "") {
-    return { error: `${field} is required` };
-  }
   const s = String(value).trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
     return { error: `${field} must be YYYY-MM-DD` };
