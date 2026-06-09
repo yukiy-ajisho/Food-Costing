@@ -8,6 +8,7 @@ import {
 } from "../services/franchise-menu-cost";
 import {
   type CostBasis,
+  type PriceInputMode,
   defaultCostBasisForMenuMember,
   fetchLatestWholesalePrices,
   fetchRecipeCostReportItemCandidates,
@@ -472,6 +473,43 @@ router.delete("/wholesale-lists/:listId/members/:itemId", async (req, res) => {
   }
 });
 
+router.patch(
+  "/wholesale-lists/:listId/members/:itemId/price-input-mode",
+  async (req, res) => {
+    try {
+      const { listId, itemId } = req.params;
+      const rawMode = req.body?.price_input_mode;
+      if (rawMode !== "price" && rawMode !== "lcog") {
+        return res
+          .status(400)
+          .json({ error: "price_input_mode must be price or lcog" });
+      }
+      const price_input_mode: PriceInputMode = rawMode;
+
+      const { data: member } = await supabase
+        .from("wholesale_list_members")
+        .select("item_id")
+        .eq("wholesale_list_id", listId)
+        .eq("item_id", itemId)
+        .maybeSingle();
+      if (!member) {
+        return res.status(404).json({ error: "Member not found" });
+      }
+
+      const { error } = await supabase
+        .from("wholesale_list_members")
+        .update({ price_input_mode })
+        .eq("wholesale_list_id", listId)
+        .eq("item_id", itemId);
+      if (error) return res.status(500).json({ error: error.message });
+
+      res.json({ ok: true, price_input_mode });
+    } catch (e: unknown) {
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+);
+
 router.post("/wholesale-lists/:listId/wholesale-prices", async (req, res) => {
   try {
     const uid = userId(req);
@@ -886,6 +924,43 @@ router.patch(
       if (error) return res.status(500).json({ error: error.message });
 
       res.json({ ok: true, cost_basis });
+    } catch (e: unknown) {
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+);
+
+router.patch(
+  "/menu-cost-lists/:listId/members/:itemId/price-input-mode",
+  async (req, res) => {
+    try {
+      const { listId, itemId } = req.params;
+      const rawMode = req.body?.price_input_mode;
+      if (rawMode !== "price" && rawMode !== "lcog") {
+        return res
+          .status(400)
+          .json({ error: "price_input_mode must be price or lcog" });
+      }
+      const price_input_mode: PriceInputMode = rawMode;
+
+      const { data: member } = await supabase
+        .from("menu_cost_list_members")
+        .select("item_id")
+        .eq("menu_cost_list_id", listId)
+        .eq("item_id", itemId)
+        .maybeSingle();
+      if (!member) {
+        return res.status(404).json({ error: "Member not found" });
+      }
+
+      const { error } = await supabase
+        .from("menu_cost_list_members")
+        .update({ price_input_mode })
+        .eq("menu_cost_list_id", listId)
+        .eq("item_id", itemId);
+      if (error) return res.status(500).json({ error: error.message });
+
+      res.json({ ok: true, price_input_mode });
     } catch (e: unknown) {
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
     }

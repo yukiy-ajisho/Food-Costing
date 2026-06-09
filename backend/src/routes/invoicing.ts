@@ -2,7 +2,6 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import { supabase } from "../config/supabase";
 import { authorizeInvoicingAccess } from "../authz/unified/authorize";
 import { withTenantFilter } from "../middleware/tenant-filter";
-import { computeScopedBreakdownCosts } from "../services/franchise-menu-cost";
 import { sendInvoiceEmail } from "../services/email";
 import {
   allocateInvoiceNumber,
@@ -10,11 +9,19 @@ import {
   subTotalsMatch,
 } from "../lib/invoicing-calc";
 import {
+  formatInvoiceDateTimeDisplayUtc,
+  parseOptionalInvoiceDateYmd,
+  parseRequiredInvoiceDateTime,
+  resolveInvoiceNumberCalendarYmd,
+} from "../lib/invoicing-datetime";
+import {
   INVOICE_COLUMNS,
   LIST_COLUMNS,
   assertDeliverySiteInTenant,
   assertInvoicingAccountInTenant,
+  assertWholesaleListInTenant,
   buildInitialLines,
+  computeInvoiceWholesaleCosts,
   enrichInvoiceListLines,
   fetchEffectiveEachGramsByItemIds,
   fetchInvoicingItemCandidates,
@@ -24,6 +31,7 @@ import {
   validateBoxLineCostsAgainstRpc,
   validateBoxLinesCoverAllListLines,
   validateInvoicingItemIds,
+  validateInvoicingItemsForWholesaleList,
   type InvoiceBoxLineJson,
 } from "../services/invoicing-data";
 
@@ -487,14 +495,31 @@ router.post("/preview-invoice-number", async (req, res) => {
       return res.status(400).json({ error: "delivery_site_id is required" });
     }
 
-    const invoiceDateParsed = parseRequiredIsoDate(
+    const invoiceDateParsed = parseRequiredInvoiceDateTime(
       req.body?.invoice_date,
       "invoice_date",
     );
     if (typeof invoiceDateParsed === "object" && "error" in invoiceDateParsed) {
       return res.status(400).json({ error: invoiceDateParsed.error });
     }
-    const invoiceDate = invoiceDateParsed as string;
+    const invoiceDateIso = invoiceDateParsed as string;
+
+    const invoiceDateYmdResult = parseOptionalInvoiceDateYmd(
+      req.body?.invoice_date_ymd,
+    );
+    if (
+      invoiceDateYmdResult !== null &&
+      typeof invoiceDateYmdResult === "object" &&
+      "error" in invoiceDateYmdResult
+    ) {
+      return res.status(400).json({ error: invoiceDateYmdResult.error });
+    }
+    const invoiceDateYmd =
+      typeof invoiceDateYmdResult === "string" ? invoiceDateYmdResult : null;
+    const invoiceCalendarYmd = resolveInvoiceNumberCalendarYmd(
+      invoiceDateIso,
+      invoiceDateYmd,
+    );
 
     const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
     if (!siteOk) {
@@ -513,7 +538,7 @@ router.post("/preview-invoice-number", async (req, res) => {
     const invoiceNumber = await allocateInvoiceNumber(
       tenantId,
       site.name,
-      invoiceDate,
+      invoiceCalendarYmd,
       (prefix) => fetchExistingInvoiceNumbers(tenantId, prefix),
     );
 
@@ -603,7 +628,7 @@ router.get("/lists", async (req, res) => {
 
 /**
  * POST /invoicing/lists
- * Body: { name, delivery_site_id, item_ids: string[] }
+ * Body: { name, delivery_site_id, wholesale_list_id, item_ids: string[] }
  */
 router.post("/lists", async (req, res) => {
   try {
@@ -611,6 +636,7 @@ router.post("/lists", async (req, res) => {
     const userId = req.user!.id;
     const name = String(req.body?.name ?? "").trim();
     const deliverySiteId = String(req.body?.delivery_site_id ?? "").trim();
+    const wholesaleListId = String(req.body?.wholesale_list_id ?? "").trim();
     const itemIds = Array.isArray(req.body?.item_ids)
       ? (req.body.item_ids as string[]).filter(Boolean)
       : [];
@@ -618,6 +644,9 @@ router.post("/lists", async (req, res) => {
     if (!name) return res.status(400).json({ error: "name is required" });
     if (!deliverySiteId) {
       return res.status(400).json({ error: "delivery_site_id is required" });
+    }
+    if (!wholesaleListId) {
+      return res.status(400).json({ error: "wholesale_list_id is required" });
     }
     if (itemIds.length === 0) {
       return res.status(400).json({ error: "At least one item is required" });
@@ -628,11 +657,24 @@ router.post("/lists", async (req, res) => {
       return res.status(400).json({ error: "Invalid delivery_site_id" });
     }
 
+    const wlOk = await assertWholesaleListInTenant(tenantId, wholesaleListId);
+    if (!wlOk) {
+      return res.status(400).json({ error: "Invalid wholesale_list_id" });
+    }
+
     const validIds = await validateInvoicingItemIds(tenantId, itemIds);
     if (validIds.length !== itemIds.length) {
       return res.status(400).json({
         error: "One or more items are invalid or not in this tenant",
       });
+    }
+
+    const wholesaleItemError = await validateInvoicingItemsForWholesaleList(
+      wholesaleListId,
+      validIds,
+    );
+    if (wholesaleItemError) {
+      return res.status(400).json({ error: wholesaleItemError });
     }
 
     const lines = buildInitialLines(validIds);
@@ -642,6 +684,7 @@ router.post("/lists", async (req, res) => {
         tenant_id: tenantId,
         name,
         delivery_site_id: deliverySiteId,
+        wholesale_list_id: wholesaleListId,
         lines,
         created_by: userId,
       })
@@ -718,7 +761,7 @@ router.get("/lists/:id", async (req, res) => {
 
 /**
  * PATCH /invoicing/lists/:id
- * Body: { name?, delivery_site_id?, lines? }
+ * Body: { name?, delivery_site_id?, wholesale_list_id?, lines? }
  */
 router.patch("/lists/:id", async (req, res) => {
   try {
@@ -727,7 +770,10 @@ router.patch("/lists/:id", async (req, res) => {
     if (!listId) return res.status(400).json({ error: "id is required" });
 
     const { data: existing, error: fetchErr } = await withTenantFilter(
-      supabase.from("invoice_lists").select("id").eq("id", listId),
+      supabase
+        .from("invoice_lists")
+        .select("id, wholesale_list_id")
+        .eq("id", listId),
       req,
     ).maybeSingle();
     if (fetchErr) return res.status(500).json({ error: fetchErr.message });
@@ -750,6 +796,17 @@ router.patch("/lists/:id", async (req, res) => {
       }
       patch.delivery_site_id = deliverySiteId;
     }
+    if (req.body?.wholesale_list_id != null) {
+      const wholesaleListId = String(req.body.wholesale_list_id).trim();
+      if (!wholesaleListId) {
+        return res.status(400).json({ error: "wholesale_list_id cannot be empty" });
+      }
+      const wlOk = await assertWholesaleListInTenant(tenantId, wholesaleListId);
+      if (!wlOk) {
+        return res.status(400).json({ error: "Invalid wholesale_list_id" });
+      }
+      patch.wholesale_list_id = wholesaleListId;
+    }
     if (req.body?.lines != null) {
       const normalized = normalizeInvoiceListLines(req.body.lines);
       if ("error" in normalized) {
@@ -760,6 +817,14 @@ router.patch("/lists/:id", async (req, res) => {
       if (validIds.length !== itemIds.length) {
         return res.status(400).json({
           error: "One or more items are invalid or not in this tenant",
+        });
+      }
+      const effectiveWholesaleListId =
+        (patch.wholesale_list_id as string | undefined) ??
+        existing.wholesale_list_id;
+      if (!effectiveWholesaleListId) {
+        return res.status(400).json({
+          error: "List has no wholesale price list configured",
         });
       }
       patch.lines = normalized;
@@ -857,8 +922,26 @@ router.get("/lists/:id/costs", async (req, res) => {
       return res.status(500).json({ error: normalized.error });
     }
 
+    const { data: listMeta, error: metaErr } = await withTenantFilter(
+      supabase
+        .from("invoice_lists")
+        .select("wholesale_list_id")
+        .eq("id", listId),
+      req,
+    ).maybeSingle();
+    if (metaErr) return res.status(500).json({ error: metaErr.message });
+    if (!listMeta) return res.status(404).json({ error: "List not found" });
+    if (!listMeta.wholesale_list_id) {
+      return res.status(400).json({
+        error: "List has no wholesale price list configured",
+      });
+    }
+
     const itemIds = normalized.map((l) => l.item_id);
-    const costs = await computeScopedBreakdownCosts(tenantId, itemIds);
+    const costs = await computeInvoiceWholesaleCosts(
+      listMeta.wholesale_list_id,
+      itemIds,
+    );
     res.json({ costs });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
@@ -996,14 +1079,37 @@ router.post("/invoices", async (req, res) => {
       return res.status(400).json({ error: "pdf_base64 is required when send is true" });
     }
 
-    const invoiceDateParsed = parseRequiredIsoDate(
+    const invoiceDateParsed = parseRequiredInvoiceDateTime(
       req.body?.invoice_date,
       "invoice_date",
     );
     if (typeof invoiceDateParsed === "object" && "error" in invoiceDateParsed) {
       return res.status(400).json({ error: invoiceDateParsed.error });
     }
-    const invoiceDate = invoiceDateParsed as string;
+    const invoiceDateIso = invoiceDateParsed as string;
+
+    const invoiceDateYmdResult = parseOptionalInvoiceDateYmd(
+      req.body?.invoice_date_ymd,
+    );
+    if (
+      invoiceDateYmdResult !== null &&
+      typeof invoiceDateYmdResult === "object" &&
+      "error" in invoiceDateYmdResult
+    ) {
+      return res.status(400).json({ error: invoiceDateYmdResult.error });
+    }
+    const invoiceDateYmd =
+      typeof invoiceDateYmdResult === "string" ? invoiceDateYmdResult : null;
+    const invoiceCalendarYmd = resolveInvoiceNumberCalendarYmd(
+      invoiceDateIso,
+      invoiceDateYmd,
+    );
+
+    const invoiceDateDisplay =
+      typeof req.body?.invoice_date_display === "string" &&
+      req.body.invoice_date_display.trim()
+        ? String(req.body.invoice_date_display).trim()
+        : formatInvoiceDateTimeDisplayUtc(invoiceDateIso);
 
     const orderReceivedParsed = parseOptionalIsoDate(
       req.body?.order_received_date,
@@ -1093,9 +1199,21 @@ router.post("/invoices", async (req, res) => {
       return res.status(400).json({ error: coverageError });
     }
 
+    if (!list.wholesale_list_id) {
+      return res.status(400).json({
+        error: "List has no wholesale price list configured",
+      });
+    }
+
     const itemIds = normalizedLines.map((l) => l.item_id);
-    const rpcCosts = await computeScopedBreakdownCosts(tenantId, itemIds);
-    const costError = validateBoxLineCostsAgainstRpc(normalizedLines, rpcCosts);
+    const wholesaleCosts = await computeInvoiceWholesaleCosts(
+      list.wholesale_list_id,
+      itemIds,
+    );
+    const costError = validateBoxLineCostsAgainstRpc(
+      normalizedLines,
+      wholesaleCosts,
+    );
     if (costError) {
       return res.status(400).json({ error: costError });
     }
@@ -1124,7 +1242,7 @@ router.post("/invoices", async (req, res) => {
       invoiceNumber = await allocateInvoiceNumber(
         tenantId,
         site.name,
-        invoiceDate,
+        invoiceCalendarYmd,
         (prefix) => fetchExistingInvoiceNumbers(tenantId, prefix),
       );
     }
@@ -1147,7 +1265,7 @@ router.post("/invoices", async (req, res) => {
         p_company_name: companyName,
         p_order_received_date: orderReceivedParsed,
         p_delivery_date: deliveryDateParsed,
-        p_invoice_date: invoiceDate,
+        p_invoice_date: invoiceDateIso,
         p_total_amount: totalAmount,
         p_lines: normalizedLines,
         p_updated_list_lines: updatedListLines,
@@ -1174,7 +1292,7 @@ router.post("/invoices", async (req, res) => {
           to: site.email,
           deliverySiteName: site.name,
           invoiceNumber,
-          invoiceDate,
+          invoiceDate: invoiceDateDisplay,
           totalAmount,
           pdfBase64,
         });
@@ -1237,17 +1355,18 @@ router.post("/invoices/:id/send", async (req, res) => {
     if (fetchErr) return res.status(500).json({ error: fetchErr.message });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
 
-    const invoiceDate = invoice.invoice_date ?? "";
-    if (!invoiceDate) {
+    const invoiceDateRaw = invoice.invoice_date ?? "";
+    if (!invoiceDateRaw) {
       return res.status(400).json({ error: "Invoice has no invoice_date" });
     }
+    const invoiceDateDisplay = formatInvoiceDateTimeDisplayUtc(invoiceDateRaw);
 
     try {
       await sendInvoiceEmail({
         to: invoice.delivery_email,
         deliverySiteName: invoice.delivery_site_name,
         invoiceNumber: invoice.invoice_number,
-        invoiceDate,
+        invoiceDate: invoiceDateDisplay,
         totalAmount: Number(invoice.total_amount),
         pdfBase64,
       });

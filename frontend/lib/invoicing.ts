@@ -53,12 +53,14 @@ export type InvoicingItemCandidate = {
   proceed_yield_amount: number;
   proceed_yield_unit: string | null;
   each_grams: number | null;
+  delivery: boolean;
 };
 
 export type InvoiceListSummary = {
   id: string;
   name: string;
   delivery_site_id: string;
+  wholesale_list_id: string | null;
   created_at?: string;
   updated_at?: string;
 };
@@ -83,6 +85,7 @@ export type InvoiceListDetail = {
   tenant_id: string;
   name: string;
   delivery_site_id: string;
+  wholesale_list_id: string | null;
   lines: InvoiceListLine[];
   created_at?: string;
   updated_at?: string;
@@ -181,6 +184,7 @@ export const invoicingAPI = {
   previewInvoiceNumber: (body: {
     delivery_site_id: string;
     invoice_date: string;
+    invoice_date_ymd?: string;
   }) =>
     apiRequest<{ invoice_number: string }>(
       "/invoicing/preview-invoice-number",
@@ -208,6 +212,7 @@ export const invoicingAPI = {
   createInvoiceList: (body: {
     name: string;
     delivery_site_id: string;
+    wholesale_list_id: string;
     item_ids: string[];
   }) =>
     apiRequest<{
@@ -224,6 +229,7 @@ export const invoicingAPI = {
     body: {
       name?: string;
       delivery_site_id?: string;
+      wholesale_list_id?: string;
       lines?: InvoiceListLine[];
     },
   ) =>
@@ -260,6 +266,8 @@ export const invoicingAPI = {
     order_received_date?: string | null;
     delivery_date?: string | null;
     invoice_date: string;
+    invoice_date_ymd?: string;
+    invoice_date_display?: string;
     invoice_number?: string;
     total_amount: number;
     lines: BoxInvoiceLine[];

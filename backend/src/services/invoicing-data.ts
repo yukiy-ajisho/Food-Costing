@@ -1,9 +1,20 @@
 import { supabase } from "../config/supabase";
 import { eachGramsForInvoicing, type InvoicingEachGramsContext } from "../lib/invoicing-calc";
 import {
+  fetchLatestWholesalePrices,
   fetchOwnTenantItemCandidates,
   type ItemCandidateRow,
 } from "./recipe-cost-report-data";
+
+export type InvoicingCostBreakdownRow = {
+  food_cost_per_gram: number;
+  labor_cost_per_gram: number;
+  total_cost_per_gram: number;
+};
+
+export type InvoicingItemCandidateRow = ItemCandidateRow & {
+  delivery: boolean;
+};
 
 export type InvoiceListLineJson = {
   item_id: string;
@@ -21,7 +32,7 @@ export type InvoiceListItemRow = InvoiceListLineJson & {
 };
 
 const LIST_COLUMNS =
-  "id, tenant_id, name, delivery_site_id, lines, created_at, updated_at, created_by";
+  "id, tenant_id, name, delivery_site_id, wholesale_list_id, lines, created_at, updated_at, created_by";
 
 export function normalizeInvoiceListLines(
   raw: unknown,
@@ -91,8 +102,98 @@ export async function validateInvoicingItemIds(
 
 export async function fetchInvoicingItemCandidates(
   tenantId: string,
-): Promise<ItemCandidateRow[]> {
-  return fetchOwnTenantItemCandidates(tenantId);
+): Promise<InvoicingItemCandidateRow[]> {
+  const rows = await fetchOwnTenantItemCandidates(tenantId);
+  if (rows.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("items")
+    .select("id, delivery")
+    .eq("tenant_id", tenantId)
+    .in(
+      "id",
+      rows.map((r) => r.id),
+    );
+  if (error) throw new Error(error.message);
+
+  const deliveryById = new Map(
+    (data ?? []).map((row) => [row.id, Boolean(row.delivery)]),
+  );
+  return rows.map((row) => ({
+    ...row,
+    delivery: deliveryById.get(row.id) ?? false,
+  }));
+}
+
+export async function assertWholesaleListInTenant(
+  tenantId: string,
+  wholesaleListId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("wholesale_lists")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("id", wholesaleListId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return Boolean(data);
+}
+
+export async function validateInvoicingItemsForWholesaleList(
+  wholesaleListId: string,
+  itemIds: string[],
+): Promise<string | null> {
+  if (itemIds.length === 0) return "At least one item is required";
+
+  const { data: members, error: memErr } = await supabase
+    .from("wholesale_list_members")
+    .select("item_id")
+    .eq("wholesale_list_id", wholesaleListId)
+    .in("item_id", itemIds);
+  if (memErr) throw new Error(memErr.message);
+
+  const memberIds = new Set((members ?? []).map((m) => m.item_id));
+  const prices = await fetchLatestWholesalePrices(wholesaleListId, itemIds);
+
+  for (const itemId of itemIds) {
+    if (!memberIds.has(itemId)) {
+      return "One or more items are not on the selected wholesale price list";
+    }
+    const price = prices.get(itemId);
+    if (price == null || !Number.isFinite(price) || price <= 0) {
+      return "One or more items do not have a wholesale price on the selected list";
+    }
+  }
+  return null;
+}
+
+function wholesalePricePerKgToBreakdown(
+  pricePerKg: number,
+): InvoicingCostBreakdownRow {
+  const perGram = pricePerKg / 1000;
+  return {
+    food_cost_per_gram: perGram,
+    labor_cost_per_gram: 0,
+    total_cost_per_gram: perGram,
+  };
+}
+
+export async function computeInvoiceWholesaleCosts(
+  wholesaleListId: string,
+  itemIds: string[],
+): Promise<Record<string, InvoicingCostBreakdownRow>> {
+  const uniqueIds = [...new Set(itemIds)];
+  if (uniqueIds.length === 0) return {};
+
+  const prices = await fetchLatestWholesalePrices(wholesaleListId, uniqueIds);
+  const costs: Record<string, InvoicingCostBreakdownRow> = {};
+  for (const itemId of uniqueIds) {
+    const pricePerKg = prices.get(itemId);
+    if (pricePerKg != null && Number.isFinite(pricePerKg) && pricePerKg > 0) {
+      costs[itemId] = wholesalePricePerKgToBreakdown(pricePerKg);
+    }
+  }
+  return costs;
 }
 
 export async function enrichInvoiceListLines(
@@ -302,7 +403,7 @@ export function validateBoxLinesCoverAllListLines(
 
 const COST_PER_KG_TOLERANCE = 0.02;
 
-/** Verify client cost snapshots match current scoped RPC ($/kg). */
+/** Verify client cost snapshots match current wholesale prices ($/kg). */
 export function validateBoxLineCostsAgainstRpc(
   lines: InvoiceBoxLineJson[],
   costs: Record<string, { total_cost_per_gram: number }>,

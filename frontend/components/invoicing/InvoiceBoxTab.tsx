@@ -23,12 +23,14 @@ import { InvoiceBoxHeaderFilter } from "./InvoiceBoxHeaderFilter";
 import { InvoiceBoxHeaderRangeFilter } from "./InvoiceBoxHeaderRangeFilter";
 import { InvoiceGeneratePreviewModal } from "./InvoiceGeneratePreviewModal";
 import { InvoiceGenerationModal } from "./InvoiceGenerationModal";
+import { formatInvoiceDateTimeAmPm } from "@/lib/invoicingDateTime";
 
 const DEFAULT_SORT: InvoiceBoxSortState = { key: "date", ascending: false };
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
-  return value;
+  const formatted = formatInvoiceDateTimeAmPm(value);
+  return formatted || value;
 }
 
 export function InvoiceBoxTab() {

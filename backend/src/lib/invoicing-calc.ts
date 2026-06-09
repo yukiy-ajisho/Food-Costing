@@ -94,10 +94,10 @@ export function sanitizeDeliverySiteNameForInvoiceNumber(name: string): string {
   return name.trim().replace(/\s+/g, "");
 }
 
-export function formatInvoiceDateYymmdd(isoDate: string): string {
-  const d = isoDate.trim();
+export function formatInvoiceDateYymmdd(calendarYmd: string): string {
+  const d = calendarYmd.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-    throw new Error("invoice_date must be YYYY-MM-DD");
+    throw new Error("invoice_date calendar date must be YYYY-MM-DD");
   }
   const [y, m, day] = d.split("-");
   return `${y.slice(2)}${m}${day}`;
@@ -106,11 +106,12 @@ export function formatInvoiceDateYymmdd(isoDate: string): string {
 export async function allocateInvoiceNumber(
   tenantId: string,
   deliverySiteName: string,
-  invoiceDate: string,
+  /** Calendar YYYY-MM-DD (user-selected date; time ignored for numbering). */
+  invoiceCalendarYmd: string,
   fetchExisting: (prefix: string) => Promise<string[]>,
 ): Promise<string> {
   const sitePart = sanitizeDeliverySiteNameForInvoiceNumber(deliverySiteName);
-  const yymmdd = formatInvoiceDateYymmdd(invoiceDate);
+  const yymmdd = formatInvoiceDateYymmdd(invoiceCalendarYmd);
   const base = `${sitePart}${yymmdd}`;
   const existing = await fetchExisting(base);
   if (existing.length === 0) return base;

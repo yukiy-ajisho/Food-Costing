@@ -19,6 +19,7 @@ import {
   Search,
   X,
   Share2,
+  Check,
 } from "lucide-react";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { RecipeSummaryPanel } from "@/components/RecipeSummaryPanel";
@@ -102,6 +103,7 @@ interface PreppedItem {
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
   wholesale?: number | null; // wholesale price
   retail?: number | null; // retail price
+  delivery?: boolean; // invoicing delivery preselect flag
   user_id?: string; // 作成者のユーザーID
   responsible_user_id?: string | null; // 責任者のユーザーID（アクセス権を変更できるManager）
 }
@@ -189,6 +191,7 @@ function AddItemModal({
 }) {
   const [name, setName] = useState("");
   const [isMenuItem, setIsMenuItem] = useState(false);
+  const [delivery, setDelivery] = useState(false);
   const [proceedYieldAmount, setProceedYieldAmount] = useState(0);
   const [proceedYieldAmountInput, setProceedYieldAmountInput] = useState<
     string | null
@@ -318,6 +321,7 @@ function AddItemModal({
       isExpanded: true,
       isNew: true,
       each_grams: proceedYieldUnit === "each" ? eachGrams : null,
+      delivery,
     };
 
     onSave(newItem);
@@ -428,6 +432,32 @@ function AddItemModal({
                 </span>
               </label>
             </div>
+          </div>
+
+          {/* Delivery */}
+          <div>
+            <label
+              className={`block text-sm font-medium mb-2 ${
+                isDark ? "text-slate-300" : "text-gray-700"
+              }`}
+            >
+              Delivery
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={delivery}
+                onChange={(e) => setDelivery(e.target.checked)}
+                className={`h-4 w-4 rounded border focus:ring-2 focus:ring-blue-500 ${
+                  isDark
+                    ? "border-slate-500 bg-slate-700 text-blue-400"
+                    : "border-gray-300 text-blue-600"
+                }`}
+              />
+              <span className={isDark ? "text-slate-300" : "text-gray-700"}>
+                Include in invoicing Delivery preselect
+              </span>
+            </label>
           </div>
 
           {/* Proceed Yield */}
@@ -1641,6 +1671,7 @@ export default function CostPage() {
               deprecation_reason: item.deprecation_reason || null,
               wholesale: item.wholesale || null,
               retail: item.retail || null,
+              delivery: item.delivery ?? false,
             };
           });
 
@@ -2820,6 +2851,7 @@ export default function CostPage() {
           each_grams: number | null;
           wholesale: number | null;
           retail: number | null;
+          delivery: boolean;
         };
       }> = [];
 
@@ -2837,6 +2869,7 @@ export default function CostPage() {
             each_grams: resolveEachGramsForPersist(item),
             wholesale: item.wholesale || null,
             retail: item.retail || null,
+            delivery: item.delivery ?? false,
           });
 
           // レシピラインを作成用に追加
@@ -2885,6 +2918,7 @@ export default function CostPage() {
             originalItem.proceed_yield_unit !== item.proceed_yield_unit ||
             originalItem.wholesale !== item.wholesale ||
             originalItem.retail !== item.retail ||
+            (originalItem.delivery ?? false) !== (item.delivery ?? false) ||
             (originalItem.notes || null) !== (item.notes || null) ||
             (originalItem.proceed_yield_unit === "each"
               ? (originalItem.each_grams || null) !==
@@ -3005,6 +3039,7 @@ export default function CostPage() {
                 each_grams: eachGramsForPayload,
                 wholesale: item.wholesale || null,
                 retail: item.retail || null,
+                delivery: item.delivery ?? false,
               },
             });
             // 変更されたアイテムIDを記録
@@ -3112,6 +3147,7 @@ export default function CostPage() {
                 cost_per_gram:
                   errorRecoveryBreakdown[item.id]?.total_cost_per_gram,
                 each_grams: item.each_grams || null,
+                delivery: item.delivery ?? false,
               };
             });
 
@@ -3241,6 +3277,7 @@ export default function CostPage() {
             each_grams: item.each_grams || null,
             wholesale: item.wholesale || null,
             retail: item.retail || null,
+            delivery: item.delivery ?? false,
             deprecated: item.deprecated || null,
             deprecation_reason: item.deprecation_reason || null,
           };
@@ -3545,6 +3582,7 @@ export default function CostPage() {
       isExpanded: true,
       isNew: true,
       each_grams: null,
+      delivery: false,
     };
     setItems([newItem, ...items]);
   };
@@ -4629,7 +4667,7 @@ export default function CostPage() {
                               ? "bg-slate-700 text-slate-300"
                               : "bg-gray-50 text-gray-500"
                           }`}
-                          style={{ width: "13%" }}
+                          style={{ width: "11%" }}
                         >
                           <div className="flex items-center justify-between gap-2">
                             <button
@@ -4697,6 +4735,14 @@ export default function CostPage() {
                           Type
                         </th>
                         <th
+                          className={`pl-2 pr-2 py-3 text-center text-xs font-medium uppercase tracking-wider ${
+                            isDark ? "text-slate-300" : "text-gray-500"
+                          }`}
+                          style={{ width: "5%" }}
+                        >
+                          Delivery
+                        </th>
+                        <th
                           className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                             isDark ? "text-slate-300" : "text-gray-500"
                           }`}
@@ -4709,7 +4755,7 @@ export default function CostPage() {
                           className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                             isDark ? "text-slate-300" : "text-gray-500"
                           }`}
-                          style={{ width: "6.5%" }}
+                          style={{ width: "5%" }}
                         >
                           COG
                         </th>
@@ -4718,7 +4764,7 @@ export default function CostPage() {
                           className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${
                             isDark ? "text-slate-300" : "text-gray-500"
                           }`}
-                          style={{ width: "6.5%" }}
+                          style={{ width: "5%" }}
                         >
                           LABOR
                         </th>
@@ -4860,7 +4906,7 @@ export default function CostPage() {
                       }}
                     >
                       <td
-                        colSpan={16}
+                        colSpan={17}
                         className="px-6 whitespace-nowrap"
                         style={{
                           paddingTop: "16px",
@@ -5540,7 +5586,7 @@ export default function CostPage() {
                                           : "bg-white group-hover:bg-gray-50 peer-hover:bg-gray-50"
                               } ${isDark ? "text-slate-100" : "text-gray-900"}`}
                               style={{
-                                width: "13%",
+                                width: "11%",
                                 paddingTop: "16px",
                                 paddingBottom: "16px",
                                 boxSizing: "border-box",
@@ -5718,6 +5764,73 @@ export default function CostPage() {
                                     {item.is_menu_item
                                       ? "Menu Item"
                                       : "Prepped"}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+
+                            {/* Delivery */}
+                            <td
+                              className="pl-2 pr-2 whitespace-nowrap text-center"
+                              style={{
+                                width: "5%",
+                                paddingTop: "16px",
+                                paddingBottom: "16px",
+                                boxSizing: "border-box",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  height: "20px",
+                                  minHeight: "20px",
+                                  maxHeight: "20px",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                }}
+                              >
+                                {isEditModeCosting &&
+                                activeMode === "costing" ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={item.delivery ?? false}
+                                    onChange={(e) =>
+                                      handleItemChange(
+                                        item.id,
+                                        "delivery",
+                                        e.target.checked,
+                                      )
+                                    }
+                                    onClick={(e) => e.stopPropagation()}
+                                    className={`h-4 w-4 rounded border focus:ring-2 focus:ring-blue-500 ${
+                                      isDark
+                                        ? "border-slate-500 bg-slate-700 accent-blue-400"
+                                        : "border-gray-300 accent-blue-600"
+                                    }`}
+                                    aria-label={`Delivery for ${getItemDisplayName(item, baseItems)}`}
+                                  />
+                                ) : (
+                                  <div
+                                    className={`flex h-4 w-4 items-center justify-center rounded border ${
+                                      isDark
+                                        ? "border-slate-500 bg-slate-700"
+                                        : "border-gray-300 bg-white"
+                                    }`}
+                                    aria-label={`Delivery for ${getItemDisplayName(item, baseItems)}: ${
+                                      item.delivery ? "on" : "off"
+                                    }`}
+                                  >
+                                    {(item.delivery ?? false) && (
+                                      <Check
+                                        className={`h-3 w-3 ${
+                                          isDark
+                                            ? "text-white"
+                                            : "text-blue-600"
+                                        }`}
+                                        strokeWidth={3}
+                                        aria-hidden
+                                      />
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -6089,7 +6202,7 @@ export default function CostPage() {
                             <td
                               className="px-6 whitespace-nowrap"
                               style={{
-                                width: "6.5%",
+                                width: "5%",
                                 paddingTop: "16px",
                                 paddingBottom: "16px",
                                 boxSizing: "border-box",
@@ -6138,7 +6251,7 @@ export default function CostPage() {
                             <td
                               className="px-6 whitespace-nowrap"
                               style={{
-                                width: "6.5%",
+                                width: "5%",
                                 paddingTop: "16px",
                                 paddingBottom: "16px",
                                 boxSizing: "border-box",
@@ -6929,7 +7042,7 @@ export default function CostPage() {
                             }
                           >
                             <td
-                              colSpan={16}
+                              colSpan={17}
                               className={`py-4 transition-colors ${
                                 isNewItem
                                   ? newItemBgClass

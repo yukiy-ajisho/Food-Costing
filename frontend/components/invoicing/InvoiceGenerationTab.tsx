@@ -16,15 +16,29 @@ import {
 import {
   computeInvoicingSubTotal,
   costPerKgFromBreakdown,
+  costsFromWholesaleMembers,
   eachGramsForInvoicing,
   formatInvoicingCostDisplay,
   formatCurrency,
   getInvoicingUnitOptions,
   type InvoicingCostBreakdown,
 } from "@/lib/invoicingCalc";
+import { SearchableSelect } from "@/components/SearchableSelect";
+import { recipeCostReportAPI } from "@/lib/recipeCostReport";
 import { CreateInvoicingListModal } from "./CreateInvoicingListModal";
 import { InvoiceGeneratePreviewModal } from "./InvoiceGeneratePreviewModal";
+import { UnpricedBadge } from "./UnpricedBadge";
 import type { GeneratePreviewPayload } from "@/lib/invoicingPreview";
+import {
+  validateInvoiceGenerateInput,
+  type InvoiceGenerateValidationField,
+} from "@/lib/invoicingGenerateValidation";
+import {
+  formatInvoiceDateTimeDisplay,
+  localDateTimeInputToIso,
+  localDateYmdFromInput,
+  nowLocalDateTimeInputValue,
+} from "@/lib/invoicingDateTime";
 
 type RowInput = {
   unitSize: string;
@@ -42,9 +56,6 @@ function newLocalId(): string {
 }
 
 const DEFAULT_UNIT_SIZE_UNIT = "g";
-function todayYmd(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function emptyRowInput(row?: InvoiceListItemRow): RowInput {
   return {
@@ -104,6 +115,15 @@ export function InvoiceGenerationTab({
   const [listName, setListName] = useState("");
   const [deliverySiteId, setDeliverySiteId] = useState("");
   const [deliverySiteName, setDeliverySiteName] = useState("");
+  const [wholesaleListId, setWholesaleListId] = useState<string | null>(null);
+  const [savedWholesaleListId, setSavedWholesaleListId] = useState<
+    string | null
+  >(null);
+  const [wholesaleLists, setWholesaleLists] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [pricedItemIds, setPricedItemIds] = useState<Set<string>>(new Set());
+  const [pricedItemIdsLoading, setPricedItemIdsLoading] = useState(false);
   const [items, setItems] = useState<InvoiceListItemRow[]>([]);
   const [costs, setCosts] = useState<Record<string, InvoicingCostBreakdown>>(
     {},
@@ -124,7 +144,6 @@ export function InvoiceGenerationTab({
   const [loading, setLoading] = useState(false);
   const [costsLoading, setCostsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [deliverySiteSaving, setDeliverySiteSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [isEditMode, setIsEditMode] = useState(false);
@@ -135,9 +154,10 @@ export function InvoiceGenerationTab({
 
   const [showCreate, setShowCreate] = useState(false);
   const [openListMenuId, setOpenListMenuId] = useState<string | null>(null);
-  const [eachMode, setEachMode] = useState(false);
+  const [eachMode, setEachMode] = useState(true);
   const [previewPayload, setPreviewPayload] =
     useState<GeneratePreviewPayload | null>(null);
+  const [validationAttempted, setValidationAttempted] = useState(false);
 
   const border = isDark ? "border-slate-700" : "border-gray-200";
   const panel = isDark ? "bg-slate-800" : "bg-white";
@@ -158,7 +178,7 @@ export function InvoiceGenerationTab({
       ? "border-slate-600 bg-slate-900 text-slate-100"
       : "border-gray-300 bg-white text-gray-900"
   }`;
-  const deliverySiteSelectCls = `h-7 w-[min(100%,9.5rem)] min-w-[7rem] max-w-[9.5rem] rounded border px-1.5 py-0.5 text-xs transition-colors focus:outline-none focus:ring-1 focus:ring-blue-500/40 ${
+  const deliverySiteSelectCls = `h-10 w-full rounded-lg border px-3 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
     isDark
       ? "border-slate-600 bg-slate-900 text-slate-100"
       : "border-gray-300 bg-white text-gray-900"
@@ -196,33 +216,6 @@ export function InvoiceGenerationTab({
       ? "border-slate-600 bg-slate-900 text-slate-100"
       : "border-gray-300 bg-white text-gray-900"
   }`;
-  const renderDateField = (
-    label: string,
-    value: string,
-    onChange: (next: string) => void,
-    options?: { alwaysEditable?: boolean },
-  ) => (
-    <label className={`block text-sm ${textMain}`}>
-      <span className={`mb-1 block text-xs font-medium ${muted}`}>{label}</span>
-      {!isEditMode || options?.alwaysEditable ? (
-        <input
-          type="date"
-          className={dateInputCls}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      ) : (
-        <input
-          type="date"
-          className={dateInputCls}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled
-        />
-      )}
-    </label>
-  );
-
   const loadLists = useCallback(async () => {
     const data = await invoicingAPI.listInvoiceLists();
     setLists(data.lists ?? []);
@@ -253,13 +246,23 @@ export function InvoiceGenerationTab({
         setIsEditMode(false);
         setPendingRemovals(new Set());
         setPendingAdds([]);
-        setInvoiceDate((prev) => prev || todayYmd());
+        setInvoiceDate((prev) => prev || nowLocalDateTimeInputValue());
       }
       try {
         const data = await invoicingAPI.getInvoiceList(listId);
         setListName(data.list.name);
         setDeliverySiteId(data.list.delivery_site_id);
         setDeliverySiteName(data.delivery_site?.name ?? "");
+        const nextWholesaleListId = data.list.wholesale_list_id;
+        let wholesaleListChanged = false;
+        setWholesaleListId((prev) => {
+          wholesaleListChanged = prev !== nextWholesaleListId;
+          return nextWholesaleListId;
+        });
+        if (wholesaleListChanged) {
+          setPricedItemIdsLoading(Boolean(nextWholesaleListId));
+        }
+        setSavedWholesaleListId(nextWholesaleListId);
         setItems(data.items);
         setRowInputs((prev) => {
           const inputs = new Map<string, RowInput>();
@@ -301,6 +304,14 @@ export function InvoiceGenerationTab({
       .listAccounts()
       .then((d) => setAccounts(d.accounts ?? []))
       .catch(() => {});
+    void recipeCostReportAPI
+      .listWholesaleLists()
+      .then((data) =>
+        setWholesaleLists(
+          (data.lists ?? []).map((list) => ({ id: list.id, name: list.name })),
+        ),
+      )
+      .catch(() => setWholesaleLists([]));
   }, [loadLists]);
 
   useEffect(() => {
@@ -345,12 +356,12 @@ export function InvoiceGenerationTab({
       if (current && filteredLists.some((l) => l.id === current)) {
         return current;
       }
-      return filteredLists[0].id;
+      return null;
     });
   }, [filteredLists]);
 
   useEffect(() => {
-    setInvoiceDate(todayYmd());
+    setInvoiceDate(nowLocalDateTimeInputValue());
   }, []);
 
   useEffect(() => {
@@ -358,45 +369,195 @@ export function InvoiceGenerationTab({
     void loadDetail(selectedListId);
   }, [selectedListId, loadDetail]);
 
+  useEffect(() => {
+    setValidationAttempted(false);
+  }, [selectedListId]);
+
   const candidateById = useMemo(() => {
     const map = new Map<string, InvoicingItemCandidate>();
     for (const c of candidates) map.set(c.id, c);
     return map;
   }, [candidates]);
 
+  useEffect(() => {
+    if (!wholesaleListId) {
+      setPricedItemIds(new Set());
+      setPricedItemIdsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPricedItemIdsLoading(true);
+    void recipeCostReportAPI
+      .getWholesaleList(wholesaleListId)
+      .then((data) => {
+        if (cancelled) return;
+        setPricedItemIds(
+          new Set(
+            (data.members ?? [])
+              .filter(
+                (m) =>
+                  m.latest_wholesale_price != null &&
+                  Number.isFinite(m.latest_wholesale_price) &&
+                  m.latest_wholesale_price > 0,
+              )
+              .map((m) => m.item_id),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setPricedItemIds(new Set());
+      })
+      .finally(() => {
+        if (!cancelled) setPricedItemIdsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wholesaleListId]);
+
   const visibleItems = useMemo(() => {
     const removed = pendingRemovals;
     return items.filter((row) => !removed.has(row.item_id));
   }, [items, pendingRemovals]);
 
-  const canGenerate = useMemo(() => {
-    if (loading || costsLoading) return false;
-    if (!orderReceivedDate.trim()) return false;
-    if (!deliveryDate.trim()) return false;
-    if (!invoiceDate.trim()) return false;
-    if (visibleItems.length === 0) return false;
-    for (const row of visibleItems) {
-      const input = rowInputs.get(row.item_id) ?? emptyRowInput(row);
-      const unitSize = parseFloat(input.unitSize);
-      const unitsRaw = input.units.trim();
-      const units = unitsRaw === "" ? null : parseFloat(unitsRaw);
-      const unitSizeUnit = input.unitSizeUnit.trim();
-      if (!Number.isFinite(unitSize) || unitSize <= 0) return false;
-      if (!unitSizeUnit) return false;
-      if (units != null && (!Number.isFinite(units) || units < 0)) return false;
-      if (costPerKgFromBreakdown(costs[row.item_id]) == null) return false;
-    }
-    return true;
+  useEffect(() => {
+    if (!isEditMode || !wholesaleListId) return;
+    if (wholesaleListId === savedWholesaleListId) return;
+
+    let cancelled = false;
+    const itemIds = [
+      ...visibleItems.map((r) => r.item_id),
+      ...pendingAdds.filter((p) => p.item_id).map((p) => p.item_id),
+    ];
+    void recipeCostReportAPI
+      .getWholesaleList(wholesaleListId)
+      .then((data) => {
+        if (cancelled) return;
+        setCosts(
+          costsFromWholesaleMembers(data.members ?? [], itemIds),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setCosts({});
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [
-    loading,
-    costsLoading,
-    orderReceivedDate,
-    deliveryDate,
-    invoiceDate,
+    isEditMode,
+    wholesaleListId,
+    savedWholesaleListId,
     visibleItems,
-    rowInputs,
-    costs,
+    pendingAdds,
   ]);
+
+  const unpricedItemIds = useMemo(() => {
+    if (pricedItemIdsLoading) {
+      return [];
+    }
+    if (!wholesaleListId) {
+      return visibleItems.map((row) => row.item_id);
+    }
+    return visibleItems
+      .filter((row) => !pricedItemIds.has(row.item_id))
+      .map((row) => row.item_id);
+  }, [pricedItemIdsLoading, wholesaleListId, visibleItems, pricedItemIds]);
+
+  const addableCandidates = useMemo(() => {
+    return candidates.filter(
+      (c) =>
+        pricedItemIds.has(c.id) &&
+        !items.some(
+          (i) => i.item_id === c.id && !pendingRemovals.has(i.item_id),
+        ),
+    );
+  }, [candidates, pricedItemIds, items, pendingRemovals]);
+
+  const generateValidation = useMemo(
+    () =>
+      validateInvoiceGenerateInput({
+        loading,
+        costsLoading,
+        orderReceivedDate,
+        deliveryDate,
+        invoiceDate,
+        visibleItemIds: visibleItems.map((row) => row.item_id),
+        rowInputs,
+        costs,
+        unpricedItemIds,
+        emptyRowInput: (itemId) => {
+          const row = visibleItems.find((r) => r.item_id === itemId);
+          return emptyRowInput(row);
+        },
+      }),
+    [
+      loading,
+      costsLoading,
+      orderReceivedDate,
+      deliveryDate,
+      invoiceDate,
+      visibleItems,
+      rowInputs,
+      costs,
+      unpricedItemIds,
+    ],
+  );
+
+  const canGenerate = generateValidation.ok;
+  const hasUnpricedItems = unpricedItemIds.length > 0;
+  const generateDisabled =
+    !canGenerate || previewLoading || hasUnpricedItems;
+
+  const invalidFieldCls = (field: InvoiceGenerateValidationField) =>
+    validationAttempted && generateValidation.invalidFields.has(field)
+      ? "border-red-500 ring-1 ring-red-500/50"
+      : "";
+
+  const renderInvoiceDateTimeField = (
+    label: string,
+    value: string,
+    onChange: (next: string) => void,
+    fieldKey?: InvoiceGenerateValidationField,
+  ) => (
+    <label className={`block text-sm ${textMain}`}>
+      <span className={`mb-1 block text-xs font-medium ${muted}`}>{label}</span>
+      <input
+        type="datetime-local"
+        className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""}`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={isEditMode}
+      />
+    </label>
+  );
+
+  const renderDateField = (
+    label: string,
+    value: string,
+    onChange: (next: string) => void,
+    fieldKey?: InvoiceGenerateValidationField,
+    options?: { alwaysEditable?: boolean },
+  ) => (
+    <label className={`block text-sm ${textMain}`}>
+      <span className={`mb-1 block text-xs font-medium ${muted}`}>{label}</span>
+      {!isEditMode || options?.alwaysEditable ? (
+        <input
+          type="date"
+          className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""}`}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      ) : (
+        <input
+          type="date"
+          className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""}`}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled
+        />
+      )}
+    </label>
+  );
 
   const updateRowInput = (itemId: string, patch: Partial<RowInput>) => {
     setRowInputs((prev) => {
@@ -411,15 +572,21 @@ export function InvoiceGenerationTab({
     name: string;
     account_id: string;
     delivery_site_id: string;
+    wholesale_list_id: string;
     item_ids: string[];
   }) => {
     setError(null);
     try {
-      const data = await invoicingAPI.createInvoiceList(payload);
+      const data = await invoicingAPI.createInvoiceList({
+        name: payload.name,
+        delivery_site_id: payload.delivery_site_id,
+        wholesale_list_id: payload.wholesale_list_id,
+        item_ids: payload.item_ids,
+      });
       setShowCreate(false);
       await loadLists();
       setSelectedListId(data.list.id);
-      setInvoiceDate((prev) => prev || todayYmd());
+      setInvoiceDate((prev) => prev || nowLocalDateTimeInputValue());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create list");
     }
@@ -442,6 +609,7 @@ export function InvoiceGenerationTab({
 
   const handleEditCancel = () => {
     setIsEditMode(false);
+    setValidationAttempted(false);
     setPendingRemovals(new Set());
     setPendingAdds([]);
     if (selectedListId)
@@ -457,6 +625,10 @@ export function InvoiceGenerationTab({
     }
     if (!deliverySiteId) {
       setError("Delivery site is required.");
+      return;
+    }
+    if (!wholesaleListId) {
+      setError("Wholesale price list is required.");
       return;
     }
 
@@ -496,6 +668,7 @@ export function InvoiceGenerationTab({
       await invoicingAPI.updateInvoiceList(selectedListId, {
         name: trimmedName,
         delivery_site_id: deliverySiteId,
+        wholesale_list_id: wholesaleListId,
         lines,
       });
       setIsEditMode(false);
@@ -510,36 +683,11 @@ export function InvoiceGenerationTab({
     }
   };
 
-  const handleDeliverySiteChange = async (nextSiteId: string) => {
-    if (!selectedListId || !nextSiteId || nextSiteId === deliverySiteId) {
-      return;
-    }
-    const site = deliverySites.find((s) => s.id === nextSiteId);
-    if (!site) return;
-    if (selectedAccountId && site.account_id !== selectedAccountId) {
-      return;
-    }
-
-    const prevId = deliverySiteId;
-    const prevName = deliverySiteName;
+  const handleDeliverySiteSelect = (nextSiteId: string) => {
+    if (!isEditMode) return;
     setDeliverySiteId(nextSiteId);
-    setDeliverySiteName(site.name);
-    setDeliverySiteSaving(true);
-    setError(null);
-    try {
-      await invoicingAPI.updateInvoiceList(selectedListId, {
-        delivery_site_id: nextSiteId,
-      });
-      await loadLists();
-    } catch (e: unknown) {
-      setDeliverySiteId(prevId);
-      setDeliverySiteName(prevName);
-      setError(
-        e instanceof Error ? e.message : "Failed to update delivery site",
-      );
-    } finally {
-      setDeliverySiteSaving(false);
-    }
+    const site = deliverySites.find((s) => s.id === nextSiteId);
+    setDeliverySiteName(site?.name ?? "");
   };
 
   const handleAddPendingRow = () => {
@@ -613,12 +761,20 @@ export function InvoiceGenerationTab({
       return;
     }
 
+    const invoiceDateIso = localDateTimeInputToIso(invoiceDate);
+    const invoiceDateYmd = localDateYmdFromInput(invoiceDate);
+    if (!invoiceDateIso || !invoiceDateYmd) {
+      setError("Invoice creation date is invalid.");
+      return;
+    }
+
     const totalAmount = rows.reduce((sum, r) => sum + r.subTotal, 0);
     setPreviewLoading(true);
     try {
       const { invoice_number } = await invoicingAPI.previewInvoiceNumber({
         delivery_site_id: deliverySiteId,
-        invoice_date: invoiceDate,
+        invoice_date: invoiceDateIso,
+        invoice_date_ymd: invoiceDateYmd,
       });
       setPreviewPayload({
         listId: selectedListId,
@@ -628,7 +784,9 @@ export function InvoiceGenerationTab({
         invoiceNumber: invoice_number,
         orderReceivedDate,
         deliveryDate,
-        invoiceDate,
+        invoiceDate: formatInvoiceDateTimeDisplay(invoiceDate),
+        invoiceDateIso,
+        invoiceDateYmd,
         rows,
         totalAmount,
       });
@@ -639,6 +797,14 @@ export function InvoiceGenerationTab({
     } finally {
       setPreviewLoading(false);
     }
+  };
+
+  const handleGenerateClick = () => {
+    if (generateDisabled) {
+      setValidationAttempted(true);
+      return;
+    }
+    void handleGenerate();
   };
 
   const handleInvoiceSaved = async (emailWarning?: string) => {
@@ -693,6 +859,21 @@ export function InvoiceGenerationTab({
           )
         : null;
 
+    const unitSizeFieldKey = `unitSize:${row.item_id}` as const;
+    const unitSizeUnitFieldKey = `unitSizeUnit:${row.item_id}` as const;
+    const unitsFieldKey = `units:${row.item_id}` as const;
+    const unitSizeCellInvalid =
+      validationAttempted &&
+      (generateValidation.invalidFields.has(unitSizeFieldKey) ||
+        generateValidation.invalidFields.has(unitSizeUnitFieldKey));
+    const costMissing =
+      validationAttempted &&
+      generateValidation.missingCostItemIds.includes(row.item_id);
+    const isUnpriced =
+      !pricedItemIdsLoading &&
+      wholesaleListId != null &&
+      !pricedItemIds.has(row.item_id);
+
     return (
       <tr
         key={row.item_id}
@@ -711,6 +892,7 @@ export function InvoiceGenerationTab({
           <div className="flex items-center gap-2">
             <span>{row.name}</span>
             <ItemKindBadge isMenuItem={row.is_menu_item} isDark={isDark} />
+            {isUnpriced ? <UnpricedBadge isDark={isDark} /> : null}
           </div>
         </td>
         <td className="px-4 py-2">
@@ -744,7 +926,13 @@ export function InvoiceGenerationTab({
               </select>
             </div>
           ) : (
-            <span className={`tabular-nums ${textMain}`}>
+            <span
+              className={`tabular-nums ${textMain} ${
+                unitSizeCellInvalid
+                  ? "inline-flex min-h-10 items-center rounded-md border border-red-500 px-2 ring-1 ring-red-500/50"
+                  : ""
+              }`}
+            >
               {formatUnitSizeDisplay(input)}
             </span>
           )}
@@ -755,7 +943,7 @@ export function InvoiceGenerationTab({
               type="number"
               min="0"
               step="any"
-              className={`${inputCls} w-24`}
+              className={`${inputCls} w-24 ${invalidFieldCls(unitsFieldKey)}`}
               value={input.units}
               onChange={(e) =>
                 updateRowInput(row.item_id, { units: e.target.value })
@@ -767,7 +955,11 @@ export function InvoiceGenerationTab({
             </span>
           )}
         </td>
-        <td className={`px-4 py-2 tabular-nums ${muted}`}>
+        <td
+          className={`px-4 py-2 tabular-nums ${muted} ${
+            costMissing ? "text-red-500 dark:text-red-400" : ""
+          }`}
+        >
           {costsLoading
             ? "…"
             : formatInvoicingCostDisplay(costs[row.item_id], row, eachMode)}
@@ -872,7 +1064,7 @@ export function InvoiceGenerationTab({
           <div
             className={`flex flex-1 items-center justify-center rounded-lg border ${border} ${panel} p-12 text-sm ${muted}`}
           >
-            Select a list or create a new one.
+            Select delivery list template
           </div>
         ) : loading ? (
           <div
@@ -903,33 +1095,13 @@ export function InvoiceGenerationTab({
                     </h2>
                   )}
                 </div>
-                <div className="shrink-0">
-                  <label
-                    htmlFor="invoicing-delivery-site-select"
-                    className={`mb-0.5 block text-[11px] font-medium leading-tight ${muted}`}
-                  >
-                    Delivery site
-                  </label>
-                  <select
-                    id="invoicing-delivery-site-select"
-                    value={deliverySiteId}
-                    disabled={
-                      deliverySiteSaving ||
-                      saving ||
-                      deliverySiteOptions.length === 0
-                    }
-                    onChange={(e) =>
-                      void handleDeliverySiteChange(e.target.value)
-                    }
-                    className={deliverySiteSelectCls}
-                  >
-                    <option value="">Select delivery site</option>
-                    {deliverySiteOptions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                <div className="shrink-0 min-w-[220px]">
+                  {renderInvoiceDateTimeField(
+                    "Invoice Creation Date",
+                    invoiceDate,
+                    setInvoiceDate,
+                    "invoiceDate",
+                  )}
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -958,7 +1130,10 @@ export function InvoiceGenerationTab({
                   <>
                     <button
                       type="button"
-                      onClick={() => setIsEditMode(true)}
+                      onClick={() => {
+                        setValidationAttempted(false);
+                        setIsEditMode(true);
+                      }}
                       className={btnEdit}
                     >
                       <Edit className="h-4 w-4 shrink-0" />
@@ -966,9 +1141,11 @@ export function InvoiceGenerationTab({
                     </button>
                     <button
                       type="button"
-                      disabled={!canGenerate || previewLoading}
-                      onClick={() => void handleGenerate()}
-                      className={btnPrimary}
+                      aria-disabled={generateDisabled}
+                      onClick={handleGenerateClick}
+                      className={`${btnPrimary} ${
+                        generateDisabled ? "cursor-not-allowed opacity-50" : ""
+                      }`}
                     >
                       {previewLoading ? "Generating…" : "Generate"}
                     </button>
@@ -986,32 +1163,101 @@ export function InvoiceGenerationTab({
             <div
               className={`mb-4 shrink-0 rounded-lg border px-4 py-3 ${border} ${panel}`}
             >
-              {isEditMode ? (
-                <p className={`mb-3 text-xs ${muted}`}>
-                  Dates are set when generating an invoice (after Save).
-                  Delivery site saves immediately when changed.
-                </p>
-              ) : null}
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div className={`block text-sm ${textMain}`}>
+                  <span className={`mb-1 block text-xs font-medium ${muted}`}>
+                    Delivery Site
+                  </span>
+                  {isEditMode ? (
+                    <select
+                      id="invoicing-delivery-site-select"
+                      value={deliverySiteId}
+                      disabled={saving || deliverySiteOptions.length === 0}
+                      onChange={(e) => handleDeliverySiteSelect(e.target.value)}
+                      className={deliverySiteSelectCls}
+                    >
+                      <option value="">Select Delivery Site</option>
+                      {deliverySiteOptions.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div
+                      className={`flex h-10 cursor-default items-center rounded-lg border px-3 text-sm ${
+                        isDark
+                          ? "border-slate-600 bg-slate-900 text-slate-100"
+                          : "border-gray-300 bg-white text-gray-900"
+                      }`}
+                      aria-readonly
+                    >
+                      {deliverySiteName || "—"}
+                    </div>
+                  )}
+                </div>
+                <div className={`block text-sm ${textMain}`}>
+                  <span className={`mb-1 block text-xs font-medium ${muted}`}>
+                    Wholesale Price List
+                  </span>
+                  {isEditMode ? (
+                    <select
+                      value={wholesaleListId ?? ""}
+                      disabled={saving || wholesaleLists.length === 0}
+                      onChange={(e) => {
+                        const next = e.target.value || null;
+                        setPricedItemIdsLoading(Boolean(next));
+                        setWholesaleListId(next);
+                      }}
+                      className={deliverySiteSelectCls}
+                    >
+                      <option value="">Select wholesale list</option>
+                      {wholesaleLists.map((list) => (
+                        <option key={list.id} value={list.id}>
+                          {list.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div
+                      className={`flex h-10 cursor-default items-center rounded-lg border px-3 text-sm ${
+                        isDark
+                          ? "border-slate-600 bg-slate-900 text-slate-100"
+                          : "border-gray-300 bg-white text-gray-900"
+                      }`}
+                      aria-readonly
+                    >
+                      {wholesaleLists.find((l) => l.id === wholesaleListId)
+                        ?.name ??
+                        (wholesaleListId ? "—" : "Not set")}
+                    </div>
+                  )}
+                </div>
                 {renderDateField(
-                  "Invoice creation date",
-                  invoiceDate,
-                  setInvoiceDate,
-                  { alwaysEditable: true },
-                )}
-              </div>
-              <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                {renderDateField(
-                  "Order received",
-                  orderReceivedDate,
-                  setOrderReceivedDate,
-                )}
-                {renderDateField(
-                  "Delivery date",
+                  "Delivery Date",
                   deliveryDate,
                   setDeliveryDate,
+                  "deliveryDate",
+                )}
+                {renderDateField(
+                  "Order Received",
+                  orderReceivedDate,
+                  setOrderReceivedDate,
+                  "orderReceivedDate",
                 )}
               </div>
+              {validationAttempted &&
+              (generateValidation.hasNoItems ||
+                generateValidation.unpricedItemIds.length > 0 ||
+                generateValidation.missingCostItemIds.length > 0) ? (
+                <p className={`mt-3 text-xs ${muted}`}>
+                  {generateValidation.hasNoItems
+                    ? "Add at least one item to the template before generating."
+                    : generateValidation.unpricedItemIds.length > 0
+                      ? "Some items have no wholesale price on the selected wholesale list. Set prices on the wholesale list or edit the template."
+                      : "Wholesale price is unavailable for some items. Edit the template or set wholesale prices on the linked list."}
+                </p>
+              ) : null}
             </div>
 
             <div
@@ -1031,10 +1277,10 @@ export function InvoiceGenerationTab({
                           onClick={() => setEachMode((v) => !v)}
                           className={`shrink-0 rounded px-2 py-0.5 text-xs normal-case transition-colors ${
                             eachMode
-                              ? "bg-blue-500 font-semibold text-white"
+                              ? "bg-blue-500 font-semibold text-white hover:bg-blue-400"
                               : isDark
-                                ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                                : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                                ? "bg-slate-600 font-medium text-slate-100 hover:bg-slate-500 hover:text-white"
+                                : "bg-gray-300 font-medium text-gray-800 hover:bg-gray-200"
                           }`}
                         >
                           each
@@ -1097,11 +1343,11 @@ export function InvoiceGenerationTab({
                         >
                           <td className="px-4 py-2">
                             <div className="flex min-w-0 items-center gap-2">
-                              <select
-                                className={`${pendingInputCls} min-w-0 flex-1`}
+                              <div className="min-w-0 flex-1">
+                              <SearchableSelect
+                                useFloatingPortal
                                 value={pending.item_id}
-                                onChange={(e) => {
-                                  const itemId = e.target.value;
+                                onChange={(itemId) => {
                                   setPendingAdds((prev) =>
                                     prev.map((p) =>
                                       p.localId === pending.localId
@@ -1110,32 +1356,23 @@ export function InvoiceGenerationTab({
                                     ),
                                   );
                                 }}
-                                aria-label="Item to add"
-                              >
-                                <option value="">Select item…</option>
-                                {candidates
+                                placeholder="Select item…"
+                                options={addableCandidates
                                   .filter(
                                     (c) =>
-                                      !items.some(
-                                        (i) =>
-                                          i.item_id === c.id &&
-                                          !pendingRemovals.has(c.id),
-                                      ) &&
                                       !pendingAdds.some(
                                         (p) =>
                                           p.item_id === c.id &&
                                           p.localId !== pending.localId,
                                       ),
                                   )
-                                  .map((c) => (
-                                    <option key={c.id} value={c.id}>
-                                      {c.name}
-                                      {c.is_menu_item
-                                        ? " (Menu)"
-                                        : " (Prepped)"}
-                                    </option>
-                                  ))}
-                              </select>
+                                  .map((c) => ({
+                                    id: c.id,
+                                    name: c.name,
+                                    subLabel: c.is_menu_item ? "Menu" : "Prepped",
+                                  }))}
+                              />
+                              </div>
                             </div>
                           </td>
                           <td className={`px-4 py-2 ${muted}`}>—</td>

@@ -55,6 +55,37 @@ export function eachGramsForInvoicing(
   return grams > 0 ? grams : null;
 }
 
+/** Build cost map from wholesale list members (preview while editing list). */
+export function costsFromWholesaleMembers(
+  members: Array<{
+    item_id: string;
+    latest_wholesale_price: number | null;
+  }>,
+  itemIds?: string[],
+): Record<string, InvoicingCostBreakdown> {
+  const allowed =
+    itemIds != null ? new Set(itemIds) : null;
+  const costs: Record<string, InvoicingCostBreakdown> = {};
+  for (const m of members) {
+    if (allowed && !allowed.has(m.item_id)) continue;
+    const pricePerKg = m.latest_wholesale_price;
+    if (
+      pricePerKg == null ||
+      !Number.isFinite(pricePerKg) ||
+      pricePerKg <= 0
+    ) {
+      continue;
+    }
+    const perGram = pricePerKg / 1000;
+    costs[m.item_id] = {
+      food_cost_per_gram: perGram,
+      labor_cost_per_gram: 0,
+      total_cost_per_gram: perGram,
+    };
+  }
+  return costs;
+}
+
 export function costPerKgFromBreakdown(
   breakdown: InvoicingCostBreakdown | undefined,
 ): number | null {

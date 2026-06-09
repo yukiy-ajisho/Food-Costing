@@ -62,6 +62,7 @@ export interface Item {
   procedure?: string | null;
   deprecated?: string | null; // timestamp when deprecated
   deprecation_reason?: "direct" | "indirect" | null; // reason for deprecation
+  delivery?: boolean; // invoicing delivery preselect flag
   user_id: string; // FK to users (deprecated, use tenant_id)
   tenant_id: string; // FK to tenants
   responsible_user_id?: string | null; // FK to users - The Manager who has the right to change access rights for this record
@@ -288,7 +289,7 @@ export interface DocumentMetadataInvoice {
   file_name: string;
   content_type?: string | null;
   size_bytes?: number | null;
-  invoice_date: string | null; // date YYYY-MM-DD（未確定時は NULL）
+  invoice_date: string | null; // timestamptz ISO（invoice creation date/time, UTC）
   total_amount: number | null;
   created_at?: string;
   created_by: string;
