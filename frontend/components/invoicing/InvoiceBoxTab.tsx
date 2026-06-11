@@ -23,13 +23,13 @@ import { InvoiceBoxHeaderFilter } from "./InvoiceBoxHeaderFilter";
 import { InvoiceBoxHeaderRangeFilter } from "./InvoiceBoxHeaderRangeFilter";
 import { InvoiceGeneratePreviewModal } from "./InvoiceGeneratePreviewModal";
 import { InvoiceGenerationModal } from "./InvoiceGenerationModal";
-import { formatInvoiceDateTimeAmPm } from "@/lib/invoicingDateTime";
+import { formatInvoiceDateDisplay } from "@/lib/invoicingDateTime";
 
 const DEFAULT_SORT: InvoiceBoxSortState = { key: "date", ascending: false };
 
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
-  const formatted = formatInvoiceDateTimeAmPm(value);
+  const formatted = formatInvoiceDateDisplay(value);
   return formatted || value;
 }
 

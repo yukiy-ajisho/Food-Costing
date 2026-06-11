@@ -49,8 +49,8 @@ export function CreateInvoicingListModal({
   const [wholesaleLoading, setWholesaleLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [showMenu, setShowMenu] = useState(true);
-  const [showPrepped, setShowPrepped] = useState(true);
+  const [showMenu, setShowMenu] = useState(false);
+  const [showPrepped, setShowPrepped] = useState(false);
   const [showDeliveryPreselect, setShowDeliveryPreselect] = useState(false);
 
   useEffect(() => {
@@ -132,11 +132,19 @@ export function CreateInvoicingListModal({
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const typeFilterActive = showMenu || showPrepped;
+
     return candidates.filter((c) => {
       if (!pricedItemIds.has(c.id)) return false;
-      if (c.is_menu_item && !showMenu) return false;
-      if (!c.is_menu_item && !showPrepped) return false;
+
+      if (typeFilterActive) {
+        const passesType =
+          (showMenu && c.is_menu_item) || (showPrepped && !c.is_menu_item);
+        if (!passesType) return false;
+      }
+
       if (showDeliveryPreselect && !c.delivery) return false;
+
       if (!q) return true;
       return c.name.toLowerCase().includes(q);
     });
@@ -183,7 +191,7 @@ export function CreateInvoicingListModal({
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium">
-              Delivery List Template
+              Delivery List Template Name
             </label>
             <input
               className={inputCls}

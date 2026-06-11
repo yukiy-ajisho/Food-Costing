@@ -26,7 +26,10 @@ import {
   type GeneratePreviewPayload,
 } from "@/lib/invoicingPreview";
 
-export type { GeneratePreviewPayload, GeneratePreviewRow } from "@/lib/invoicingPreview";
+export type {
+  GeneratePreviewPayload,
+  GeneratePreviewRow,
+} from "@/lib/invoicingPreview";
 
 type PreviewTab = "email" | "attached";
 
@@ -39,7 +42,8 @@ type PreviewDraggableProps = {
   children: ReactNode;
 };
 
-const Draggable = DraggableBase as unknown as ComponentType<PreviewDraggableProps>;
+const Draggable =
+  DraggableBase as unknown as ComponentType<PreviewDraggableProps>;
 
 type Props = {
   isDark: boolean;
@@ -97,7 +101,9 @@ export function InvoiceGeneratePreviewModal({
     };
   }, [payload]);
 
-  const panel = isDark ? "bg-slate-800 text-slate-100" : "bg-white text-gray-900";
+  const panel = isDark
+    ? "bg-slate-800 text-slate-100"
+    : "bg-white text-gray-900";
   const border = isDark ? "border-slate-600" : "border-gray-200";
 
   const totalLabel = useMemo(
@@ -105,8 +111,14 @@ export function InvoiceGeneratePreviewModal({
     [payload.totalAmount],
   );
 
-  const emailSubject = useMemo(() => buildInvoiceEmailSubject(payload), [payload]);
-  const emailBody = useMemo(() => buildInvoiceEmailBodyContent(payload), [payload]);
+  const emailSubject = useMemo(
+    () => buildInvoiceEmailSubject(payload),
+    [payload],
+  );
+  const emailBody = useMemo(
+    () => buildInvoiceEmailBodyContent(payload),
+    [payload],
+  );
   const emailAttachmentName = useMemo(
     () => buildInvoiceEmailAttachmentFilename(payload.invoiceNumber),
     [payload.invoiceNumber],
@@ -130,9 +142,7 @@ export function InvoiceGeneratePreviewModal({
         delivery_site_id: payload.deliverySiteId,
         order_received_date: payload.orderReceivedDate || null,
         delivery_date: payload.deliveryDate || null,
-        invoice_date: payload.invoiceDateIso,
-        invoice_date_ymd: payload.invoiceDateYmd,
-        invoice_date_display: payload.invoiceDate,
+        invoice_date: payload.invoiceDate,
         invoice_number: payload.invoiceNumber || undefined,
         total_amount: payload.totalAmount,
         lines: previewPayloadToBoxLines(payload),
@@ -165,9 +175,7 @@ export function InvoiceGeneratePreviewModal({
   };
 
   const sentLabel =
-    sentAt != null
-      ? `Sent ${new Date(sentAt).toLocaleString()}`
-      : "Not sent";
+    sentAt != null ? `Sent ${new Date(sentAt).toLocaleString()}` : "Not sent";
 
   if (!mounted) return null;
 
@@ -234,7 +242,9 @@ export function InvoiceGeneratePreviewModal({
                   <p
                     className={`invoice-preview-drag-handle mt-1 cursor-move text-sm ${muted}`}
                   >
-                    {payload.invoiceNumber ? `Invoice # ${payload.invoiceNumber} · ` : ""}
+                    {payload.invoiceNumber
+                      ? `Invoice # ${payload.invoiceNumber} · `
+                      : ""}
                     {payload.listName} · {payload.deliverySiteName} · Total{" "}
                     {totalLabel}
                     {mode === "box" ? ` · ${sentLabel}` : null}
@@ -269,14 +279,18 @@ export function InvoiceGeneratePreviewModal({
                       isDark ? "bg-slate-800" : "bg-white"
                     }`}
                   >
-                    <div className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
+                    <div
+                      className={`text-xs font-medium uppercase tracking-wide ${muted}`}
+                    >
                       Subject
                     </div>
                     <div className="mt-1 font-medium">{emailSubject}</div>
                   </div>
                   <div
                     className={`min-h-0 flex-1 overflow-y-auto px-4 py-4 text-sm leading-relaxed ${
-                      isDark ? "bg-slate-800 text-slate-100" : "bg-white text-gray-900"
+                      isDark
+                        ? "bg-slate-800 text-slate-100"
+                        : "bg-white text-gray-900"
                     }`}
                   >
                     <p>
@@ -288,17 +302,23 @@ export function InvoiceGeneratePreviewModal({
                       <br />
                       Total amount: {emailBody.totalAmountLabel}
                     </p>
-                    <p className="mt-4">This message was sent from Food Costing.</p>
+                    <p className="mt-4">
+                      This message was sent from Food Costing.
+                    </p>
                   </div>
                   <div
                     className={`shrink-0 border-t px-4 py-3 text-sm ${border} ${
                       isDark ? "bg-slate-800" : "bg-white"
                     }`}
                   >
-                    <div className={`text-xs font-medium uppercase tracking-wide ${muted}`}>
+                    <div
+                      className={`text-xs font-medium uppercase tracking-wide ${muted}`}
+                    >
                       Attachment
                     </div>
-                    <div className="mt-1 font-medium">{emailAttachmentName}</div>
+                    <div className="mt-1 font-medium">
+                      {emailAttachmentName}
+                    </div>
                   </div>
                 </div>
               ) : (

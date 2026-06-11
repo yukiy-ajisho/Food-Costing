@@ -2628,6 +2628,95 @@ $$;
 ALTER FUNCTION "public"."record_manual_prices_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_operations" "jsonb") OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."save_invoicing_box_invoice_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_list_id" "uuid", "p_delivery_site_id" "uuid", "p_invoice_number" "text", "p_delivery_site_name" "text", "p_delivery_email" "text", "p_company_name" "text", "p_order_received_date" "date", "p_delivery_date" "date", "p_invoice_date" "date", "p_total_amount" numeric, "p_lines" "jsonb", "p_updated_list_lines" "jsonb") RETURNS "jsonb"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+DECLARE
+  v_invoice public.invoice_box_invoices;
+  v_list_name text;
+BEGIN
+  IF p_tenant_id IS NULL OR p_list_id IS NULL THEN
+    RAISE EXCEPTION 'tenant_id and list_id are required';
+  END IF;
+
+  IF p_invoice_number IS NULL OR trim(p_invoice_number) = '' THEN
+    RAISE EXCEPTION 'invoice_number is required';
+  END IF;
+
+  IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' THEN
+    RAISE EXCEPTION 'lines must be a JSON array';
+  END IF;
+
+  IF p_updated_list_lines IS NULL OR jsonb_typeof(p_updated_list_lines) <> 'array' THEN
+    RAISE EXCEPTION 'updated_list_lines must be a JSON array';
+  END IF;
+
+  SELECT il.name
+  INTO v_list_name
+  FROM public.invoice_lists il
+  WHERE il.id = p_list_id
+    AND il.tenant_id = p_tenant_id
+    AND il.delivery_site_id = p_delivery_site_id;
+
+  IF v_list_name IS NULL THEN
+    RAISE EXCEPTION 'Invoice list not found or delivery site mismatch';
+  END IF;
+
+  INSERT INTO public.invoice_box_invoices (
+    tenant_id,
+    invoice_number,
+    list_id,
+    list_name,
+    delivery_site_id,
+    delivery_site_name,
+    delivery_email,
+    company_name,
+    order_received_date,
+    delivery_date,
+    invoice_date,
+    total_amount,
+    sent_at,
+    lines,
+    created_by
+  )
+  VALUES (
+    p_tenant_id,
+    p_invoice_number,
+    p_list_id,
+    v_list_name,
+    p_delivery_site_id,
+    p_delivery_site_name,
+    p_delivery_email,
+    COALESCE(NULLIF(trim(p_company_name), ''), ''),
+    p_order_received_date,
+    p_delivery_date,
+    p_invoice_date,
+    p_total_amount,
+    NULL,
+    p_lines,
+    p_user_id
+  )
+  RETURNING * INTO v_invoice;
+
+  UPDATE public.invoice_lists
+  SET lines = p_updated_list_lines,
+      updated_at = now()
+  WHERE id = p_list_id
+    AND tenant_id = p_tenant_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Failed to update invoice list lines';
+  END IF;
+
+  RETURN to_jsonb(v_invoice);
+END;
+$$;
+
+
+ALTER FUNCTION "public"."save_invoicing_box_invoice_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_list_id" "uuid", "p_delivery_site_id" "uuid", "p_invoice_number" "text", "p_delivery_site_name" "text", "p_delivery_email" "text", "p_company_name" "text", "p_order_received_date" "date", "p_delivery_date" "date", "p_invoice_date" "date", "p_total_amount" numeric, "p_lines" "jsonb", "p_updated_list_lines" "jsonb") OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."save_vendor_items_edit_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_operations" "jsonb") RETURNS TABLE("changed_vendor_product_ids" "uuid"[])
     LANGUAGE "plpgsql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -2853,6 +2942,19 @@ $$;
 
 
 ALTER FUNCTION "public"."set_document_inbox_updated_at"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE FUNCTION "public"."set_invoicing_updated_at"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+
+ALTER FUNCTION "public"."set_invoicing_updated_at"() OWNER TO "postgres";
 
 
 CREATE OR REPLACE FUNCTION "public"."set_updated_at_cross_tenant_item_shares"() RETURNS "trigger"
@@ -3204,6 +3306,34 @@ COMMENT ON COLUMN "public"."cross_tenant_item_shares"."allowed_actions" IS 'read
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."delivery_sites" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "street" "text",
+    "city" "text",
+    "phone_1" "text",
+    "phone_2" "text",
+    "email" "text" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "state" "text",
+    "zip" "text",
+    "account_id" "uuid" NOT NULL
+);
+
+
+ALTER TABLE "public"."delivery_sites" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."delivery_sites" IS 'Invoicing: delivery site master (tenant-scoped).';
+
+
+
+COMMENT ON COLUMN "public"."delivery_sites"."account_id" IS 'Parent invoicing account for this delivery site.';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."document_inbox" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "tenant_id" "uuid" NOT NULL,
@@ -3349,6 +3479,85 @@ COMMENT ON COLUMN "public"."invitations"."accepted_at" IS 'status „Åå accepted „
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."invoice_box_invoices" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "invoice_number" "text" NOT NULL,
+    "list_id" "uuid",
+    "delivery_site_id" "uuid",
+    "delivery_site_name" "text" NOT NULL,
+    "delivery_email" "text" NOT NULL,
+    "order_received_date" "date",
+    "delivery_date" "date",
+    "invoice_date" "date",
+    "total_amount" numeric NOT NULL,
+    "sent_at" timestamp with time zone,
+    "note" "text",
+    "lines" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_by" "uuid",
+    "company_name" "text" NOT NULL,
+    "list_name" "text" NOT NULL
+);
+
+
+ALTER TABLE "public"."invoice_box_invoices" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."invoice_box_invoices" IS 'Invoicing: saved invoice snapshot (Box). PDF not stored.';
+
+
+
+COMMENT ON COLUMN "public"."invoice_box_invoices"."invoice_date" IS 'Invoice creation date (calendar date).';
+
+
+
+COMMENT ON COLUMN "public"."invoice_box_invoices"."list_name" IS 'Snapshot of invoice_lists.name at save time (Delivery List Template name).';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."invoice_lists" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "delivery_site_id" "uuid" NOT NULL,
+    "lines" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "created_by" "uuid",
+    "wholesale_list_id" "uuid"
+);
+
+
+ALTER TABLE "public"."invoice_lists" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."invoice_lists" IS 'Invoicing: generation list preset with lines JSONB.';
+
+
+
+COMMENT ON COLUMN "public"."invoice_lists"."wholesale_list_id" IS 'Wholesale price list used for invoice line pricing (latest wholesale_price per member).';
+
+
+
+CREATE TABLE IF NOT EXISTS "public"."invoicing_accounts" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "tenant_id" "uuid" NOT NULL,
+    "company_name" "text" NOT NULL,
+    "poc_phone" "text",
+    "poc_email" "text",
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+
+
+ALTER TABLE "public"."invoicing_accounts" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."invoicing_accounts" IS 'Invoicing: billing/contract account master (unrelated to app companies).';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."items" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "name" "text",
@@ -3368,6 +3577,7 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
     "responsible_user_id" "uuid",
     "description" "text",
     "procedure" "text",
+    "delivery" boolean DEFAULT false NOT NULL,
     CONSTRAINT "chk_items_menu_must_be_prepped" CHECK (((NOT "is_menu_item") OR ("item_kind" = 'prepped'::"text"))),
     CONSTRAINT "chk_items_prepped_fields_new" CHECK ((("item_kind" <> 'prepped'::"text") OR (("proceed_yield_amount" IS NOT NULL) AND ("proceed_yield_amount" > (0)::numeric) AND ("proceed_yield_unit" IS NOT NULL) AND ("base_item_id" IS NULL)))),
     CONSTRAINT "chk_items_prepped_has_name" CHECK ((("item_kind" <> 'prepped'::"text") OR ("name" IS NOT NULL))),
@@ -3380,6 +3590,10 @@ CREATE TABLE IF NOT EXISTS "public"."items" (
 
 
 ALTER TABLE "public"."items" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."items"."delivery" IS 'When true, item appears when Delivery preselect filter is enabled in invoicing template creation.';
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."jurisdictions" (
@@ -3466,7 +3680,9 @@ CREATE TABLE IF NOT EXISTS "public"."menu_cost_list_members" (
     "created_by" "uuid" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "cost_basis" "text" DEFAULT 'corporate'::"text" NOT NULL,
-    CONSTRAINT "menu_cost_list_members_cost_basis_check" CHECK (("cost_basis" = ANY (ARRAY['corporate'::"text", 'wholesale'::"text"])))
+    "price_input_mode" "text" DEFAULT 'price'::"text" NOT NULL,
+    CONSTRAINT "menu_cost_list_members_cost_basis_check" CHECK (("cost_basis" = ANY (ARRAY['corporate'::"text", 'wholesale'::"text"]))),
+    CONSTRAINT "menu_cost_list_members_price_input_mode_check" CHECK (("price_input_mode" = ANY (ARRAY['price'::"text", 'lcog'::"text"])))
 );
 
 
@@ -3474,6 +3690,10 @@ ALTER TABLE "public"."menu_cost_list_members" OWNER TO "postgres";
 
 
 COMMENT ON COLUMN "public"."menu_cost_list_members"."cost_basis" IS 'corporate = scoped breakdown (Costing); wholesale = franchise WL override RPC when linked WL has price.';
+
+
+
+COMMENT ON COLUMN "public"."menu_cost_list_members"."price_input_mode" IS 'Pricing Strategy UI: price = enter retail (default); lcog = enter LCOG% and derive retail for display.';
 
 
 
@@ -3973,11 +4193,17 @@ CREATE TABLE IF NOT EXISTS "public"."wholesale_list_members" (
     "wholesale_list_id" "uuid" NOT NULL,
     "item_id" "uuid" NOT NULL,
     "created_by" "uuid" NOT NULL,
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "price_input_mode" "text" DEFAULT 'price'::"text" NOT NULL,
+    CONSTRAINT "wholesale_list_members_price_input_mode_check" CHECK (("price_input_mode" = ANY (ARRAY['price'::"text", 'lcog'::"text"])))
 );
 
 
 ALTER TABLE "public"."wholesale_list_members" OWNER TO "postgres";
+
+
+COMMENT ON COLUMN "public"."wholesale_list_members"."price_input_mode" IS 'Wholesale Costing UI: price = enter wholesale (default); lcog = enter LCOG% and derive wholesale for display.';
+
 
 
 CREATE TABLE IF NOT EXISTS "public"."wholesale_lists" (
@@ -4076,6 +4302,20 @@ ALTER TABLE ONLY "public"."cross_tenant_item_shares"
 
 
 
+ALTER TABLE ONLY "public"."delivery_sites"
+    ADD CONSTRAINT "delivery_sites_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."delivery_sites"
+    ADD CONSTRAINT "delivery_sites_tenant_account_name_unique" UNIQUE ("tenant_id", "account_id", "name");
+
+
+
+COMMENT ON CONSTRAINT "delivery_sites_tenant_account_name_unique" ON "public"."delivery_sites" IS 'Same site name cannot be reused under the same invoicing account within a tenant.';
+
+
+
 ALTER TABLE ONLY "public"."document_inbox"
     ADD CONSTRAINT "document_inbox_pkey" PRIMARY KEY ("id");
 
@@ -4113,6 +4353,36 @@ ALTER TABLE ONLY "public"."invitations"
 
 ALTER TABLE ONLY "public"."invitations"
     ADD CONSTRAINT "invitations_token_key" UNIQUE ("token");
+
+
+
+ALTER TABLE ONLY "public"."invoice_box_invoices"
+    ADD CONSTRAINT "invoice_box_invoices_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."invoice_box_invoices"
+    ADD CONSTRAINT "invoice_box_invoices_tenant_number_unique" UNIQUE ("tenant_id", "invoice_number");
+
+
+
+ALTER TABLE ONLY "public"."invoice_lists"
+    ADD CONSTRAINT "invoice_lists_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."invoice_lists"
+    ADD CONSTRAINT "invoice_lists_tenant_name_unique" UNIQUE ("tenant_id", "name");
+
+
+
+ALTER TABLE ONLY "public"."invoicing_accounts"
+    ADD CONSTRAINT "invoicing_accounts_pkey" PRIMARY KEY ("id");
+
+
+
+ALTER TABLE ONLY "public"."invoicing_accounts"
+    ADD CONSTRAINT "invoicing_accounts_tenant_company_unique" UNIQUE ("tenant_id", "company_name");
 
 
 
@@ -4433,6 +4703,14 @@ CREATE INDEX "idx_cross_tenant_item_shares_target" ON "public"."cross_tenant_ite
 
 
 
+CREATE INDEX "idx_delivery_sites_account_id" ON "public"."delivery_sites" USING "btree" ("account_id");
+
+
+
+CREATE INDEX "idx_delivery_sites_tenant_id" ON "public"."delivery_sites" USING "btree" ("tenant_id");
+
+
+
 CREATE INDEX "idx_document_inbox_tenant_created" ON "public"."document_inbox" USING "btree" ("tenant_id", "created_at" DESC);
 
 
@@ -4514,6 +4792,34 @@ CREATE INDEX "idx_invitations_token" ON "public"."invitations" USING "btree" ("t
 
 
 CREATE UNIQUE INDEX "idx_invitations_unique_pending" ON "public"."invitations" USING "btree" ("email", "tenant_id") WHERE ("status" = 'pending'::"text");
+
+
+
+CREATE INDEX "idx_invoice_box_invoices_invoice_date" ON "public"."invoice_box_invoices" USING "btree" ("tenant_id", "invoice_date" DESC);
+
+
+
+CREATE INDEX "idx_invoice_box_invoices_list_id" ON "public"."invoice_box_invoices" USING "btree" ("list_id");
+
+
+
+CREATE INDEX "idx_invoice_box_invoices_tenant_id" ON "public"."invoice_box_invoices" USING "btree" ("tenant_id");
+
+
+
+CREATE INDEX "idx_invoice_lists_delivery_site_id" ON "public"."invoice_lists" USING "btree" ("delivery_site_id");
+
+
+
+CREATE INDEX "idx_invoice_lists_tenant_id" ON "public"."invoice_lists" USING "btree" ("tenant_id");
+
+
+
+CREATE INDEX "idx_invoice_lists_wholesale_list_id" ON "public"."invoice_lists" USING "btree" ("wholesale_list_id");
+
+
+
+CREATE INDEX "idx_invoicing_accounts_tenant_id" ON "public"."invoicing_accounts" USING "btree" ("tenant_id");
 
 
 
@@ -4829,6 +5135,18 @@ CREATE OR REPLACE TRIGGER "after_profiles_insert_assign_requirements" AFTER INSE
 
 
 
+CREATE OR REPLACE TRIGGER "delivery_sites_set_updated_at" BEFORE UPDATE ON "public"."delivery_sites" FOR EACH ROW EXECUTE FUNCTION "public"."set_invoicing_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "invoice_lists_set_updated_at" BEFORE UPDATE ON "public"."invoice_lists" FOR EACH ROW EXECUTE FUNCTION "public"."set_invoicing_updated_at"();
+
+
+
+CREATE OR REPLACE TRIGGER "invoicing_accounts_set_updated_at" BEFORE UPDATE ON "public"."invoicing_accounts" FOR EACH ROW EXECUTE FUNCTION "public"."set_invoicing_updated_at"();
+
+
+
 CREATE OR REPLACE TRIGGER "trg_cross_tenant_item_shares_updated_at" BEFORE UPDATE ON "public"."cross_tenant_item_shares" FOR EACH ROW EXECUTE FUNCTION "public"."set_updated_at_cross_tenant_item_shares"();
 
 
@@ -4941,6 +5259,16 @@ ALTER TABLE ONLY "public"."cross_tenant_item_shares"
 
 
 
+ALTER TABLE ONLY "public"."delivery_sites"
+    ADD CONSTRAINT "delivery_sites_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "public"."invoicing_accounts"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."delivery_sites"
+    ADD CONSTRAINT "delivery_sites_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."document_inbox"
     ADD CONSTRAINT "document_inbox_classified_by_fkey" FOREIGN KEY ("classified_by") REFERENCES "public"."users"("id") ON DELETE RESTRICT;
 
@@ -5003,6 +5331,51 @@ ALTER TABLE ONLY "public"."invitations"
 
 ALTER TABLE ONLY "public"."invitations"
     ADD CONSTRAINT "invitations_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."invoice_box_invoices"
+    ADD CONSTRAINT "invoice_box_invoices_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."invoice_box_invoices"
+    ADD CONSTRAINT "invoice_box_invoices_delivery_site_id_fkey" FOREIGN KEY ("delivery_site_id") REFERENCES "public"."delivery_sites"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."invoice_box_invoices"
+    ADD CONSTRAINT "invoice_box_invoices_list_id_fkey" FOREIGN KEY ("list_id") REFERENCES "public"."invoice_lists"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."invoice_box_invoices"
+    ADD CONSTRAINT "invoice_box_invoices_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."invoice_lists"
+    ADD CONSTRAINT "invoice_lists_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
+
+
+
+ALTER TABLE ONLY "public"."invoice_lists"
+    ADD CONSTRAINT "invoice_lists_delivery_site_id_fkey" FOREIGN KEY ("delivery_site_id") REFERENCES "public"."delivery_sites"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."invoice_lists"
+    ADD CONSTRAINT "invoice_lists_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
+
+
+
+ALTER TABLE ONLY "public"."invoice_lists"
+    ADD CONSTRAINT "invoice_lists_wholesale_list_id_fkey" FOREIGN KEY ("wholesale_list_id") REFERENCES "public"."wholesale_lists"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."invoicing_accounts"
+    ADD CONSTRAINT "invoicing_accounts_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE CASCADE;
 
 
 
@@ -5425,10 +5798,54 @@ CREATE POLICY "cross_tenant_item_shares_update" ON "public"."cross_tenant_item_s
 
 
 
+ALTER TABLE "public"."delivery_sites" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "delivery_sites_tenant_access" ON "public"."delivery_sites" USING (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"())))) WITH CHECK (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"()))));
+
+
+
 ALTER TABLE "public"."document_inbox" ENABLE ROW LEVEL SECURITY;
 
 
 ALTER TABLE "public"."document_metadata_invoices" ENABLE ROW LEVEL SECURITY;
+
+
+ALTER TABLE "public"."invoice_box_invoices" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "invoice_box_invoices_tenant_access" ON "public"."invoice_box_invoices" USING (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"())))) WITH CHECK (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"()))));
+
+
+
+ALTER TABLE "public"."invoice_lists" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "invoice_lists_tenant_access" ON "public"."invoice_lists" USING (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"())))) WITH CHECK (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"()))));
+
+
+
+ALTER TABLE "public"."invoicing_accounts" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "invoicing_accounts_tenant_access" ON "public"."invoicing_accounts" USING (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"())))) WITH CHECK (("tenant_id" IN ( SELECT "p"."tenant_id"
+   FROM "public"."profiles" "p"
+  WHERE ("p"."user_id" = "auth"."uid"()))));
+
 
 
 ALTER TABLE "public"."menu_cost_list_lines" ENABLE ROW LEVEL SECURITY;
@@ -5641,6 +6058,12 @@ GRANT ALL ON FUNCTION "public"."record_manual_prices_atomic"("p_tenant_id" "uuid
 
 
 
+GRANT ALL ON FUNCTION "public"."save_invoicing_box_invoice_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_list_id" "uuid", "p_delivery_site_id" "uuid", "p_invoice_number" "text", "p_delivery_site_name" "text", "p_delivery_email" "text", "p_company_name" "text", "p_order_received_date" "date", "p_delivery_date" "date", "p_invoice_date" "date", "p_total_amount" numeric, "p_lines" "jsonb", "p_updated_list_lines" "jsonb") TO "anon";
+GRANT ALL ON FUNCTION "public"."save_invoicing_box_invoice_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_list_id" "uuid", "p_delivery_site_id" "uuid", "p_invoice_number" "text", "p_delivery_site_name" "text", "p_delivery_email" "text", "p_company_name" "text", "p_order_received_date" "date", "p_delivery_date" "date", "p_invoice_date" "date", "p_total_amount" numeric, "p_lines" "jsonb", "p_updated_list_lines" "jsonb") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."save_invoicing_box_invoice_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_list_id" "uuid", "p_delivery_site_id" "uuid", "p_invoice_number" "text", "p_delivery_site_name" "text", "p_delivery_email" "text", "p_company_name" "text", "p_order_received_date" "date", "p_delivery_date" "date", "p_invoice_date" "date", "p_total_amount" numeric, "p_lines" "jsonb", "p_updated_list_lines" "jsonb") TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."save_vendor_items_edit_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_operations" "jsonb") TO "anon";
 GRANT ALL ON FUNCTION "public"."save_vendor_items_edit_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_operations" "jsonb") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."save_vendor_items_edit_atomic"("p_tenant_id" "uuid", "p_user_id" "uuid", "p_operations" "jsonb") TO "service_role";
@@ -5650,6 +6073,12 @@ GRANT ALL ON FUNCTION "public"."save_vendor_items_edit_atomic"("p_tenant_id" "uu
 GRANT ALL ON FUNCTION "public"."set_document_inbox_updated_at"() TO "anon";
 GRANT ALL ON FUNCTION "public"."set_document_inbox_updated_at"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."set_document_inbox_updated_at"() TO "service_role";
+
+
+
+GRANT ALL ON FUNCTION "public"."set_invoicing_updated_at"() TO "anon";
+GRANT ALL ON FUNCTION "public"."set_invoicing_updated_at"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."set_invoicing_updated_at"() TO "service_role";
 
 
 
@@ -5755,6 +6184,12 @@ GRANT ALL ON TABLE "public"."cross_tenant_item_shares" TO "service_role";
 
 
 
+GRANT ALL ON TABLE "public"."delivery_sites" TO "anon";
+GRANT ALL ON TABLE "public"."delivery_sites" TO "authenticated";
+GRANT ALL ON TABLE "public"."delivery_sites" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."document_inbox" TO "anon";
 GRANT ALL ON TABLE "public"."document_inbox" TO "authenticated";
 GRANT ALL ON TABLE "public"."document_inbox" TO "service_role";
@@ -5788,6 +6223,24 @@ GRANT ALL ON TABLE "public"."history_logs" TO "service_role";
 GRANT ALL ON TABLE "public"."invitations" TO "anon";
 GRANT ALL ON TABLE "public"."invitations" TO "authenticated";
 GRANT ALL ON TABLE "public"."invitations" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."invoice_box_invoices" TO "anon";
+GRANT ALL ON TABLE "public"."invoice_box_invoices" TO "authenticated";
+GRANT ALL ON TABLE "public"."invoice_box_invoices" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."invoice_lists" TO "anon";
+GRANT ALL ON TABLE "public"."invoice_lists" TO "authenticated";
+GRANT ALL ON TABLE "public"."invoice_lists" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."invoicing_accounts" TO "anon";
+GRANT ALL ON TABLE "public"."invoicing_accounts" TO "authenticated";
+GRANT ALL ON TABLE "public"."invoicing_accounts" TO "service_role";
 
 
 

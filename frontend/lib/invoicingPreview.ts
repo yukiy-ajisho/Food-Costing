@@ -1,8 +1,4 @@
-import {
-  formatInvoiceDateTimeDisplay,
-  isoToLocalDateTimeInput,
-  localDateYmdFromInput,
-} from "@/lib/invoicingDateTime";
+import { formatInvoiceDateDisplay } from "@/lib/invoicingDateTime";
 
 export type GeneratePreviewRow = {
   itemId: string;
@@ -22,12 +18,8 @@ export type GeneratePreviewPayload = {
   invoiceNumber: string;
   orderReceivedDate: string;
   deliveryDate: string;
-  /** Display: YYYY-MM-DD HH:mm (PDF / email preview). */
+  /** YYYY-MM-DD for PDF / email / API. */
   invoiceDate: string;
-  /** ISO UTC for API save. */
-  invoiceDateIso: string;
-  /** Calendar YYYY-MM-DD for invoice number (from user's picker). */
-  invoiceDateYmd: string;
   rows: GeneratePreviewRow[];
   totalAmount: number;
 };
@@ -48,6 +40,7 @@ export type BoxInvoice = {
   tenant_id: string;
   invoice_number: string;
   list_id: string | null;
+  list_name: string;
   delivery_site_id: string | null;
   delivery_site_name: string;
   delivery_email: string;
@@ -69,17 +62,12 @@ export function boxInvoiceToPreviewPayload(
   return {
     listId: invoice.list_id ?? "",
     deliverySiteId: invoice.delivery_site_id ?? "",
-    listName: invoice.invoice_number,
+    listName: invoice.list_name?.trim() || "—",
     deliverySiteName: invoice.delivery_site_name,
     invoiceNumber: invoice.invoice_number,
     orderReceivedDate: invoice.order_received_date ?? "",
     deliveryDate: invoice.delivery_date ?? "",
-    invoiceDate: formatInvoiceDateTimeDisplay(invoice.invoice_date),
-    invoiceDateIso: invoice.invoice_date ?? "",
-    invoiceDateYmd:
-      localDateYmdFromInput(
-        isoToLocalDateTimeInput(invoice.invoice_date ?? ""),
-      ) ?? "",
+    invoiceDate: formatInvoiceDateDisplay(invoice.invoice_date),
     rows: sorted.map((line) => ({
       itemId: line.item_id,
       name: line.name,

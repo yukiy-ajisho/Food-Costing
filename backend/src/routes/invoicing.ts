@@ -9,12 +9,6 @@ import {
   subTotalsMatch,
 } from "../lib/invoicing-calc";
 import {
-  formatInvoiceDateTimeDisplayUtc,
-  parseOptionalInvoiceDateYmd,
-  parseRequiredInvoiceDateTime,
-  resolveInvoiceNumberCalendarYmd,
-} from "../lib/invoicing-datetime";
-import {
   INVOICE_COLUMNS,
   LIST_COLUMNS,
   assertDeliverySiteInTenant,
@@ -495,31 +489,14 @@ router.post("/preview-invoice-number", async (req, res) => {
       return res.status(400).json({ error: "delivery_site_id is required" });
     }
 
-    const invoiceDateParsed = parseRequiredInvoiceDateTime(
+    const invoiceDateParsed = parseRequiredIsoDate(
       req.body?.invoice_date,
       "invoice_date",
     );
     if (typeof invoiceDateParsed === "object" && "error" in invoiceDateParsed) {
       return res.status(400).json({ error: invoiceDateParsed.error });
     }
-    const invoiceDateIso = invoiceDateParsed as string;
-
-    const invoiceDateYmdResult = parseOptionalInvoiceDateYmd(
-      req.body?.invoice_date_ymd,
-    );
-    if (
-      invoiceDateYmdResult !== null &&
-      typeof invoiceDateYmdResult === "object" &&
-      "error" in invoiceDateYmdResult
-    ) {
-      return res.status(400).json({ error: invoiceDateYmdResult.error });
-    }
-    const invoiceDateYmd =
-      typeof invoiceDateYmdResult === "string" ? invoiceDateYmdResult : null;
-    const invoiceCalendarYmd = resolveInvoiceNumberCalendarYmd(
-      invoiceDateIso,
-      invoiceDateYmd,
-    );
+    const invoiceDate = invoiceDateParsed as string;
 
     const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
     if (!siteOk) {
@@ -537,8 +514,7 @@ router.post("/preview-invoice-number", async (req, res) => {
 
     const invoiceNumber = await allocateInvoiceNumber(
       tenantId,
-      site.name,
-      invoiceCalendarYmd,
+      invoiceDate,
       (prefix) => fetchExistingInvoiceNumbers(tenantId, prefix),
     );
 
@@ -961,6 +937,20 @@ function parseOptionalIsoDate(
   return s;
 }
 
+function parseRequiredIsoDate(
+  value: unknown,
+  field: string,
+): string | { error: string } {
+  if (value == null || value === "") {
+    return { error: `${field} is required` };
+  }
+  const s = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return { error: `${field} must be YYYY-MM-DD` };
+  }
+  return s;
+}
+
 async function validateBoxInvoiceAmounts(
   tenantId: string,
   lines: InvoiceBoxLineJson[],
@@ -1065,37 +1055,14 @@ router.post("/invoices", async (req, res) => {
       return res.status(400).json({ error: "pdf_base64 is required when send is true" });
     }
 
-    const invoiceDateParsed = parseRequiredInvoiceDateTime(
+    const invoiceDateParsed = parseRequiredIsoDate(
       req.body?.invoice_date,
       "invoice_date",
     );
     if (typeof invoiceDateParsed === "object" && "error" in invoiceDateParsed) {
       return res.status(400).json({ error: invoiceDateParsed.error });
     }
-    const invoiceDateIso = invoiceDateParsed as string;
-
-    const invoiceDateYmdResult = parseOptionalInvoiceDateYmd(
-      req.body?.invoice_date_ymd,
-    );
-    if (
-      invoiceDateYmdResult !== null &&
-      typeof invoiceDateYmdResult === "object" &&
-      "error" in invoiceDateYmdResult
-    ) {
-      return res.status(400).json({ error: invoiceDateYmdResult.error });
-    }
-    const invoiceDateYmd =
-      typeof invoiceDateYmdResult === "string" ? invoiceDateYmdResult : null;
-    const invoiceCalendarYmd = resolveInvoiceNumberCalendarYmd(
-      invoiceDateIso,
-      invoiceDateYmd,
-    );
-
-    const invoiceDateDisplay =
-      typeof req.body?.invoice_date_display === "string" &&
-      req.body.invoice_date_display.trim()
-        ? String(req.body.invoice_date_display).trim()
-        : formatInvoiceDateTimeDisplayUtc(invoiceDateIso);
+    const invoiceDate = invoiceDateParsed as string;
 
     const orderReceivedParsed = parseOptionalIsoDate(
       req.body?.order_received_date,
@@ -1227,8 +1194,7 @@ router.post("/invoices", async (req, res) => {
     } else {
       invoiceNumber = await allocateInvoiceNumber(
         tenantId,
-        site.name,
-        invoiceCalendarYmd,
+        invoiceDate,
         (prefix) => fetchExistingInvoiceNumbers(tenantId, prefix),
       );
     }
@@ -1251,7 +1217,7 @@ router.post("/invoices", async (req, res) => {
         p_company_name: companyName,
         p_order_received_date: orderReceivedParsed,
         p_delivery_date: deliveryDateParsed,
-        p_invoice_date: invoiceDateIso,
+        p_invoice_date: invoiceDate,
         p_total_amount: totalAmount,
         p_lines: normalizedLines,
         p_updated_list_lines: updatedListLines,
@@ -1278,7 +1244,7 @@ router.post("/invoices", async (req, res) => {
           to: site.email,
           deliverySiteName: site.name,
           invoiceNumber,
-          invoiceDate: invoiceDateDisplay,
+          invoiceDate,
           totalAmount,
           pdfBase64,
         });
@@ -1345,7 +1311,10 @@ router.post("/invoices/:id/send", async (req, res) => {
     if (!invoiceDateRaw) {
       return res.status(400).json({ error: "Invoice has no invoice_date" });
     }
-    const invoiceDateDisplay = formatInvoiceDateTimeDisplayUtc(invoiceDateRaw);
+    const invoiceDateDisplay =
+      /^\d{4}-\d{2}-\d{2}$/.test(invoiceDateRaw.trim())
+        ? invoiceDateRaw.trim()
+        : invoiceDateRaw.slice(0, 10);
 
     try {
       await sendInvoiceEmail({

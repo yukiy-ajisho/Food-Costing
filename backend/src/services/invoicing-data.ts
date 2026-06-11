@@ -422,6 +422,6 @@ export function validateBoxLineCostsAgainstRpc(
 }
 
 const INVOICE_COLUMNS =
-  "id, tenant_id, invoice_number, list_id, delivery_site_id, delivery_site_name, delivery_email, company_name, order_received_date, delivery_date, invoice_date, total_amount, sent_at, note, lines, created_at, created_by";
+  "id, tenant_id, invoice_number, list_id, list_name, delivery_site_id, delivery_site_name, delivery_email, company_name, order_received_date, delivery_date, invoice_date, total_amount, sent_at, note, lines, created_at, created_by";
 
 export { INVOICE_COLUMNS };

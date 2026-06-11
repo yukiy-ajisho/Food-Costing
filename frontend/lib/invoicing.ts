@@ -119,6 +119,7 @@ export type BoxInvoice = {
   tenant_id: string;
   invoice_number: string;
   list_id: string | null;
+  list_name: string;
   delivery_site_id: string | null;
   delivery_site_name: string;
   delivery_email: string;
@@ -184,7 +185,6 @@ export const invoicingAPI = {
   previewInvoiceNumber: (body: {
     delivery_site_id: string;
     invoice_date: string;
-    invoice_date_ymd?: string;
   }) =>
     apiRequest<{ invoice_number: string }>(
       "/invoicing/preview-invoice-number",
@@ -266,8 +266,6 @@ export const invoicingAPI = {
     order_received_date?: string | null;
     delivery_date?: string | null;
     invoice_date: string;
-    invoice_date_ymd?: string;
-    invoice_date_display?: string;
     invoice_number?: string;
     total_amount: number;
     lines: BoxInvoiceLine[];

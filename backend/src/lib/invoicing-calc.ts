@@ -90,47 +90,33 @@ export function subTotalsMatch(expected: number, actual: number): boolean {
   return Math.abs(expected - actual) <= SUB_TOTAL_TOLERANCE;
 }
 
-export function sanitizeDeliverySiteNameForInvoiceNumber(name: string): string {
-  return name.trim().replace(/\s+/g, "");
-}
-
-export function formatInvoiceDateYymmdd(calendarYmd: string): string {
+export function formatInvoiceDateYyyymmdd(calendarYmd: string): string {
   const d = calendarYmd.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-    throw new Error("invoice_date calendar date must be YYYY-MM-DD");
+    throw new Error("invoice_date must be YYYY-MM-DD");
   }
-  const [y, m, day] = d.split("-");
-  return `${y.slice(2)}${m}${day}`;
+  return d.replace(/-/g, "");
 }
 
+/** Allocate YYYYMMDD-0001 style number (per tenant, per invoice calendar date). */
 export async function allocateInvoiceNumber(
-  tenantId: string,
-  deliverySiteName: string,
-  /** Calendar YYYY-MM-DD (user-selected date; time ignored for numbering). */
+  _tenantId: string,
+  /** Calendar YYYY-MM-DD from invoice creation date. */
   invoiceCalendarYmd: string,
-  fetchExisting: (prefix: string) => Promise<string[]>,
+  fetchExisting: (datePrefix: string) => Promise<string[]>,
 ): Promise<string> {
-  const sitePart = sanitizeDeliverySiteNameForInvoiceNumber(deliverySiteName);
-  const yymmdd = formatInvoiceDateYymmdd(invoiceCalendarYmd);
-  const base = `${sitePart}${yymmdd}`;
-  const existing = await fetchExisting(base);
-  if (existing.length === 0) return base;
-
-  const numbers = new Set(existing);
-  if (!numbers.has(base)) return base;
-
-  let maxSuffix = 1;
-  for (const num of numbers) {
-    if (num === base) {
-      maxSuffix = Math.max(maxSuffix, 1);
-      continue;
-    }
-    const suffixMatch = num.match(new RegExp(`^${escapeRegExp(base)}-(\\d+)$`));
-    if (suffixMatch) {
-      maxSuffix = Math.max(maxSuffix, parseInt(suffixMatch[1], 10));
+  const datePart = formatInvoiceDateYyyymmdd(invoiceCalendarYmd);
+  const existing = await fetchExisting(datePart);
+  const suffixRe = new RegExp(`^${escapeRegExp(datePart)}-(\\d+)$`);
+  let maxSuffix = 0;
+  for (const num of existing) {
+    const match = num.match(suffixRe);
+    if (match) {
+      maxSuffix = Math.max(maxSuffix, parseInt(match[1], 10));
     }
   }
-  return `${base}-${maxSuffix + 1}`;
+  const next = maxSuffix + 1;
+  return `${datePart}-${String(next).padStart(4, "0")}`;
 }
 
 function escapeRegExp(value: string): string {

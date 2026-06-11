@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Edit, Plus, Save, Trash2, X } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { PricingListPickerRow } from "@/components/recipe-cost-report/PricingListPickerRow";
@@ -34,10 +34,8 @@ import {
   type InvoiceGenerateValidationField,
 } from "@/lib/invoicingGenerateValidation";
 import {
-  formatInvoiceDateTimeDisplay,
-  localDateTimeInputToIso,
-  localDateYmdFromInput,
-  nowLocalDateTimeInputValue,
+  formatInvoiceDateDisplay,
+  todayLocalDateYmd,
 } from "@/lib/invoicingDateTime";
 
 type RowInput = {
@@ -112,6 +110,8 @@ export function InvoiceGenerationTab({
 
   const [lists, setLists] = useState<InvoiceListSummary[]>([]);
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
+  const [loadedListId, setLoadedListId] = useState<string | null>(null);
+  const selectedListIdRef = useRef<string | null>(null);
   const [listName, setListName] = useState("");
   const [deliverySiteId, setDeliverySiteId] = useState("");
   const [deliverySiteName, setDeliverySiteName] = useState("");
@@ -183,6 +183,7 @@ export function InvoiceGenerationTab({
       ? "border-slate-600 bg-slate-900 text-slate-100"
       : "border-gray-300 bg-white text-gray-900"
   }`;
+  const staticFieldValueCls = `flex min-h-10 items-center text-sm ${textMain}`;
   const thCls = `h-14 align-middle px-4 py-3 text-xs font-medium uppercase tracking-wider ${
     isDark ? "text-slate-300 bg-slate-700" : "text-gray-500 bg-gray-50"
   }`;
@@ -211,6 +212,7 @@ export function InvoiceGenerationTab({
   const btnEdit =
     "inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-gray-600 px-4 text-sm font-medium text-white transition-colors hover:bg-gray-700";
 
+  const dateFieldCls = `block w-44 max-w-full text-sm ${textMain}`;
   const dateInputCls = `invoicing-generation-date-input h-10 w-full rounded-lg border px-3 text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
     isDark
       ? "border-slate-600 bg-slate-900 text-slate-100"
@@ -225,11 +227,16 @@ export function InvoiceGenerationTab({
     setCostsLoading(true);
     try {
       const data = await invoicingAPI.getInvoiceListCosts(listId);
+      if (listId !== selectedListIdRef.current) return;
       setCosts(data.costs ?? {});
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to load costs");
+      if (listId === selectedListIdRef.current) {
+        setError(e instanceof Error ? e.message : "Failed to load costs");
+      }
     } finally {
-      setCostsLoading(false);
+      if (listId === selectedListIdRef.current) {
+        setCostsLoading(false);
+      }
     }
   }, []);
 
@@ -246,10 +253,12 @@ export function InvoiceGenerationTab({
         setIsEditMode(false);
         setPendingRemovals(new Set());
         setPendingAdds([]);
-        setInvoiceDate((prev) => prev || nowLocalDateTimeInputValue());
+        setInvoiceDate((prev) => prev || todayLocalDateYmd());
       }
       try {
         const data = await invoicingAPI.getInvoiceList(listId);
+        if (listId !== selectedListIdRef.current) return;
+
         setListName(data.list.name);
         setDeliverySiteId(data.list.delivery_site_id);
         setDeliverySiteName(data.delivery_site?.name ?? "");
@@ -279,10 +288,17 @@ export function InvoiceGenerationTab({
           return inputs;
         });
         await loadCosts(listId);
+        if (listId !== selectedListIdRef.current) return;
+
+        setLoadedListId(listId);
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : "Failed to load list");
+        if (listId === selectedListIdRef.current) {
+          setError(e instanceof Error ? e.message : "Failed to load list");
+        }
       } finally {
-        setLoading(false);
+        if (listId === selectedListIdRef.current) {
+          setLoading(false);
+        }
       }
     },
     [loadCosts],
@@ -361,7 +377,14 @@ export function InvoiceGenerationTab({
   }, [filteredLists]);
 
   useEffect(() => {
-    setInvoiceDate(nowLocalDateTimeInputValue());
+    selectedListIdRef.current = selectedListId;
+    if (!selectedListId) {
+      setLoadedListId(null);
+    }
+  }, [selectedListId]);
+
+  useEffect(() => {
+    setInvoiceDate(todayLocalDateYmd());
   }, []);
 
   useEffect(() => {
@@ -513,50 +536,27 @@ export function InvoiceGenerationTab({
       ? "border-red-500 ring-1 ring-red-500/50"
       : "";
 
-  const renderInvoiceDateTimeField = (
-    label: string,
-    value: string,
-    onChange: (next: string) => void,
-    fieldKey?: InvoiceGenerateValidationField,
-  ) => (
-    <label className={`block text-sm ${textMain}`}>
-      <span className={`mb-1 block text-xs font-medium ${muted}`}>{label}</span>
-      <input
-        type="datetime-local"
-        className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={isEditMode}
-      />
-    </label>
-  );
-
   const renderDateField = (
     label: string,
     value: string,
     onChange: (next: string) => void,
     fieldKey?: InvoiceGenerateValidationField,
-    options?: { alwaysEditable?: boolean },
   ) => (
-    <label className={`block text-sm ${textMain}`}>
+    <div className={dateFieldCls}>
       <span className={`mb-1 block text-xs font-medium ${muted}`}>{label}</span>
-      {!isEditMode || options?.alwaysEditable ? (
-        <input
-          type="date"
-          className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""}`}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
+      {isEditMode ? (
+        <span className={`${staticFieldValueCls} tabular-nums`}>
+          {value.trim() ? formatInvoiceDateDisplay(value) : "—"}
+        </span>
       ) : (
         <input
           type="date"
           className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""}`}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          disabled
         />
       )}
-    </label>
+    </div>
   );
 
   const updateRowInput = (itemId: string, patch: Partial<RowInput>) => {
@@ -586,7 +586,7 @@ export function InvoiceGenerationTab({
       setShowCreate(false);
       await loadLists();
       setSelectedListId(data.list.id);
-      setInvoiceDate((prev) => prev || nowLocalDateTimeInputValue());
+      setInvoiceDate((prev) => prev || todayLocalDateYmd());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create list");
     }
@@ -599,6 +599,7 @@ export function InvoiceGenerationTab({
       await invoicingAPI.deleteInvoiceList(listId);
       if (selectedListId === listId) {
         setSelectedListId(null);
+        setLoadedListId(null);
         setItems([]);
       }
       await loadLists();
@@ -761,9 +762,7 @@ export function InvoiceGenerationTab({
       return;
     }
 
-    const invoiceDateIso = localDateTimeInputToIso(invoiceDate);
-    const invoiceDateYmd = localDateYmdFromInput(invoiceDate);
-    if (!invoiceDateIso || !invoiceDateYmd) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate.trim())) {
       setError("Invoice creation date is invalid.");
       return;
     }
@@ -773,8 +772,7 @@ export function InvoiceGenerationTab({
     try {
       const { invoice_number } = await invoicingAPI.previewInvoiceNumber({
         delivery_site_id: deliverySiteId,
-        invoice_date: invoiceDateIso,
-        invoice_date_ymd: invoiceDateYmd,
+        invoice_date: invoiceDate.trim(),
       });
       setPreviewPayload({
         listId: selectedListId,
@@ -784,9 +782,7 @@ export function InvoiceGenerationTab({
         invoiceNumber: invoice_number,
         orderReceivedDate,
         deliveryDate,
-        invoiceDate: formatInvoiceDateTimeDisplay(invoiceDate),
-        invoiceDateIso,
-        invoiceDateYmd,
+        invoiceDate: invoiceDate.trim(),
         rows,
         totalAmount,
       });
@@ -943,7 +939,7 @@ export function InvoiceGenerationTab({
               type="number"
               min="0"
               step="any"
-              className={`${inputCls} w-24 ${invalidFieldCls(unitsFieldKey)}`}
+              className={`${inputCls} no-spinner w-24 ${invalidFieldCls(unitsFieldKey)}`}
               value={input.units}
               onChange={(e) =>
                 updateRowInput(row.item_id, { units: e.target.value })
@@ -1066,11 +1062,17 @@ export function InvoiceGenerationTab({
           >
             Select delivery list template
           </div>
-        ) : loading ? (
+        ) : selectedListId !== loadedListId ? (
           <div
-            className={`flex flex-1 items-center justify-center rounded-lg border ${border} ${panel} p-12 text-sm ${muted}`}
+            className={`flex flex-1 flex-col items-center justify-center gap-3 rounded-lg border ${border} ${panel} p-12 text-sm ${muted}`}
           >
-            Loading…
+            {error ? (
+              <p className="text-center text-red-600 dark:text-red-400">
+                {error}
+              </p>
+            ) : (
+              <p>Loading…</p>
+            )}
           </div>
         ) : (
           <>
@@ -1095,8 +1097,8 @@ export function InvoiceGenerationTab({
                     </h2>
                   )}
                 </div>
-                <div className="shrink-0 min-w-[220px]">
-                  {renderInvoiceDateTimeField(
+                <div className="shrink-0">
+                  {renderDateField(
                     "Invoice Creation Date",
                     invoiceDate,
                     setInvoiceDate,
@@ -1184,16 +1186,9 @@ export function InvoiceGenerationTab({
                       ))}
                     </select>
                   ) : (
-                    <div
-                      className={`flex h-10 cursor-default items-center rounded-lg border px-3 text-sm ${
-                        isDark
-                          ? "border-slate-600 bg-slate-900 text-slate-100"
-                          : "border-gray-300 bg-white text-gray-900"
-                      }`}
-                      aria-readonly
-                    >
+                    <span className={staticFieldValueCls}>
                       {deliverySiteName || "—"}
-                    </div>
+                    </span>
                   )}
                 </div>
                 <div className={`block text-sm ${textMain}`}>
@@ -1219,18 +1214,11 @@ export function InvoiceGenerationTab({
                       ))}
                     </select>
                   ) : (
-                    <div
-                      className={`flex h-10 cursor-default items-center rounded-lg border px-3 text-sm ${
-                        isDark
-                          ? "border-slate-600 bg-slate-900 text-slate-100"
-                          : "border-gray-300 bg-white text-gray-900"
-                      }`}
-                      aria-readonly
-                    >
+                    <span className={staticFieldValueCls}>
                       {wholesaleLists.find((l) => l.id === wholesaleListId)
                         ?.name ??
                         (wholesaleListId ? "—" : "Not set")}
-                    </div>
+                    </span>
                   )}
                 </div>
                 {renderDateField(
