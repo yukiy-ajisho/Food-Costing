@@ -166,7 +166,7 @@ export function AccountInformationTab() {
         </div>
       ) : (
         <div
-          className={`w-full rounded-lg border shadow-sm transition-colors ${card}`}
+          className={`w-full overflow-hidden rounded-lg border shadow-sm transition-colors ${card}`}
         >
           <table className="w-full">
             <thead className={`border-b ${thead}`}>

@@ -289,7 +289,7 @@ export interface DocumentMetadataInvoice {
   file_name: string;
   content_type?: string | null;
   size_bytes?: number | null;
-  invoice_date: string | null; // timestamptz ISO（invoice creation date/time, UTC）
+  invoice_date: string | null; // date YYYY-MM-DD（invoice creation date）
   total_amount: number | null;
   created_at?: string;
   created_by: string;

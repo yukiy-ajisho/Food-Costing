@@ -1,18 +1,18 @@
 "use client";
 
 import { X } from "lucide-react";
-import { InvoiceGenerationTab } from "./InvoiceGenerationTab";
+import { CreateOrderTab } from "./CreateOrderTab";
 
 type Props = {
   isDark: boolean;
   onClose: () => void;
-  onInvoiceSaved?: () => void;
+  onOrderSaved?: () => void;
 };
 
-export function InvoiceGenerationModal({
+export function CreateOrderModal({
   isDark,
   onClose,
-  onInvoiceSaved,
+  onOrderSaved,
 }: Props) {
   const panel = isDark ? "bg-slate-800 text-slate-100" : "bg-white text-gray-900";
   const border = isDark ? "border-slate-700" : "border-gray-200";
@@ -25,13 +25,13 @@ export function InvoiceGenerationModal({
         <div
           className={`flex shrink-0 items-center justify-between border-b px-5 py-4 ${border}`}
         >
-          <h2 className="text-lg font-semibold">Generate Invoice</h2>
+          <h2 className="text-lg font-semibold">Create Order</h2>
           <button type="button" onClick={onClose} aria-label="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-4 lg:px-6">
-          <InvoiceGenerationTab onInvoiceSaved={onInvoiceSaved} />
+          <CreateOrderTab onOrderSaved={onOrderSaved} />
         </div>
       </div>
     </div>

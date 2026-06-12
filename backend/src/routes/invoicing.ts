@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { supabase } from "../config/supabase";
 import { authorizeInvoicingAccess } from "../authz/unified/authorize";
-import { withTenantFilter } from "../middleware/tenant-filter";
+import { withCompanyFilter, withTenantFilter } from "../middleware/tenant-filter";
 import { sendInvoiceEmail } from "../services/email";
 import {
   allocateInvoiceNumber,
@@ -9,16 +9,10 @@ import {
   subTotalsMatch,
 } from "../lib/invoicing-calc";
 import {
-  formatInvoiceDateTimeDisplayUtc,
-  parseOptionalInvoiceDateYmd,
-  parseRequiredInvoiceDateTime,
-  resolveInvoiceNumberCalendarYmd,
-} from "../lib/invoicing-datetime";
-import {
-  INVOICE_COLUMNS,
   LIST_COLUMNS,
-  assertDeliverySiteInTenant,
-  assertInvoicingAccountInTenant,
+  ORDER_COLUMNS,
+  assertDeliverySiteInCompany,
+  assertInvoicingAccountInCompany,
   assertWholesaleListInTenant,
   buildInitialLines,
   computeInvoiceWholesaleCosts,
@@ -26,14 +20,30 @@ import {
   fetchEffectiveEachGramsByItemIds,
   fetchInvoicingItemCandidates,
   mergeUnitSizesIntoListLines,
-  normalizeInvoiceBoxLines,
   normalizeInvoiceListLines,
-  validateBoxLineCostsAgainstRpc,
-  validateBoxLinesCoverAllListLines,
+  normalizeOrderLines,
   validateInvoicingItemIds,
   validateInvoicingItemsForWholesaleList,
-  type InvoiceBoxLineJson,
+  validateOrderLineCostsAgainstRpc,
+  validateOrderLinesCoverAllListLines,
+  PAYMENT_COLUMNS,
+  assertAccountInCompany,
+  fetchCompanyInvoicingAccounts,
+  resolveCompanyIdForTenant,
+  type OrderLineJson,
 } from "../services/invoicing-data";
+import {
+  assertExistingOrderOpen,
+  assertOrderDateOpen,
+  assertPaymentOpen,
+  buildAccountLedger,
+  closeMonthForCompany,
+  currentCalendarPeriod,
+  fetchCompanyClosedPeriods,
+  formatOpenPeriodLabel,
+  isAccountPeriodClosed,
+  isValidPeriod,
+} from "../services/invoicing-ledger";
 
 const router = Router();
 
@@ -77,10 +87,10 @@ function resolveTenantId(req: Request): string {
 }
 
 const DELIVERY_SITE_COLUMNS =
-  "id, tenant_id, account_id, name, street, city, state, zip, phone_1, phone_2, email, created_at, updated_at";
+  "id, company_id, account_id, name, street, city, state, zip, phone_1, phone_2, email, created_at, updated_at";
 
 const ACCOUNT_COLUMNS =
-  "id, tenant_id, company_name, poc_phone, poc_email, created_at, updated_at";
+  "id, company_id, company_name, poc_phone, poc_email, created_at, updated_at";
 
 type DeliverySiteBody = {
   account_id?: string;
@@ -102,7 +112,7 @@ type InvoicingAccountBody = {
 
 type DeliverySiteRow = {
   id: string;
-  tenant_id: string;
+  company_id: string;
   account_id: string;
   name: string;
   street: string | null;
@@ -181,7 +191,7 @@ async function fetchExistingInvoiceNumbers(
   prefix: string,
 ): Promise<string[]> {
   const { data, error: numErr } = await supabase
-    .from("invoice_box_invoices")
+    .from("orders")
     .select("invoice_number")
     .eq("tenant_id", tenantId)
     .like("invoice_number", `${prefix}%`);
@@ -194,17 +204,26 @@ async function fetchExistingInvoiceNumbers(
  */
 router.get("/accounts", async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
-    const { data, error } = await withTenantFilter(
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const { data, error } = await withCompanyFilter(
       supabase
         .from("invoicing_accounts")
         .select(ACCOUNT_COLUMNS)
         .order("company_name", { ascending: true }),
-      req,
+      companyResolved,
     );
 
     if (error) {
-      console.error(`invoicing_accounts list error (tenant ${tenantId}):`, error);
+      console.error(
+        `invoicing_accounts list error (company ${companyResolved}):`,
+        error,
+      );
       return res.status(500).json({ error: "Failed to list accounts" });
     }
 
@@ -220,7 +239,13 @@ router.get("/accounts", async (req, res) => {
  */
 router.post("/accounts", async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const parsed = parseInvoicingAccountBody(req.body ?? {});
     if ("error" in parsed) {
       return res.status(400).json({ error: parsed.error });
@@ -228,7 +253,7 @@ router.post("/accounts", async (req, res) => {
 
     const { data, error } = await supabase
       .from("invoicing_accounts")
-      .insert({ tenant_id: tenantId, ...parsed })
+      .insert({ company_id: companyResolved, ...parsed })
       .select(ACCOUNT_COLUMNS)
       .single();
 
@@ -253,6 +278,13 @@ router.post("/accounts", async (req, res) => {
  */
 router.patch("/accounts/:id", async (req, res) => {
   try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const accountId = req.params.id?.trim();
     if (!accountId) return res.status(400).json({ error: "id is required" });
 
@@ -261,9 +293,9 @@ router.patch("/accounts/:id", async (req, res) => {
       return res.status(400).json({ error: parsed.error });
     }
 
-    const { data: existing, error: fetchError } = await withTenantFilter(
+    const { data: existing, error: fetchError } = await withCompanyFilter(
       supabase.from("invoicing_accounts").select("id").eq("id", accountId),
-      req,
+      companyResolved,
     ).maybeSingle();
 
     if (fetchError) {
@@ -273,13 +305,13 @@ router.patch("/accounts/:id", async (req, res) => {
       return res.status(404).json({ error: "Account not found" });
     }
 
-    const { data, error } = await withTenantFilter(
+    const { data, error } = await withCompanyFilter(
       supabase
         .from("invoicing_accounts")
         .update(parsed)
         .eq("id", accountId)
         .select(ACCOUNT_COLUMNS),
-      req,
+      companyResolved,
     ).single();
 
     if (error) {
@@ -303,12 +335,19 @@ router.patch("/accounts/:id", async (req, res) => {
  */
 router.delete("/accounts/:id", async (req, res) => {
   try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const accountId = req.params.id?.trim();
     if (!accountId) return res.status(400).json({ error: "id is required" });
 
-    const { data: existing, error: fetchError } = await withTenantFilter(
+    const { data: existing, error: fetchError } = await withCompanyFilter(
       supabase.from("invoicing_accounts").select("id").eq("id", accountId),
-      req,
+      companyResolved,
     ).maybeSingle();
 
     if (fetchError) {
@@ -318,9 +357,9 @@ router.delete("/accounts/:id", async (req, res) => {
       return res.status(404).json({ error: "Account not found" });
     }
 
-    const { error } = await withTenantFilter(
+    const { error } = await withCompanyFilter(
       supabase.from("invoicing_accounts").delete().eq("id", accountId),
-      req,
+      companyResolved,
     );
 
     if (error) {
@@ -345,19 +384,28 @@ router.delete("/accounts/:id", async (req, res) => {
  */
 router.get("/delivery-sites", async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
-    const { data, error } = await withTenantFilter(
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const { data, error } = await withCompanyFilter(
       supabase
         .from("delivery_sites")
         .select(
           `${DELIVERY_SITE_COLUMNS}, invoicing_accounts ( company_name )`,
         )
         .order("name", { ascending: true }),
-      req,
+      companyResolved,
     );
 
     if (error) {
-      console.error(`delivery_sites list error (tenant ${tenantId}):`, error);
+      console.error(
+        `delivery_sites list error (company ${companyResolved}):`,
+        error,
+      );
       return res.status(500).json({ error: "Failed to list delivery sites" });
     }
 
@@ -377,14 +425,20 @@ router.get("/delivery-sites", async (req, res) => {
  */
 router.post("/delivery-sites", async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const parsed = parseDeliverySiteBody(req.body ?? {});
     if ("error" in parsed) {
       return res.status(400).json({ error: parsed.error });
     }
 
-    const accountOk = await assertInvoicingAccountInTenant(
-      tenantId,
+    const accountOk = await assertInvoicingAccountInCompany(
+      companyResolved,
       parsed.account_id,
     );
     if (!accountOk) {
@@ -394,7 +448,7 @@ router.post("/delivery-sites", async (req, res) => {
     const { data, error } = await supabase
       .from("delivery_sites")
       .insert({
-        tenant_id: tenantId,
+        company_id: companyResolved,
         ...parsed,
       })
       .select(
@@ -426,7 +480,13 @@ router.post("/delivery-sites", async (req, res) => {
  */
 router.patch("/delivery-sites/:id", async (req, res) => {
   try {
-    const tenantId = resolveTenantId(req);
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const siteId = req.params.id?.trim();
     if (!siteId) return res.status(400).json({ error: "id is required" });
 
@@ -435,17 +495,17 @@ router.patch("/delivery-sites/:id", async (req, res) => {
       return res.status(400).json({ error: parsed.error });
     }
 
-    const accountOk = await assertInvoicingAccountInTenant(
-      tenantId,
+    const accountOk = await assertInvoicingAccountInCompany(
+      companyResolved,
       parsed.account_id,
     );
     if (!accountOk) {
       return res.status(400).json({ error: "Invalid account_id" });
     }
 
-    const { data: existing, error: fetchError } = await withTenantFilter(
+    const { data: existing, error: fetchError } = await withCompanyFilter(
       supabase.from("delivery_sites").select("id").eq("id", siteId),
-      req,
+      companyResolved,
     ).maybeSingle();
 
     if (fetchError) {
@@ -455,7 +515,7 @@ router.patch("/delivery-sites/:id", async (req, res) => {
       return res.status(404).json({ error: "Delivery site not found" });
     }
 
-    const { data, error } = await withTenantFilter(
+    const { data, error } = await withCompanyFilter(
       supabase
         .from("delivery_sites")
         .update(parsed)
@@ -463,7 +523,7 @@ router.patch("/delivery-sites/:id", async (req, res) => {
         .select(
           `${DELIVERY_SITE_COLUMNS}, invoicing_accounts ( company_name )`,
         ),
-      req,
+      companyResolved,
     ).single();
 
     if (error) {
@@ -490,38 +550,34 @@ router.patch("/delivery-sites/:id", async (req, res) => {
 router.post("/preview-invoice-number", async (req, res) => {
   try {
     const tenantId = resolveTenantId(req);
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const deliverySiteId = String(req.body?.delivery_site_id ?? "").trim();
     if (!deliverySiteId) {
       return res.status(400).json({ error: "delivery_site_id is required" });
     }
 
-    const invoiceDateParsed = parseRequiredInvoiceDateTime(
-      req.body?.invoice_date,
-      "invoice_date",
-    );
-    if (typeof invoiceDateParsed === "object" && "error" in invoiceDateParsed) {
-      return res.status(400).json({ error: invoiceDateParsed.error });
-    }
-    const invoiceDateIso = invoiceDateParsed as string;
-
-    const invoiceDateYmdResult = parseOptionalInvoiceDateYmd(
-      req.body?.invoice_date_ymd,
+    const orderCreatedDateParsed = parseRequiredIsoDate(
+      req.body?.order_created_date,
+      "order_created_date",
     );
     if (
-      invoiceDateYmdResult !== null &&
-      typeof invoiceDateYmdResult === "object" &&
-      "error" in invoiceDateYmdResult
+      typeof orderCreatedDateParsed === "object" &&
+      "error" in orderCreatedDateParsed
     ) {
-      return res.status(400).json({ error: invoiceDateYmdResult.error });
+      return res.status(400).json({ error: orderCreatedDateParsed.error });
     }
-    const invoiceDateYmd =
-      typeof invoiceDateYmdResult === "string" ? invoiceDateYmdResult : null;
-    const invoiceCalendarYmd = resolveInvoiceNumberCalendarYmd(
-      invoiceDateIso,
-      invoiceDateYmd,
-    );
+    const orderCreatedDate = orderCreatedDateParsed as string;
 
-    const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
+    const siteOk = await assertDeliverySiteInCompany(
+      companyResolved,
+      deliverySiteId,
+    );
     if (!siteOk) {
       return res.status(400).json({ error: "Invalid delivery_site_id" });
     }
@@ -529,7 +585,7 @@ router.post("/preview-invoice-number", async (req, res) => {
     const { data: site, error: siteErr } = await supabase
       .from("delivery_sites")
       .select("name")
-      .eq("tenant_id", tenantId)
+      .eq("company_id", companyResolved)
       .eq("id", deliverySiteId)
       .maybeSingle();
     if (siteErr) return res.status(500).json({ error: siteErr.message });
@@ -537,8 +593,7 @@ router.post("/preview-invoice-number", async (req, res) => {
 
     const invoiceNumber = await allocateInvoiceNumber(
       tenantId,
-      site.name,
-      invoiceCalendarYmd,
+      orderCreatedDate,
       (prefix) => fetchExistingInvoiceNumbers(tenantId, prefix),
     );
 
@@ -554,12 +609,19 @@ router.post("/preview-invoice-number", async (req, res) => {
  */
 router.delete("/delivery-sites/:id", async (req, res) => {
   try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const siteId = req.params.id?.trim();
     if (!siteId) return res.status(400).json({ error: "id is required" });
 
-    const { data: existing, error: fetchError } = await withTenantFilter(
+    const { data: existing, error: fetchError } = await withCompanyFilter(
       supabase.from("delivery_sites").select("id").eq("id", siteId),
-      req,
+      companyResolved,
     ).maybeSingle();
 
     if (fetchError) {
@@ -569,9 +631,9 @@ router.delete("/delivery-sites/:id", async (req, res) => {
       return res.status(404).json({ error: "Delivery site not found" });
     }
 
-    const { error } = await withTenantFilter(
+    const { error } = await withCompanyFilter(
       supabase.from("delivery_sites").delete().eq("id", siteId),
-      req,
+      companyResolved,
     );
 
     if (error) {
@@ -633,6 +695,13 @@ router.get("/lists", async (req, res) => {
 router.post("/lists", async (req, res) => {
   try {
     const tenantId = resolveTenantId(req);
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const userId = req.user!.id;
     const name = String(req.body?.name ?? "").trim();
     const deliverySiteId = String(req.body?.delivery_site_id ?? "").trim();
@@ -652,7 +721,10 @@ router.post("/lists", async (req, res) => {
       return res.status(400).json({ error: "At least one item is required" });
     }
 
-    const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
+    const siteOk = await assertDeliverySiteInCompany(
+      companyResolved,
+      deliverySiteId,
+    );
     if (!siteOk) {
       return res.status(400).json({ error: "Invalid delivery_site_id" });
     }
@@ -766,6 +838,13 @@ router.get("/lists/:id", async (req, res) => {
 router.patch("/lists/:id", async (req, res) => {
   try {
     const tenantId = resolveTenantId(req);
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const listId = req.params.id?.trim();
     if (!listId) return res.status(400).json({ error: "id is required" });
 
@@ -790,7 +869,10 @@ router.patch("/lists/:id", async (req, res) => {
       if (!deliverySiteId) {
         return res.status(400).json({ error: "delivery_site_id cannot be empty" });
       }
-      const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
+      const siteOk = await assertDeliverySiteInCompany(
+        companyResolved,
+        deliverySiteId,
+      );
       if (!siteOk) {
         return res.status(400).json({ error: "Invalid delivery_site_id" });
       }
@@ -961,9 +1043,37 @@ function parseOptionalIsoDate(
   return s;
 }
 
-async function validateBoxInvoiceAmounts(
+function parseRequiredIsoDate(
+  value: unknown,
+  field: string,
+): string | { error: string } {
+  if (value == null || value === "") {
+    return { error: `${field} is required` };
+  }
+  const s = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return { error: `${field} must be YYYY-MM-DD` };
+  }
+  return s;
+}
+
+function resolveFirstInvoiceSentDate(
+  body: Record<string, unknown>,
+): string | { error: string } {
+  const parsed = parseOptionalIsoDate(
+    body.first_invoice_sent_at,
+    "first_invoice_sent_at",
+  );
+  if (typeof parsed === "object" && parsed !== null && "error" in parsed) {
+    return parsed;
+  }
+  if (typeof parsed === "string") return parsed;
+  return new Date().toISOString().slice(0, 10);
+}
+
+async function validateOrderAmounts(
   tenantId: string,
-  lines: InvoiceBoxLineJson[],
+  lines: OrderLineJson[],
   totalAmount: number,
 ): Promise<string | null> {
   if (!Array.isArray(lines) || lines.length === 0) {
@@ -992,21 +1102,49 @@ async function validateBoxInvoiceAmounts(
 }
 
 /**
- * GET /invoicing/invoices
+ * GET /invoicing/orders
  */
-router.get("/invoices", async (req, res) => {
+type OrderSummaryRow = {
+  id: string;
+  invoice_number: string;
+  order_created_date: string | null;
+  company_name: string;
+  total_amount: number;
+  delivery_site_name: string;
+  first_invoice_sent_at: string | null;
+  created_at?: string;
+  delivery_sites?:
+    | { account_id: string }
+    | { account_id: string }[]
+    | null;
+};
+
+function mapOrderSummaryRow(row: OrderSummaryRow) {
+  const joined = row.delivery_sites;
+  const account_id = Array.isArray(joined)
+    ? (joined[0]?.account_id ?? null)
+    : (joined?.account_id ?? null);
+  const { delivery_sites: _s, ...rest } = row;
+  return { ...rest, account_id };
+}
+
+router.get("/orders", async (req, res) => {
   try {
     const { data, error } = await withTenantFilter(
       supabase
-        .from("invoice_box_invoices")
+        .from("orders")
         .select(
-          "id, invoice_number, invoice_date, company_name, total_amount, delivery_site_name, sent_at, created_at",
+          "id, invoice_number, order_created_date, company_name, total_amount, delivery_site_name, first_invoice_sent_at, created_at, delivery_sites ( account_id )",
         )
         .order("created_at", { ascending: false }),
       req,
     );
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ invoices: data ?? [] });
+    res.json({
+      orders: (data ?? []).map((row) =>
+        mapOrderSummaryRow(row as OrderSummaryRow),
+      ),
+    });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });
@@ -1014,26 +1152,26 @@ router.get("/invoices", async (req, res) => {
 });
 
 /**
- * GET /invoicing/invoices/:id
+ * GET /invoicing/orders/:id
  */
-router.get("/invoices/:id", async (req, res) => {
+router.get("/orders/:id", async (req, res) => {
   try {
-    const invoiceId = req.params.id?.trim();
-    if (!invoiceId) return res.status(400).json({ error: "id is required" });
+    const orderId = req.params.id?.trim();
+    if (!orderId) return res.status(400).json({ error: "id is required" });
 
-    const { data: invoice, error } = await withTenantFilter(
-      supabase.from("invoice_box_invoices").select(INVOICE_COLUMNS).eq("id", invoiceId),
+    const { data: order, error } = await withTenantFilter(
+      supabase.from("orders").select(ORDER_COLUMNS).eq("id", orderId),
       req,
     ).maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
-    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    if (!order) return res.status(404).json({ error: "Order not found" });
 
-    const normalized = normalizeInvoiceBoxLines(invoice.lines);
+    const normalized = normalizeOrderLines(order.lines);
     if ("error" in normalized) {
       return res.status(500).json({ error: normalized.error });
     }
 
-    res.json({ invoice: { ...invoice, lines: normalized } });
+    res.json({ order: { ...order, lines: normalized } });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });
@@ -1041,12 +1179,19 @@ router.get("/invoices/:id", async (req, res) => {
 });
 
 /**
- * POST /invoicing/invoices
- * Save or Save and Send from Generation preview.
+ * POST /invoicing/orders
+ * Save or Save and Send from Create Order preview.
  */
-router.post("/invoices", async (req, res) => {
+router.post("/orders", async (req, res) => {
   try {
     const tenantId = resolveTenantId(req);
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
     const userId = req.user!.id;
 
     const listId = String(req.body?.list_id ?? "").trim();
@@ -1065,37 +1210,17 @@ router.post("/invoices", async (req, res) => {
       return res.status(400).json({ error: "pdf_base64 is required when send is true" });
     }
 
-    const invoiceDateParsed = parseRequiredInvoiceDateTime(
-      req.body?.invoice_date,
-      "invoice_date",
-    );
-    if (typeof invoiceDateParsed === "object" && "error" in invoiceDateParsed) {
-      return res.status(400).json({ error: invoiceDateParsed.error });
-    }
-    const invoiceDateIso = invoiceDateParsed as string;
-
-    const invoiceDateYmdResult = parseOptionalInvoiceDateYmd(
-      req.body?.invoice_date_ymd,
+    const orderCreatedDateParsed = parseRequiredIsoDate(
+      req.body?.order_created_date,
+      "order_created_date",
     );
     if (
-      invoiceDateYmdResult !== null &&
-      typeof invoiceDateYmdResult === "object" &&
-      "error" in invoiceDateYmdResult
+      typeof orderCreatedDateParsed === "object" &&
+      "error" in orderCreatedDateParsed
     ) {
-      return res.status(400).json({ error: invoiceDateYmdResult.error });
+      return res.status(400).json({ error: orderCreatedDateParsed.error });
     }
-    const invoiceDateYmd =
-      typeof invoiceDateYmdResult === "string" ? invoiceDateYmdResult : null;
-    const invoiceCalendarYmd = resolveInvoiceNumberCalendarYmd(
-      invoiceDateIso,
-      invoiceDateYmd,
-    );
-
-    const invoiceDateDisplay =
-      typeof req.body?.invoice_date_display === "string" &&
-      req.body.invoice_date_display.trim()
-        ? String(req.body.invoice_date_display).trim()
-        : formatInvoiceDateTimeDisplayUtc(invoiceDateIso);
+    const orderCreatedDate = orderCreatedDateParsed as string;
 
     const orderReceivedParsed = parseOptionalIsoDate(
       req.body?.order_received_date,
@@ -1125,12 +1250,12 @@ router.post("/invoices", async (req, res) => {
       return res.status(400).json({ error: "total_amount must be >= 0" });
     }
 
-    const normalizedLines = normalizeInvoiceBoxLines(req.body?.lines);
+    const normalizedLines = normalizeOrderLines(req.body?.lines);
     if ("error" in normalizedLines) {
       return res.status(400).json({ error: normalizedLines.error });
     }
 
-    const amountError = await validateBoxInvoiceAmounts(
+    const amountError = await validateOrderAmounts(
       tenantId,
       normalizedLines,
       totalAmount,
@@ -1150,15 +1275,27 @@ router.post("/invoices", async (req, res) => {
       return res.status(400).json({ error: "delivery_site_id does not match list" });
     }
 
-    const siteOk = await assertDeliverySiteInTenant(tenantId, deliverySiteId);
+    const siteOk = await assertDeliverySiteInCompany(
+      companyResolved,
+      deliverySiteId,
+    );
     if (!siteOk) {
       return res.status(400).json({ error: "Invalid delivery_site_id" });
+    }
+
+    const periodLockErr = await assertOrderDateOpen(
+      companyResolved,
+      deliverySiteId,
+      orderCreatedDate,
+    );
+    if (periodLockErr) {
+      return res.status(409).json({ error: periodLockErr });
     }
 
     const { data: site, error: siteErr } = await supabase
       .from("delivery_sites")
       .select("id, name, email, invoicing_accounts ( company_name )")
-      .eq("tenant_id", tenantId)
+      .eq("company_id", companyResolved)
       .eq("id", deliverySiteId)
       .maybeSingle();
     if (siteErr) return res.status(500).json({ error: siteErr.message });
@@ -1177,7 +1314,7 @@ router.post("/invoices", async (req, res) => {
       return res.status(500).json({ error: listLines.error });
     }
 
-    const coverageError = validateBoxLinesCoverAllListLines(
+    const coverageError = validateOrderLinesCoverAllListLines(
       listLines,
       normalizedLines,
     );
@@ -1196,7 +1333,7 @@ router.post("/invoices", async (req, res) => {
       list.wholesale_list_id,
       itemIds,
     );
-    const costError = validateBoxLineCostsAgainstRpc(
+    const costError = validateOrderLineCostsAgainstRpc(
       normalizedLines,
       wholesaleCosts,
     );
@@ -1212,7 +1349,7 @@ router.post("/invoices", async (req, res) => {
     let invoiceNumber: string;
     if (requestedNumber) {
       const { data: dup, error: dupErr } = await supabase
-        .from("invoice_box_invoices")
+        .from("orders")
         .select("id")
         .eq("tenant_id", tenantId)
         .eq("invoice_number", requestedNumber)
@@ -1227,8 +1364,7 @@ router.post("/invoices", async (req, res) => {
     } else {
       invoiceNumber = await allocateInvoiceNumber(
         tenantId,
-        site.name,
-        invoiceCalendarYmd,
+        orderCreatedDate,
         (prefix) => fetchExistingInvoiceNumbers(tenantId, prefix),
       );
     }
@@ -1238,8 +1374,8 @@ router.post("/invoices", async (req, res) => {
       normalizedLines,
     );
 
-    const { data: invoiceRow, error: saveErr } = await supabase.rpc(
-      "save_invoicing_box_invoice_atomic",
+    const { data: orderRow, error: saveErr } = await supabase.rpc(
+      "save_order_atomic",
       {
         p_tenant_id: tenantId,
         p_user_id: userId,
@@ -1251,7 +1387,7 @@ router.post("/invoices", async (req, res) => {
         p_company_name: companyName,
         p_order_received_date: orderReceivedParsed,
         p_delivery_date: deliveryDateParsed,
-        p_invoice_date: invoiceDateIso,
+        p_order_created_date: orderCreatedDate,
         p_total_amount: totalAmount,
         p_lines: normalizedLines,
         p_updated_list_lines: updatedListLines,
@@ -1265,37 +1401,42 @@ router.post("/invoices", async (req, res) => {
       return res.status(400).json({ error: saveErr.message });
     }
 
-    const invoice = invoiceRow as Record<string, unknown>;
-    const invoiceId = String(invoice.id ?? "");
+    const order = orderRow as Record<string, unknown>;
+    const orderId = String(order.id ?? "");
 
-    let sentAt: string | null = null;
+    let sentDate: string | null = null;
     let emailSent = false;
     let emailError: string | undefined;
 
     if (send) {
+      const sentDateParsed = resolveFirstInvoiceSentDate(
+        req.body as Record<string, unknown>,
+      );
+      if (typeof sentDateParsed === "object" && "error" in sentDateParsed) {
+        return res.status(400).json({ error: sentDateParsed.error });
+      }
       try {
         await sendInvoiceEmail({
           to: site.email,
           deliverySiteName: site.name,
           invoiceNumber,
-          invoiceDate: invoiceDateDisplay,
+          invoiceDate: orderCreatedDate,
           totalAmount,
           pdfBase64,
         });
         emailSent = true;
-        const now = new Date().toISOString();
         const { data: sentRow, error: sentErr } = await supabase
-          .from("invoice_box_invoices")
-          .update({ sent_at: now })
-          .eq("id", invoiceId)
+          .from("orders")
+          .update({ first_invoice_sent_at: sentDateParsed })
+          .eq("id", orderId)
           .eq("tenant_id", tenantId)
-          .select(INVOICE_COLUMNS)
+          .select(ORDER_COLUMNS)
           .single();
         if (sentErr) {
-          console.error("Invoice saved but sent_at update failed:", sentErr);
+          console.error("Order saved but first_invoice_sent_at update failed:", sentErr);
           emailError = "Email sent but failed to record Sent status";
         } else {
-          sentAt = sentRow.sent_at;
+          sentDate = sentRow.first_invoice_sent_at;
         }
       } catch (emailErr: unknown) {
         emailError =
@@ -1304,10 +1445,11 @@ router.post("/invoices", async (req, res) => {
     }
 
     res.status(201).json({
-      invoice: {
-        ...invoice,
+      order: {
+        ...order,
         lines: normalizedLines,
-        sent_at: sentAt ?? invoice.sent_at ?? null,
+        first_invoice_sent_at:
+          sentDate ?? (order.first_invoice_sent_at as string | null) ?? null,
       },
       email_sent: send ? emailSent : undefined,
       email_error: emailError,
@@ -1319,12 +1461,12 @@ router.post("/invoices", async (req, res) => {
 });
 
 /**
- * POST /invoicing/invoices/:id/send
+ * POST /invoicing/orders/:id/send
  */
-router.post("/invoices/:id/send", async (req, res) => {
+router.post("/orders/:id/send", async (req, res) => {
   try {
-    const invoiceId = req.params.id?.trim();
-    if (!invoiceId) return res.status(400).json({ error: "id is required" });
+    const orderId = req.params.id?.trim();
+    if (!orderId) return res.status(400).json({ error: "id is required" });
 
     const pdfBase64 =
       typeof req.body?.pdf_base64 === "string"
@@ -1334,26 +1476,29 @@ router.post("/invoices/:id/send", async (req, res) => {
       return res.status(400).json({ error: "pdf_base64 is required" });
     }
 
-    const { data: invoice, error: fetchErr } = await withTenantFilter(
-      supabase.from("invoice_box_invoices").select(INVOICE_COLUMNS).eq("id", invoiceId),
+    const { data: order, error: fetchErr } = await withTenantFilter(
+      supabase.from("orders").select(ORDER_COLUMNS).eq("id", orderId),
       req,
     ).maybeSingle();
     if (fetchErr) return res.status(500).json({ error: fetchErr.message });
-    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    if (!order) return res.status(404).json({ error: "Order not found" });
 
-    const invoiceDateRaw = invoice.invoice_date ?? "";
-    if (!invoiceDateRaw) {
-      return res.status(400).json({ error: "Invoice has no invoice_date" });
+    const orderCreatedDateRaw = order.order_created_date ?? "";
+    if (!orderCreatedDateRaw) {
+      return res.status(400).json({ error: "Order has no order_created_date" });
     }
-    const invoiceDateDisplay = formatInvoiceDateTimeDisplayUtc(invoiceDateRaw);
+    const orderCreatedDateDisplay =
+      /^\d{4}-\d{2}-\d{2}$/.test(orderCreatedDateRaw.trim())
+        ? orderCreatedDateRaw.trim()
+        : orderCreatedDateRaw.slice(0, 10);
 
     try {
       await sendInvoiceEmail({
-        to: invoice.delivery_email,
-        deliverySiteName: invoice.delivery_site_name,
-        invoiceNumber: invoice.invoice_number,
-        invoiceDate: invoiceDateDisplay,
-        totalAmount: Number(invoice.total_amount),
+        to: order.delivery_email,
+        deliverySiteName: order.delivery_site_name,
+        invoiceNumber: order.invoice_number,
+        invoiceDate: orderCreatedDateDisplay,
+        totalAmount: Number(order.total_amount),
         pdfBase64,
       });
     } catch (emailErr: unknown) {
@@ -1362,23 +1507,247 @@ router.post("/invoices/:id/send", async (req, res) => {
       return res.status(502).json({ error: `Email failed: ${message}` });
     }
 
-    const now = new Date().toISOString();
+    const sentDateParsed = resolveFirstInvoiceSentDate(
+      req.body as Record<string, unknown>,
+    );
+    if (typeof sentDateParsed === "object" && "error" in sentDateParsed) {
+      return res.status(400).json({ error: sentDateParsed.error });
+    }
+
     const { data: updated, error: updateErr } = await withTenantFilter(
       supabase
-        .from("invoice_box_invoices")
-        .update({ sent_at: now })
-        .eq("id", invoiceId)
-        .select(INVOICE_COLUMNS),
+        .from("orders")
+        .update({ first_invoice_sent_at: sentDateParsed })
+        .eq("id", orderId)
+        .select(ORDER_COLUMNS),
       req,
     ).single();
     if (updateErr) return res.status(500).json({ error: updateErr.message });
 
-    const normalized = normalizeInvoiceBoxLines(updated.lines);
+    const normalized = normalizeOrderLines(updated.lines);
     if ("error" in normalized) {
       return res.status(500).json({ error: normalized.error });
     }
 
-    res.json({ invoice: { ...updated, lines: normalized } });
+    res.json({ order: { ...updated, lines: normalized } });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+type PaymentRow = {
+  id: string;
+  company_id: string;
+  account_id: string;
+  amount: number;
+  type: string;
+  note: string | null;
+  payment_date: string | null;
+  created_at: string;
+  created_by: string | null;
+  invoicing_accounts?:
+    | { company_name: string }
+    | { company_name: string }[]
+    | null;
+};
+
+function mapPaymentRow(row: PaymentRow) {
+  const joined = row.invoicing_accounts;
+  const account_name = Array.isArray(joined)
+    ? (joined[0]?.company_name ?? "")
+    : (joined?.company_name ?? "");
+  const { invoicing_accounts: _a, ...rest } = row;
+  return { ...rest, account_name: account_name.trim() || "—" };
+}
+
+async function resolveInvoicingCompanyId(
+  req: Request,
+): Promise<string | { error: string; status: number }> {
+  const tenantId = resolveTenantId(req);
+  const companyId = await resolveCompanyIdForTenant(tenantId);
+  if (!companyId) {
+    return {
+      error: "No company linked to the current tenant",
+      status: 400,
+    };
+  }
+  return companyId;
+}
+
+const PAYMENT_TYPES = ["payment", "adjustment"] as const;
+type PaymentType = (typeof PAYMENT_TYPES)[number];
+
+function parsePaymentType(value: unknown): PaymentType | { error: string } {
+  if (value == null || value === "") {
+    return "payment";
+  }
+  const type = String(value).trim();
+  if (type === "payment" || type === "adjustment") {
+    return type;
+  }
+  return { error: "type must be payment or adjustment" };
+}
+
+function parsePaymentAmount(
+  value: unknown,
+): number | { error: string } {
+  if (value == null || value === "") {
+    return { error: "amount is required" };
+  }
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { error: "amount must be a positive number" };
+  }
+  return amount;
+}
+
+function parsePaymentBody(
+  body: Record<string, unknown>,
+  requireAccount: boolean,
+):
+  | {
+      account_id: string;
+      amount: number;
+      type: PaymentType;
+      payment_date: string | null;
+      note: string | null;
+    }
+  | { error: string } {
+  const accountId = String(body.account_id ?? "").trim();
+  if (requireAccount && !accountId) {
+    return { error: "account_id is required" };
+  }
+  if (!requireAccount && !accountId) {
+    return { error: "account_id is required" };
+  }
+
+  const amountParsed = parsePaymentAmount(body.amount);
+  if (typeof amountParsed !== "number") {
+    return amountParsed;
+  }
+
+  const paymentDateParsed = parseOptionalIsoDate(
+    body.payment_date,
+    "payment_date",
+  );
+  if (
+    typeof paymentDateParsed === "object" &&
+    paymentDateParsed !== null &&
+    "error" in paymentDateParsed
+  ) {
+    return paymentDateParsed;
+  }
+
+  const noteRaw = body.note;
+  const note =
+    noteRaw == null || String(noteRaw).trim() === ""
+      ? null
+      : String(noteRaw).trim();
+
+  const payment_date =
+    typeof paymentDateParsed === "string" ? paymentDateParsed : null;
+
+  const typeParsed = parsePaymentType(body.type);
+  if (typeof typeParsed !== "string") {
+    return typeParsed;
+  }
+
+  if (typeParsed === "adjustment" && !note) {
+    return { error: "note is required for adjustment" };
+  }
+
+  return {
+    account_id: accountId,
+    amount: amountParsed,
+    type: typeParsed,
+    payment_date,
+    note,
+  };
+}
+
+function parsePaymentPatchBody(
+  body: Record<string, unknown>,
+):
+  | {
+      account_id?: string;
+      amount?: number;
+      payment_date?: string | null;
+      note?: string | null;
+    }
+  | { error: string } {
+  const patch: {
+    account_id?: string;
+    amount?: number;
+    payment_date?: string | null;
+    note?: string | null;
+  } = {};
+
+  if (body.account_id !== undefined) {
+    const accountId = String(body.account_id ?? "").trim();
+    if (!accountId) return { error: "account_id cannot be empty" };
+    patch.account_id = accountId;
+  }
+
+  if (body.amount !== undefined) {
+    const amountParsed = parsePaymentAmount(body.amount);
+    if (typeof amountParsed !== "number") {
+      return amountParsed;
+    }
+    patch.amount = amountParsed;
+  }
+
+  if (body.payment_date !== undefined) {
+    const paymentDateParsed = parseOptionalIsoDate(
+      body.payment_date,
+      "payment_date",
+    );
+    if (
+      typeof paymentDateParsed === "object" &&
+      paymentDateParsed !== null &&
+      "error" in paymentDateParsed
+    ) {
+      return paymentDateParsed;
+    }
+    patch.payment_date =
+      typeof paymentDateParsed === "string" ? paymentDateParsed : null;
+  }
+
+  if (body.note !== undefined) {
+    const noteRaw = body.note;
+    patch.note =
+      noteRaw == null || String(noteRaw).trim() === ""
+        ? null
+        : String(noteRaw).trim();
+  }
+
+  if (
+    patch.account_id === undefined &&
+    patch.amount === undefined &&
+    patch.payment_date === undefined &&
+    patch.note === undefined
+  ) {
+    return { error: "No fields to update" };
+  }
+
+  return patch;
+}
+
+/**
+ * GET /invoicing/payments/accounts
+ * All invoicing accounts for tenants under the seller company.
+ */
+router.get("/payments/accounts", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const accounts = await fetchCompanyInvoicingAccounts(companyResolved);
+    res.json({ accounts });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
     res.status(500).json({ error: message });
@@ -1386,22 +1755,396 @@ router.post("/invoices/:id/send", async (req, res) => {
 });
 
 /**
- * DELETE /invoicing/invoices/:id
+ * GET /invoicing/payments
  */
-router.delete("/invoices/:id", async (req, res) => {
+router.get("/payments", async (req, res) => {
   try {
-    const invoiceId = req.params.id?.trim();
-    if (!invoiceId) return res.status(400).json({ error: "id is required" });
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const accountId = String(req.query.account_id ?? "").trim();
+    let query = supabase
+      .from("payments")
+      .select(
+        `${PAYMENT_COLUMNS}, invoicing_accounts ( company_name )`,
+      )
+      .eq("company_id", companyResolved)
+      .order("created_at", { ascending: false });
+
+    if (accountId) {
+      query = query.eq("account_id", accountId);
+    }
+
+    const { data, error } = await query;
+    if (error) return res.status(500).json({ error: error.message });
+
+    res.json({
+      payments: (data ?? []).map((row) =>
+        mapPaymentRow(row as PaymentRow),
+      ),
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /invoicing/payments
+ */
+router.post("/payments", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const parsed = parsePaymentBody(
+      (req.body ?? {}) as Record<string, unknown>,
+      true,
+    );
+    if ("error" in parsed) {
+      return res.status(400).json({ error: parsed.error });
+    }
+
+    const accountOk = await assertAccountInCompany(
+      companyResolved,
+      parsed.account_id,
+    );
+    if (!accountOk) {
+      return res.status(400).json({ error: "Invalid account_id" });
+    }
+
+    const createdAtIso = new Date().toISOString();
+    const paymentLockErr = await assertPaymentOpen(
+      companyResolved,
+      parsed.account_id,
+      parsed.payment_date,
+      createdAtIso,
+    );
+    if (paymentLockErr) {
+      return res.status(409).json({ error: paymentLockErr });
+    }
+
+    const { data, error } = await supabase
+      .from("payments")
+      .insert({
+        company_id: companyResolved,
+        account_id: parsed.account_id,
+        amount: parsed.amount,
+        type: parsed.type,
+        note: parsed.note,
+        payment_date: parsed.payment_date,
+        created_by: req.user!.id,
+      })
+      .select(`${PAYMENT_COLUMNS}, invoicing_accounts ( company_name )`)
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.status(201).json({ payment: mapPaymentRow(data as PaymentRow) });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * PATCH /invoicing/payments/:id
+ */
+router.patch("/payments/:id", async (req, res) => {
+  try {
+    const paymentId = req.params.id?.trim();
+    if (!paymentId) return res.status(400).json({ error: "id is required" });
+
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const parsed = parsePaymentPatchBody(
+      (req.body ?? {}) as Record<string, unknown>,
+    );
+    if ("error" in parsed) {
+      return res.status(400).json({ error: parsed.error });
+    }
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from("payments")
+      .select("id, account_id, payment_date, created_at")
+      .eq("id", paymentId)
+      .eq("company_id", companyResolved)
+      .maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!existing) return res.status(404).json({ error: "Payment not found" });
+
+    const existingLockErr = await assertPaymentOpen(
+      companyResolved,
+      existing.account_id,
+      existing.payment_date,
+      existing.created_at,
+    );
+    if (existingLockErr) {
+      return res.status(409).json({ error: existingLockErr });
+    }
+
+    if (parsed.account_id) {
+      const accountOk = await assertAccountInCompany(
+        companyResolved,
+        parsed.account_id,
+      );
+      if (!accountOk) {
+        return res.status(400).json({ error: "Invalid account_id" });
+      }
+    }
+
+    const nextAccountId = parsed.account_id ?? existing.account_id;
+    const nextPaymentDate =
+      parsed.payment_date !== undefined
+        ? parsed.payment_date
+        : existing.payment_date;
+    const nextLockErr = await assertPaymentOpen(
+      companyResolved,
+      nextAccountId,
+      nextPaymentDate,
+      existing.created_at,
+    );
+    if (nextLockErr) {
+      return res.status(409).json({ error: nextLockErr });
+    }
+
+    const { data, error } = await supabase
+      .from("payments")
+      .update(parsed)
+      .eq("id", paymentId)
+      .eq("company_id", companyResolved)
+      .select(`${PAYMENT_COLUMNS}, invoicing_accounts ( company_name )`)
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ payment: mapPaymentRow(data as PaymentRow) });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /invoicing/payments/:id
+ */
+router.delete("/payments/:id", async (req, res) => {
+  try {
+    const paymentId = req.params.id?.trim();
+    if (!paymentId) return res.status(400).json({ error: "id is required" });
+
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const { data: existing, error: fetchErr } = await supabase
+      .from("payments")
+      .select("id, account_id, payment_date, created_at")
+      .eq("id", paymentId)
+      .eq("company_id", companyResolved)
+      .maybeSingle();
+    if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+    if (!existing) return res.status(404).json({ error: "Payment not found" });
+
+    const paymentLockErr = await assertPaymentOpen(
+      companyResolved,
+      existing.account_id,
+      existing.payment_date,
+      existing.created_at,
+    );
+    if (paymentLockErr) {
+      return res.status(409).json({ error: paymentLockErr });
+    }
+
+    const { error } = await supabase
+      .from("payments")
+      .delete()
+      .eq("id", paymentId)
+      .eq("company_id", companyResolved);
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.status(204).send();
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/balance/ledger?account_id=
+ */
+router.get("/balance/ledger", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const accountId = String(req.query.account_id ?? "").trim();
+    if (!accountId) {
+      return res.status(400).json({ error: "account_id is required" });
+    }
+
+    const accountOk = await assertAccountInCompany(companyResolved, accountId);
+    if (!accountOk) {
+      return res.status(400).json({ error: "Invalid account_id" });
+    }
+
+    const accounts = await fetchCompanyInvoicingAccounts(companyResolved);
+    const account = accounts.find((row) => row.id === accountId);
+    const openPeriod = currentCalendarPeriod();
+    const openPeriodClosed = await isAccountPeriodClosed(
+      companyResolved,
+      accountId,
+      openPeriod,
+    );
+
+    const { rows, current_balance } = await buildAccountLedger(
+      companyResolved,
+      accountId,
+    );
+
+    res.json({
+      account_id: accountId,
+      account_name: account?.company_name ?? "—",
+      current_balance,
+      open_period: openPeriod,
+      open_period_label: formatOpenPeriodLabel(openPeriod),
+      open_period_closed: openPeriodClosed,
+      ledger: rows,
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/balance/closed-periods
+ */
+router.get("/balance/closed-periods", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const accountId = String(req.query.account_id ?? "").trim();
+    if (accountId) {
+      const accountOk = await assertAccountInCompany(
+        companyResolved,
+        accountId,
+      );
+      if (!accountOk) {
+        return res.status(400).json({ error: "Invalid account_id" });
+      }
+    }
+
+    const closed = await fetchCompanyClosedPeriods(
+      companyResolved,
+      accountId || undefined,
+    );
+    res.json({ closed_periods: closed });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /invoicing/balance/close-month
+ * Body: { period: "YYYY-MM" }
+ */
+router.post("/balance/close-month", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const period = String(req.body?.period ?? "").trim();
+    if (!period) {
+      return res.status(400).json({ error: "period is required (YYYY-MM)" });
+    }
+    if (!isValidPeriod(period)) {
+      return res.status(400).json({ error: "Invalid period (expected YYYY-MM)" });
+    }
+
+    const result = await closeMonthForCompany(
+      companyResolved,
+      period,
+      req.user!.id,
+    );
+    res.status(201).json({
+      period,
+      period_label: formatOpenPeriodLabel(period),
+      closed_count: result.closed_count,
+    });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (message.includes("already closed")) {
+      return res.status(409).json({ error: message });
+    }
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * DELETE /invoicing/orders/:id
+ */
+router.delete("/orders/:id", async (req, res) => {
+  try {
+    const orderId = req.params.id?.trim();
+    if (!orderId) return res.status(400).json({ error: "id is required" });
+
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const tenantId = resolveTenantId(req);
+    const orderLockErr = await assertExistingOrderOpen(
+      companyResolved,
+      orderId,
+      [tenantId],
+    );
+    if (orderLockErr) {
+      return res.status(409).json({ error: orderLockErr });
+    }
 
     const { data: existing, error: fetchErr } = await withTenantFilter(
-      supabase.from("invoice_box_invoices").select("id").eq("id", invoiceId),
+      supabase.from("orders").select("id").eq("id", orderId),
       req,
     ).maybeSingle();
     if (fetchErr) return res.status(500).json({ error: fetchErr.message });
-    if (!existing) return res.status(404).json({ error: "Invoice not found" });
+    if (!existing) return res.status(404).json({ error: "Order not found" });
 
     const { error } = await withTenantFilter(
-      supabase.from("invoice_box_invoices").delete().eq("id", invoiceId),
+      supabase.from("orders").delete().eq("id", orderId),
       req,
     );
     if (error) return res.status(400).json({ error: error.message });

@@ -1,0 +1,582 @@
+================================================================================
+  INVOICING LEDGER — 売掛金・入金・月次締め 計画（改訂）
+  対象: food_costing プロジェクト
+  作成日: 2026-05-31
+  改訂日: 2026-05-31（§3 Phase 1 実装仕様確定 / Phase 3 Running Balance UI 確定）
+  ステータス: Phase 1–2 完了 · Phase 3 実装済（closing_balance / Balance UI / 締めロック）
+================================================================================
+
+本書は、既存の Invoicing 機能を拡張し、
+Order（受注・売掛）・Payment Received（入金）・月次締め（Closing）・
+Balance 表示を導入するための要件・設計をまとめたものである。
+
+既存計画: docs/invoicing-plan.txt
+移行元テーブル: invoice_box_invoices → orders（リネーム）
+
+
+================================================================================
+0. 改訂サマリー（4本柱）
+================================================================================
+
+| # | 機能 | テーブル / 用語 |
+|---|------|-----------------|
+| 1 | Payment Received（入金・調整の記録） | payments（新規） |
+| 2 | Order 中心のドメインモデル | invoice_box_invoices → orders |
+|   |   | Generate Invoice → Create Order |
+|   |   | Invoice = Order を書類に起こした結果 |
+| 3 | 月次締め + Monthly Statement メール | closing_balance（新規） |
+| 4 | Balance UI | payments + orders + closing_balance からフロント計算 |
+
+
+================================================================================
+1. 背景・目的
+================================================================================
+
+1-1. 現状の課題
+
+- 入金（Payment Received）の記録がない。
+- 「Invoice を作る」＝「取引そのもの」に見え、Order と書類（Invoice）の区別がない。
+- 複数 delivery_site・複数 tenant から同一 **顧客窓口（account）** への請求は現場レベルだが、
+  入金・残高は 売り手 company × account の集約レベルで見たい。
+
+1-2. やりたいこと
+
+- Order で売掛を記録し、payments で入金・調整を記録し、Balance を見る。
+- 月次締めで過去月の残高をスナップショットし、修正があっても計算が破綻しにくくする。
+- 締め時に各 account へ Monthly Statement（残高メール）を送る。
+- UI・DB を Order 中心に再定義する（Invoice はドキュメント）。
+
+
+================================================================================
+2. 階層モデル・運用前提（確定）
+================================================================================
+
+2-1. 誰がアプリを操作するか（重要）
+
+- **現状は売り手側（自社）がアプリ上の操作をすべて完結させる。**
+- company ↔ company（買い手企業がログインして支払う等）の双方向モデルではない。
+- 将来そうする可能性はあるが、本計画の前提は **売り手操作のみ**。
+
+2-2. Account とは何か（重要 — 過去ドキュメントの訂正）
+
+- **account（invoicing_accounts）は「顧客会社」そのものではない。**
+- **請求・入金・残高をまとめる「窓口」（contact / billing account）** である。
+  - 複数 delivery_site を束ねる単位。
+  - Monthly Statement の送付先（poc_email 等）の単位。
+  - 売掛・入金を集計するときの **顧客側のキー**。
+- account.company_name は窓口の表示名であり、app の companies テーブルとは別物。
+- **入金を「払った主体」として account をモデル化しない。**
+  実際の入金は窓口に対して記録され、**売り手が手入力**する。
+
+2-3. 階層の対応関係（構造のみ）
+
+  companies          :  tenants           ::  invoicing_accounts  :  delivery_sites
+  （売り手・自社）         （Order を出す単位）      （顧客窓口）              （配送先）
+
+- company : tenant と account : delivery_site は **構造上** 同型の親子関係。
+- invoicing_accounts と delivery_sites は **company スコープ**（売り手 company 単位の共有マスタ）。
+  invoice_lists / orders は tenant スコープのまま。
+
+2-4. 二つのレイヤー
+
+| レイヤー | 意味 | データ |
+|----------|------|--------|
+| Order（現場） | どの tenant が、どの delivery_site 向けにいくらの受注か | orders |
+| Payment（集約） | 売り手 company が、顧客窓口 account に対していくら入金を受けたか | payments |
+
+2-5. payments / closing_balance のキー
+
+- **company_id** … app の companies.id。**売り手側（自社）**。入金を受け取る・記録する側。
+- **account_id** … invoicing_accounts.id。**顧客窓口**。入金・売掛を紐づける顧客側の単位。
+- payments は order # / delivery_site 単位ではない。
+  **company_id × account_id** ペアに対する入金または調整の1行。
+- 操作はすべて **売り手ユーザー** が行う（Payment Received の手入力含む）。
+
+
+================================================================================
+3. Order モデル（§2 — invoice_box_invoices からの移行）
+================================================================================
+
+3-1. 概念
+
+| 旧 | 新 |
+|----|-----|
+| Invoice を作る | **Order を作る**（Create Order） |
+| invoice_box_invoices | **orders** テーブル |
+| Invoice Box | **Orders** 一覧（＋ Show Invoice で書類表示） |
+| 請求トランザクション | **Order**（売掛の増） |
+| PDF / メール | **Invoice**（Order を書類に起こした結果） |
+
+- **Order が本体。Invoice は派生物（ドキュメント）。**
+- 「Invoice Creation Date」という考え方はやめる。
+  Order には **Order Creation Date** がある。
+
+3-2. テーブル名
+
+  invoice_box_invoices  →  orders
+
+（migration でリネーム。FK・RPC・API も追随。）
+
+3-3. カラムの用語・意味の変更（確定）
+
+| 旧カラム | 新カラム / 意味 |
+|----------|-----------------|
+| invoice_date | **order_created_date**（Order Creation Date） |
+| sent_at | **first_invoice_sent_at**（初回 Invoice 送信日時） |
+| invoice_number | 維持（Invoice 書類番号。Order に紐づく） |
+| order_received_date | **任意（オプション）**。現状は必須 → 必須を外す |
+| list_name 他 | 維持（20260708120000 で追加済みのスナップショット列含む） |
+
+3-4. Invoice 書類（PDF / メール）に載せる日付（確定）
+
+- **Invoice Creation Date / Invoice Date は PDF に載せない。**
+- 代わりに **Sent Date** 行を常に載せる。
+  - **Save and Send 済み** … `first_invoice_sent_at` を表示。
+  - **Save のみ（未送信）** … Orders から Show Invoice した PDF では
+    **Sent Date: —**（未送信であることが分かるプレースホルダ）とする。
+- **Order Creation Date** は Create Order 画面・Orders 一覧・月次集計用。
+  Invoice 書類（PDF）には出さない。
+
+3-5. invoice_lists との関係（変更なし）
+
+- invoice_lists … テンプレ（Delivery List Template）。Create Order のたたき台。
+- orders.list_id → invoice_lists（ON DELETE SET NULL）。
+- Save 時 RPC **save_order_atomic**（旧 save_invoicing_box_invoice_atomic）が
+  orders INSERT + invoice_lists.lines UPDATE をアトミックに行う。
+- RPC のベース実装は **20260708120000_invoice_box_list_name.sql** が最新。
+  同内容を orders / 新カラム名 / 新関数名に置き換えて migration を書く。
+
+3-6. Order Received（確定）
+
+- **オプション**（null 可）。Create Order / Save 時に未入力でもよい。
+- フロント `invoicingGenerateValidation` と `InvoiceGenerationTab` の必須チェックを撤廃。
+
+3-7. 削除（Phase 1 の範囲 — 確定）
+
+- UI: 既存の **ゴミ箱アイコン** をそのまま使用（Order 削除）。
+- DB: orders の DELETE（現行と同様、常に削除可）。
+- **締め済み月の削除禁止は Phase 1 では実装しない**
+  （closing_balance 導入後の Phase 3 で対応）。
+- 将来: 未締め月は Balance に影響。締め済み月は削除禁止。
+
+3-8. Orders 一覧 UI — Show Invoice（確定）
+
+現状: 行全体クリックで Invoice プレビューモーダルが開く。
+
+変更後:
+- **行クリックではモーダルを開かない。**
+- テーブル右端（Actions 列）に **Show Invoice** ボタンを設置。
+  クリックで現行の行クリック時と同じプレビューモーダルを開く。
+- ゴミ箱は Show Invoice の隣（または従来どおり Actions 列内）に維持。
+
+
+================================================================================
+4. payments テーブル（§1 — Payment Received）
+================================================================================
+
+4-1. 目的
+
+- **売り手（company）が、顧客窓口（account）から入金があったことを手入力で記録する。**
+- 顧客がアプリにログインして支払うわけではない。
+- 訂正は type = adjustment で翌月以降に積む（§5）。
+
+4-2. テーブル名
+
+  payments（確定）
+
+4-3. カラム（案）
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid | PK |
+| company_id | uuid FK → companies | 売り手側（自社）。入金を受け・記録する側 |
+| account_id | uuid FK → invoicing_accounts | 顧客窓口。入金・売掛の集計単位 |
+| amount | numeric | 金額 |
+| type | text / enum | payment \| adjustment |
+| note | text | 備考（nullable） |
+| payment_date | date | 入金日（実装時確定） |
+| created_at | timestamptz | 作成日時 |
+| created_by | uuid | 作成者（検討） |
+
+type:
+- payment … 通常入金（Payment Received。売り手が窓口 account に対して記録）
+- adjustment … 訂正（締め済み月の誤りは翌月以降のみ）
+
+※ order_id / delivery_site_id / invoice_number は持たない（確定）。
+
+
+================================================================================
+5. closing_balance テーブル（§3 — 月次締め）
+================================================================================
+
+5-1. 目的
+
+- 月末時点の company × account ごとの残高をスナップショットとして確定。
+- 過去月は orders / payments を毎回足し直さず、closing_balance を起点にする。
+- 締め後は当該月の orders / payments の新規・変更・削除を禁止。
+- 締め解除なし。closing は公式 ledger。
+
+5-2. テーブル名
+
+  closing_balance（確定）
+
+5-3. カラム（案）
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid | PK |
+| company_id | uuid FK → companies | 必須 |
+| account_id | uuid FK → invoicing_accounts | 必須 |
+| period | text または date | 対象月（例: 2026-01） |
+| closing_balance | numeric | その月末時点の売掛残高 |
+| closed_at | timestamptz | 締め実行日時 |
+
+- UNIQUE (company_id, account_id, period)。
+
+5-4. 締めタイミング
+
+- 毎月末（例: 1/31 23:59:59 時点の残高）。
+- **タイムゾーン … 未定（保留）。**
+
+5-5. Order の月归属
+
+- **order_created_date**（旧 invoice_date）基準。
+
+5-6. 締め済み月の誤り
+
+- 翌月以降の payments（type = adjustment）のみ。
+- 締め済み月の orders / payments は書き換えない。
+
+5-7. Monthly Statement（月次明細メール）
+
+締め処理の一環として、**各顧客窓口（account）に対し、
+売り手 company とのその時点の balance** を記載したメールを送信する。
+（売り手が締め・送信を実行。顧客は受信するだけ。）
+
+| 項目 | 方針 |
+|------|------|
+| 名称 | Monthly Statement |
+| 本文フォーマット | **backend** で定義 |
+| 送信 | **Resend**（既存メール基盤） |
+| 記録 | **Cloudflare**（送信ログ・配信記録） |
+| スケジュール | **Supabase**（pg_cron / Edge Functions 等。実装時選定） |
+
+- 宛先: account に紐づく連絡先（invoicing_accounts.poc_email 等。実装時確定）。
+- 締め直後、または月末スケジュールで一括実行。
+
+
+================================================================================
+6. Balance 表示（§4）
+================================================================================
+
+6-1. 集計単位
+
+  company_id × account_id
+
+6-2. データソース
+
+| ソース | 用途 |
+|--------|------|
+| orders | 売掛の増（Order 合計） |
+| payments | 入金・調整の減 |
+| closing_balance | 締め済み月の確定残高（起点） |
+
+6-3. 売掛（Order 側）の篩り
+
+1. company A に紐づく tenant を列挙（company_tenants）。
+2. それらの tenant の orders のうち、
+   delivery_site が account B に紐づくものだけ合計。
+3. 月は **order_created_date** 基準。
+
+6-4. 入金側
+
+- payments where company_id = A AND account_id = B。
+
+6-5. 残高計算（フロントエンド）
+
+  残高 ≒ 起点（直近の closing_balance）
+       ＋ 未締め期間の Order 合計
+       − 未締め期間の payments 合計
+
+- 締め済み月 … closing_balance の closing_balance を参照。
+- 未締め月 … 直近締め ＋ 当該月の orders / payments を集計。
+
+6-6. UI（案）
+
+- 売り手ユーザーが company × 顧客窓口 account を選択 → Balance 表示。
+- Payment Received 手入力（payments。顧客側の操作画面はない）。
+- Orders 一覧 + Show Invoice。
+- 締め状態の表示（締め済み月は編集不可）。
+
+
+================================================================================
+7. UI・用語一覧（確定）
+================================================================================
+
+| 旧 | 新 |
+|----|-----|
+| Generate Invoice | **Create Order** |
+| Invoice Generation | Order 作成画面（テンプレは invoice_lists のまま） |
+| Invoice Box | **Orders**（一覧） |
+| 行クリック → PDF | **Show Invoice** ボタンで書類表示（行クリックは無効） |
+| ゴミ箱 | **Order 削除**（Phase 1 は常に削除可） |
+| Invoicing サブメニュー「Invoice」 | **Order** |
+| ページタイトル「Invoice Box」 | **Orders** |
+| Payment / 入金記録 | **Payment Received**（payments 手入力・未着手） |
+| — | **Balance** 画面（未着手） |
+| — | **Monthly Statement**（締め時メール・未着手） |
+
+7-1. ルーティング（確定）
+
+| 旧 | 新 |
+|----|-----|
+| `/invoicing/invoice` | **`/invoicing/orders`** |
+| `/invoicing` デフォルトリダイレクト先 | **`/invoicing/orders`** |
+| `/invoicing/account` | 変更なし |
+
+- 旧 URL `/invoicing/invoice` へのアクセスは `/invoicing/orders` へリダイレクトする
+  （`app/invoicing/invoice/page.tsx` をリダイレクト用に残すか、Next の redirect 設定で対応）。
+
+7-2. API パス（確定）
+
+| 旧 | 新 |
+|----|-----|
+| GET `/invoicing/invoices` | GET **`/invoicing/orders`** |
+| GET `/invoicing/invoices/:id` | GET **`/invoicing/orders/:id`** |
+| POST `/invoicing/invoices` | POST **`/invoicing/orders`** |
+| POST `/invoicing/invoices/:id/send` | POST **`/invoicing/orders/:id/send`** |
+| DELETE `/invoicing/invoices/:id` | DELETE **`/invoicing/orders/:id`** |
+
+- レスポンス JSON のキー: `{ invoices: [...] }` → **`{ orders: [...] }`**
+- 単体: `{ invoice: {...} }` → **`{ order: {...} }`**
+- 旧 API パスは互換レイヤーを設けない（一括切替）。
+
+
+================================================================================
+8. データフロー（全体）
+================================================================================
+
+  【Order・現場】
+  tenant → orders (order_created_date, total_amount)
+         → delivery_site → invoicing_account
+  Create Order → プレビュー → Save → orders 行 + invoice_lists.lines 更新
+  Save and Send → 上記 + Invoice PDF メール → first_invoice_sent_at 設定
+
+  【入金・集約 — 売り手が手入力】
+  売り手 company × 顧客窓口 account: payments (company_id, account_id, amount, type)
+
+  【月末・Supabase スケジュール】
+  1. company × account ごとに closing_balance INSERT
+  2. 締め済み月の orders / payments をロック
+  3. Monthly Statement を Resend 送信、Cloudflare に記録
+
+  【Balance UI】
+  closing_balance（締め済み）＋ orders ＋ payments（未締め）→ フロント計算
+
+
+================================================================================
+9. invoice_lists（テンプレ）— 変更なし
+
+================================================================================
+
+- 役割: Create Order 用テンプレ。品目・Unit Size の記憶。
+- orders との関係: 1 テンプレ → 複数 orders。
+- Save Order 時に lines を更新（次回 Create Order 用）。
+
+
+================================================================================
+10. 未決・保留事項
+================================================================================
+
+| # | 項目 | 状態 |
+|---|------|------|
+| 1 | 締めのタイムゾーン | 保留 |
+| 2 | Monthly Statement 宛先・本文テンプレ・Cloudflare 記録形式 | 実装時（Phase 4） |
+| 3 | Supabase スケジュール方式（pg_cron vs Edge Function） | 実装時（Phase 4） |
+| 4 | closing_balance に内訳カラムを残すか | 未決 |
+| 5 | payments.payment_date の必須可否 | 実装時（Phase 2） |
+| 6 | Balance / Payment Received 画面のタブ配置 | 未決 |
+| 7 | RLS（company / tenant スコープ） | 実装時 |
+
+※ §3 Phase 1 で決まった項目（API/URL/リネーム/RPC/Show Invoice/削除方針）は §13 参照。
+
+
+================================================================================
+11. 実装フェーズ案
+================================================================================
+
+Phase 1 … §13 参照（orders 移行・UI/API リネーム・Show Invoice・Sent Date）
+Phase 2 … payments テーブル + Payment Received UI
+Phase 3 … closing_balance + 締め処理 + 締め後ロック + Balance UI + Order 削除禁止
+Phase 4 … Monthly Statement（backend フォーマット, Resend, Cloudflare, Supabase cron）
+Phase 5 … adjustment 運用・監査
+
+
+================================================================================
+12. 現行との対応表（開発用）
+================================================================================
+
+| 現行 | 本計画 |
+|------|--------|
+| invoice_box_invoices | orders |
+| invoice_date | order_created_date |
+| sent_at | first_invoice_sent_at |
+| Generate Invoice | Create Order |
+| save_invoicing_box_invoice_atomic | **save_order_atomic**（確定） |
+| GET/POST /invoicing/invoices | **/invoicing/orders**（確定） |
+| /invoicing/invoice | **/invoicing/orders**（確定） |
+| サブメニュー Invoice | **Order**（確定） |
+| ledger_payments（旧案） | payments |
+| closing_balances（旧案） | closing_balance |
+| Invoice Creation Date（書類） | 廃止 → Sent Date（未送信は —） |
+| order_received_date 必須 | オプション |
+| 行クリックでプレビュー | **Show Invoice** ボタン |
+
+
+================================================================================
+13. §3 Phase 1 — 実装仕様（確定・2026-05-31）
+================================================================================
+
+本節は Phase 1 の実装チェックリスト。コード変更は本書確定後に着手する。
+
+13-1. DB migration（新規 1 ファイル）
+
+前提: 20260708120000_invoice_box_list_name.sql が RPC・列の最新形。
+
+手順（1 migration にまとめる）:
+
+  (a) テーブルリネーム
+      ALTER TABLE invoice_box_invoices RENAME TO orders;
+
+  (b) カラムリネーム
+      invoice_date          → order_created_date
+      sent_at               → first_invoice_sent_at
+
+  (c) index / constraint 名のリネーム（例）
+      idx_invoice_box_invoices_*     → idx_orders_*
+      invoice_box_invoices_tenant_number_unique → orders_tenant_number_unique
+
+  (d) RLS
+      policy 名・対象テーブルを orders に更新
+
+  (e) RPC
+      DROP save_invoicing_box_invoice_atomic（旧シグネチャ）
+      CREATE save_order_atomic
+        - INSERT 先: orders
+        - カラム: order_created_date, first_invoice_sent_at（INSERT 時 NULL）
+        - 引数: p_invoice_date → p_order_created_date
+        - list_name スナップショットロジックは 20260708120000 と同じ
+      GRANT EXECUTE ON save_order_atomic TO authenticated, service_role
+
+  (f) COMMENT ON COLUMN を新名称に更新
+
+13-2. Backend
+
+対象ファイル（主）:
+  - backend/src/routes/invoicing.ts
+  - backend/src/services/invoicing-data.ts
+  - backend/src/lib/invoicing-calc.ts（日付フィールド名があれば）
+
+作業:
+  - .from("invoice_box_invoices") → .from("orders")
+  - INVOICE_COLUMNS → ORDER_COLUMNS（新カラム名）
+  - ルートコメント・パス: /invoicing/invoices* → /invoicing/orders*
+  - RPC 呼び出し: save_order_atomic, p_order_created_date
+  - POST body: invoice_date → order_created_date（必須のまま）
+  - Send / Resend: first_invoice_sent_at を更新
+  - 採番 fetchExistingInvoiceNumbers: orders テーブル、order_created_date 基準
+  - normalizeInvoiceBoxLines → normalizeOrderLines（型名も追随）
+  - エラーメッセージ: "Invoice not found" → "Order not found" 等
+
+13-3. Frontend — ファイル・型リネーム（確定）
+
+| 旧パス / 旧名 | 新パス / 新名 |
+|---------------|---------------|
+| app/invoicing/invoice/page.tsx | app/invoicing/orders/page.tsx |
+| components/invoicing/InvoiceBoxTab.tsx | OrdersTab.tsx |
+| components/invoicing/InvoiceBoxHeaderFilter.tsx | OrdersHeaderFilter.tsx |
+| components/invoicing/InvoiceBoxHeaderRangeFilter.tsx | OrdersHeaderRangeFilter.tsx |
+| components/invoicing/InvoiceGenerationModal.tsx | CreateOrderModal.tsx |
+| components/invoicing/InvoiceGenerationTab.tsx | CreateOrderTab.tsx |
+| components/invoicing/InvoiceGeneratePreviewModal.tsx | OrderInvoicePreviewModal.tsx |
+| lib/invoiceBoxTable.ts | lib/ordersTable.ts |
+| lib/invoiceBoxTable.test.ts | lib/ordersTable.test.ts |
+
+型・関数（frontend/lib/invoicing.ts 他）:
+  - BoxInvoiceSummary → OrderSummary
+  - BoxInvoiceDetail → OrderDetail
+  - listBoxInvoices → listOrders
+  - getBoxInvoice → getOrder
+  - saveBoxInvoice → saveOrder
+  - sendBoxInvoice → sendOrderInvoice（または sendOrder）
+  - deleteBoxInvoice → deleteOrder
+  - boxInvoiceToPreviewPayload → orderToPreviewPayload（invoicingPreview.ts）
+
+Layout.tsx:
+  - invoicingSectionSubItems: label "Invoice" → **"Order"**, href → /invoicing/orders
+  - pathname 判定・ページタイトル: Invoice Box → **Orders**
+  - /invoicing/invoice の pathname チェック → /invoicing/orders
+
+app/invoicing/page.tsx:
+  - デフォルト router.replace → /invoicing/orders
+
+13-4. Frontend — UI 挙動
+
+Create Order 画面（CreateOrderTab）:
+  - ラベル "Invoice Creation Date" → **"Order Creation Date"**
+  - state / API フィールド: invoiceDate → orderCreatedDate
+  - order_received_date 任意化
+
+Orders 一覧（OrdersTab）:
+  - ボタン "Generate Invoice" → **"Create Order"**
+  - 空状態文言: invoices → orders
+  - 一覧 Date 列: order_created_date を表示
+  - Sent 列: first_invoice_sent_at
+  - **行 onClick を削除**（hover スタイルは維持可）
+  - Actions 列: **Show Invoice** ボタン追加 → 既存 openInvoice ロジックを呼ぶ
+  - ゴミ箱: 現状維持（deleteOrder）
+
+OrderInvoicePreviewModal:
+  - Save / Save and Send の API を /invoicing/orders に
+  - プレビュー PDF 生成時: Sent Date 行を常に出力（未送信は "—"）
+
+invoicingPdf.ts:
+  - `Invoice Date: ...` 行を削除
+  - `Sent Date: {value}` を追加（value 空なら "—"）
+  - Order Received / Delivery Date は現状どおり（値があるときのみ）
+
+13-5. テスト
+
+  - ordersTable.test.ts（旧 invoiceBoxTable.test.ts）: カラム名更新
+  - invoicingGenerateValidation.test.ts: orderReceived 任意化のケース追加・修正
+  - invoicingDateTime.test.ts: ヘルパが order_created_date 向けに rename されていれば更新
+  - backend invoicing 関連ユニットテストがあれば追随
+  - 完了条件: frontend/backend tsc + 上記テスト green
+
+13-6. 手動確認チェックリスト
+
+  [ ] /invoicing/orders で Orders 一覧が開く
+  [ ] サブメニューが Account / Order
+  [ ] /invoicing/invoice が /invoicing/orders にリダイレクト
+  [ ] Create Order → Save → 一覧に表示（order_created_date）
+  [ ] Create Order → Save and Send → Sent 列に日時、PDF に Sent Date
+  [ ] Save のみ → Show Invoice → PDF に Sent Date: —
+  [ ] 行クリックではモーダルが開かない
+  [ ] Show Invoice ボタンでモーダルが開く
+  [ ] Order Received 空欄で Save できる
+  [ ] ゴミ箱で Order 削除できる
+  [ ] invoice_lists の Save 連動（テンプレ lines 更新）が従来どおり
+
+13-7. Phase 1 で触らないもの
+
+  - payments / closing_balance テーブル
+  - Balance / Payment Received UI
+  - Monthly Statement
+  - invoice_lists スキーマ
+  - invoice_number 採番ルール（tenant × 日付。形式 YYYYMMDD-0001）
+  - 締め済み月の削除・編集ロック
+
+
+================================================================================
+END
+================================================================================

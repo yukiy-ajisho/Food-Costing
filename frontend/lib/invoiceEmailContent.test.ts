@@ -27,12 +27,12 @@ describe("invoiceEmailContent", () => {
     expect(
       buildInvoiceEmailBodyContent({
         invoiceNumber: "INV-001",
-        invoiceDate: "2026-05-31 14:30",
+        orderCreatedDate: "2026-05-31",
         totalAmount: 99,
       }),
     ).toEqual({
       invoiceNumber: "INV-001",
-      invoiceDate: "2026-05-31 14:30",
+      orderCreatedDate: "2026-05-31",
       totalAmountLabel: "$99.00",
     });
   });

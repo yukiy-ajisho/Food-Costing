@@ -240,28 +240,28 @@ export async function enrichInvoiceListLines(
     });
 }
 
-export async function assertDeliverySiteInTenant(
-  tenantId: string,
+export async function assertDeliverySiteInCompany(
+  companyId: string,
   deliverySiteId: string,
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from("delivery_sites")
     .select("id")
-    .eq("tenant_id", tenantId)
+    .eq("company_id", companyId)
     .eq("id", deliverySiteId)
     .maybeSingle();
   if (error) throw new Error(error.message);
   return Boolean(data);
 }
 
-export async function assertInvoicingAccountInTenant(
-  tenantId: string,
+export async function assertInvoicingAccountInCompany(
+  companyId: string,
   accountId: string,
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from("invoicing_accounts")
     .select("id")
-    .eq("tenant_id", tenantId)
+    .eq("company_id", companyId)
     .eq("id", accountId)
     .maybeSingle();
   if (error) throw new Error(error.message);
@@ -296,7 +296,7 @@ export async function fetchEffectiveEachGramsByItemIds(
 
 export { LIST_COLUMNS };
 
-export type InvoiceBoxLineJson = {
+export type OrderLineJson = {
   item_id: string;
   name: string;
   unit_size: number;
@@ -307,13 +307,13 @@ export type InvoiceBoxLineJson = {
   sort_order: number;
 };
 
-export function normalizeInvoiceBoxLines(
+export function normalizeOrderLines(
   raw: unknown,
-): InvoiceBoxLineJson[] | { error: string } {
+): OrderLineJson[] | { error: string } {
   if (!Array.isArray(raw)) {
     return { error: "lines must be an array" };
   }
-  const lines: InvoiceBoxLineJson[] = [];
+  const lines: OrderLineJson[] = [];
   for (let i = 0; i < raw.length; i++) {
     const row = raw[i] as Record<string, unknown>;
     const itemId = typeof row.item_id === "string" ? row.item_id.trim() : "";
@@ -366,9 +366,9 @@ export function normalizeInvoiceBoxLines(
 
 export function mergeUnitSizesIntoListLines(
   listLines: InvoiceListLineJson[],
-  boxLines: InvoiceBoxLineJson[],
+  orderLines: OrderLineJson[],
 ): InvoiceListLineJson[] {
-  const byItem = new Map(boxLines.map((l) => [l.item_id, l]));
+  const byItem = new Map(orderLines.map((l) => [l.item_id, l]));
   return listLines.map((line) => {
     const saved = byItem.get(line.item_id);
     if (!saved) return line;
@@ -381,21 +381,21 @@ export function mergeUnitSizesIntoListLines(
 }
 
 /** Every list row must appear exactly once on the invoice (no partial generate). */
-export function validateBoxLinesCoverAllListLines(
+export function validateOrderLinesCoverAllListLines(
   listLines: InvoiceListLineJson[],
-  boxLines: InvoiceBoxLineJson[],
+  orderLines: OrderLineJson[],
 ): string | null {
-  if (boxLines.length !== listLines.length) {
-    return "Invoice must include every item on the list";
+  if (orderLines.length !== listLines.length) {
+    return "Order must include every item on the list";
   }
   const listIds = new Set(listLines.map((l) => l.item_id));
-  const boxIds = new Set(boxLines.map((l) => l.item_id));
-  if (listIds.size !== boxIds.size || listIds.size !== listLines.length) {
-    return "Invoice lines must match list items exactly";
+  const orderIds = new Set(orderLines.map((l) => l.item_id));
+  if (listIds.size !== orderIds.size || listIds.size !== listLines.length) {
+    return "Order lines must match list items exactly";
   }
   for (const id of listIds) {
-    if (!boxIds.has(id)) {
-      return "Invoice is missing one or more list items";
+    if (!orderIds.has(id)) {
+      return "Order is missing one or more list items";
     }
   }
   return null;
@@ -404,8 +404,8 @@ export function validateBoxLinesCoverAllListLines(
 const COST_PER_KG_TOLERANCE = 0.02;
 
 /** Verify client cost snapshots match current wholesale prices ($/kg). */
-export function validateBoxLineCostsAgainstRpc(
-  lines: InvoiceBoxLineJson[],
+export function validateOrderLineCostsAgainstRpc(
+  lines: OrderLineJson[],
   costs: Record<string, { total_cost_per_gram: number }>,
 ): string | null {
   for (const line of lines) {
@@ -421,7 +421,47 @@ export function validateBoxLineCostsAgainstRpc(
   return null;
 }
 
-const INVOICE_COLUMNS =
-  "id, tenant_id, invoice_number, list_id, delivery_site_id, delivery_site_name, delivery_email, company_name, order_received_date, delivery_date, invoice_date, total_amount, sent_at, note, lines, created_at, created_by";
+const ORDER_COLUMNS =
+  "id, tenant_id, invoice_number, list_id, list_name, delivery_site_id, delivery_site_name, delivery_email, company_name, order_received_date, delivery_date, order_created_date, total_amount, first_invoice_sent_at, note, lines, created_at, created_by";
 
-export { INVOICE_COLUMNS };
+export const PAYMENT_COLUMNS =
+  "id, company_id, account_id, amount, type, note, payment_date, created_at, created_by";
+
+export async function resolveCompanyIdForTenant(
+  tenantId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("company_tenants")
+    .select("company_id")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data?.company_id ?? null;
+}
+
+export async function assertAccountInCompany(
+  companyId: string,
+  accountId: string,
+): Promise<boolean> {
+  return assertInvoicingAccountInCompany(companyId, accountId);
+}
+
+export type CompanyInvoicingAccountRow = {
+  id: string;
+  company_id: string;
+  company_name: string;
+};
+
+export async function fetchCompanyInvoicingAccounts(
+  companyId: string,
+): Promise<CompanyInvoicingAccountRow[]> {
+  const { data, error } = await supabase
+    .from("invoicing_accounts")
+    .select("id, company_id, company_name")
+    .eq("company_id", companyId)
+    .order("company_name", { ascending: true });
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export { ORDER_COLUMNS };

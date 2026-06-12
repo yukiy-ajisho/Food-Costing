@@ -18,16 +18,19 @@ export function formatInvoiceEmailTotalAmount(totalAmount: number): string {
 
 export type InvoiceEmailBodyContent = {
   invoiceNumber: string;
-  invoiceDate: string;
+  orderCreatedDate: string;
   totalAmountLabel: string;
 };
 
 export function buildInvoiceEmailBodyContent(
-  payload: Pick<GeneratePreviewPayload, "invoiceNumber" | "invoiceDate" | "totalAmount">,
+  payload: Pick<
+    GeneratePreviewPayload,
+    "invoiceNumber" | "orderCreatedDate" | "totalAmount"
+  >,
 ): InvoiceEmailBodyContent {
   return {
     invoiceNumber: payload.invoiceNumber,
-    invoiceDate: payload.invoiceDate,
+    orderCreatedDate: payload.orderCreatedDate,
     totalAmountLabel: formatInvoiceEmailTotalAmount(payload.totalAmount),
   };
 }

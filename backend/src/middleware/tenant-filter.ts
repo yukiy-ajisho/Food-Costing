@@ -27,3 +27,17 @@ export function withTenantFilter(
   return query.eq(columnName, selectedTenantId);
 }
 
+/**
+ * Company-scoped invoicing master data (accounts, delivery sites).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function withCompanyFilter(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query: any,
+  companyId: string,
+  columnName: string = "company_id",
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  return query.eq(columnName, companyId);
+}
+

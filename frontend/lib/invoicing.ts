@@ -3,7 +3,7 @@ import type { InvoicingCostBreakdown } from "./invoicingCalc";
 
 export type InvoicingAccount = {
   id: string;
-  tenant_id: string;
+  company_id: string;
   company_name: string;
   poc_phone: string | null;
   poc_email: string | null;
@@ -19,7 +19,7 @@ export type InvoicingAccountInput = {
 
 export type DeliverySite = {
   id: string;
-  tenant_id: string;
+  company_id: string;
   account_id: string;
   company_name: string;
   name: string;
@@ -92,18 +92,19 @@ export type InvoiceListDetail = {
   created_by?: string | null;
 };
 
-export type BoxInvoiceSummary = {
+export type OrderSummary = {
   id: string;
   invoice_number: string;
-  invoice_date: string | null;
+  order_created_date: string | null;
   company_name: string;
   total_amount: number;
   delivery_site_name: string;
-  sent_at: string | null;
+  first_invoice_sent_at: string | null;
+  account_id?: string | null;
   created_at?: string;
 };
 
-export type BoxInvoiceLine = {
+export type OrderLine = {
   item_id: string;
   name: string;
   unit_size: number;
@@ -114,22 +115,23 @@ export type BoxInvoiceLine = {
   sort_order: number;
 };
 
-export type BoxInvoice = {
+export type Order = {
   id: string;
   tenant_id: string;
   invoice_number: string;
   list_id: string | null;
+  list_name: string;
   delivery_site_id: string | null;
   delivery_site_name: string;
   delivery_email: string;
   company_name: string;
   order_received_date: string | null;
   delivery_date: string | null;
-  invoice_date: string | null;
+  order_created_date: string | null;
   total_amount: number;
-  sent_at: string | null;
+  first_invoice_sent_at: string | null;
   note: string | null;
-  lines: BoxInvoiceLine[];
+  lines: OrderLine[];
   created_at?: string;
   created_by?: string | null;
 };
@@ -183,8 +185,7 @@ export const invoicingAPI = {
 
   previewInvoiceNumber: (body: {
     delivery_site_id: string;
-    invoice_date: string;
-    invoice_date_ymd?: string;
+    order_created_date: string;
   }) =>
     apiRequest<{ invoice_number: string }>(
       "/invoicing/preview-invoice-number",
@@ -252,48 +253,181 @@ export const invoicingAPI = {
       `/invoicing/lists/${encodeURIComponent(listId)}/costs`,
     ),
 
-  listBoxInvoices: () =>
-    apiRequest<{ invoices: BoxInvoiceSummary[] }>("/invoicing/invoices"),
+  listOrders: () =>
+    apiRequest<{ orders: OrderSummary[] }>("/invoicing/orders"),
 
-  getBoxInvoice: (invoiceId: string) =>
-    apiRequest<{ invoice: BoxInvoice }>(
-      `/invoicing/invoices/${encodeURIComponent(invoiceId)}`,
+  getOrder: (orderId: string) =>
+    apiRequest<{ order: Order }>(
+      `/invoicing/orders/${encodeURIComponent(orderId)}`,
     ),
 
-  createBoxInvoice: (body: {
+  createOrder: (body: {
     list_id: string;
     delivery_site_id: string;
     order_received_date?: string | null;
     delivery_date?: string | null;
-    invoice_date: string;
-    invoice_date_ymd?: string;
-    invoice_date_display?: string;
+    order_created_date: string;
     invoice_number?: string;
     total_amount: number;
-    lines: BoxInvoiceLine[];
+    lines: OrderLine[];
     send?: boolean;
     pdf_base64?: string;
+    /** YYYY-MM-DD; used when send is true (matches PDF Sent Date). */
+    first_invoice_sent_at?: string;
   }) =>
     apiRequest<{
-      invoice: BoxInvoice;
+      order: Order;
       email_sent?: boolean;
       email_error?: string;
-    }>("/invoicing/invoices", {
+    }>("/invoicing/orders", {
       method: "POST",
       body: JSON.stringify(body),
     }),
 
-  sendBoxInvoice: (invoiceId: string, pdfBase64: string) =>
-    apiRequest<{ invoice: BoxInvoice }>(
-      `/invoicing/invoices/${encodeURIComponent(invoiceId)}/send`,
+  sendOrderInvoice: (
+    orderId: string,
+    pdfBase64: string,
+    firstInvoiceSentAt?: string,
+  ) =>
+    apiRequest<{ order: Order }>(
+      `/invoicing/orders/${encodeURIComponent(orderId)}/send`,
       {
         method: "POST",
-        body: JSON.stringify({ pdf_base64: pdfBase64 }),
+        body: JSON.stringify({
+          pdf_base64: pdfBase64,
+          ...(firstInvoiceSentAt?.trim()
+            ? { first_invoice_sent_at: firstInvoiceSentAt.trim() }
+            : {}),
+        }),
       },
     ),
 
-  deleteBoxInvoice: (invoiceId: string) =>
-    apiRequest<void>(`/invoicing/invoices/${encodeURIComponent(invoiceId)}`, {
+  deleteOrder: (orderId: string) =>
+    apiRequest<void>(`/invoicing/orders/${encodeURIComponent(orderId)}`, {
       method: "DELETE",
     }),
+
+  listPaymentAccounts: () =>
+    apiRequest<{ accounts: CompanyInvoicingAccount[] }>(
+      "/invoicing/payments/accounts",
+    ),
+
+  listPayments: (accountId?: string) => {
+    const qs = accountId?.trim()
+      ? `?account_id=${encodeURIComponent(accountId.trim())}`
+      : "";
+    return apiRequest<{ payments: Payment[] }>(`/invoicing/payments${qs}`);
+  },
+
+  createPayment: (body: PaymentInput) =>
+    apiRequest<{ payment: Payment }>("/invoicing/payments", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updatePayment: (paymentId: string, body: PaymentPatchInput) =>
+    apiRequest<{ payment: Payment }>(
+      `/invoicing/payments/${encodeURIComponent(paymentId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      },
+    ),
+
+  deletePayment: (paymentId: string) =>
+    apiRequest<void>(`/invoicing/payments/${encodeURIComponent(paymentId)}`, {
+      method: "DELETE",
+    }),
+
+  getBalanceLedger: (accountId: string) =>
+    apiRequest<BalanceLedgerResponse>(
+      `/invoicing/balance/ledger?account_id=${encodeURIComponent(accountId.trim())}`,
+    ),
+
+  listClosedPeriods: (accountId?: string) => {
+    const qs = accountId?.trim()
+      ? `?account_id=${encodeURIComponent(accountId.trim())}`
+      : "";
+    return apiRequest<{ closed_periods: ClosedPeriodEntry[] }>(
+      `/invoicing/balance/closed-periods${qs}`,
+    );
+  },
+
+  closeMonth: (period: string) =>
+    apiRequest<CloseMonthResponse>("/invoicing/balance/close-month", {
+      method: "POST",
+      body: JSON.stringify({ period }),
+    }),
+};
+
+export type CompanyInvoicingAccount = {
+  id: string;
+  company_id: string;
+  company_name: string;
+};
+
+export type Payment = {
+  id: string;
+  company_id: string;
+  account_id: string;
+  account_name: string;
+  amount: number;
+  type: "payment" | "adjustment";
+  note: string | null;
+  payment_date: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
+export type PaymentType = "payment" | "adjustment";
+
+export type PaymentInput = {
+  account_id: string;
+  amount: number;
+  type?: PaymentType;
+  payment_date?: string | null;
+  note?: string | null;
+};
+
+export type PaymentPatchInput = {
+  account_id?: string;
+  amount?: number;
+  payment_date?: string | null;
+  note?: string | null;
+};
+
+export type LedgerEntryType =
+  | "order"
+  | "payment"
+  | "adjustment"
+  | "closing_balance";
+
+export type LedgerRow = {
+  id: string;
+  date: string;
+  amount: number | null;
+  running_balance: number;
+  type: LedgerEntryType;
+  period?: string;
+};
+
+export type BalanceLedgerResponse = {
+  account_id: string;
+  account_name: string;
+  current_balance: number;
+  open_period: string;
+  open_period_label: string;
+  open_period_closed: boolean;
+  ledger: LedgerRow[];
+};
+
+export type ClosedPeriodEntry = {
+  account_id: string;
+  period: string;
+};
+
+export type CloseMonthResponse = {
+  period: string;
+  period_label: string;
+  closed_count: number;
 };

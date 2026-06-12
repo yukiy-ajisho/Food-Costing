@@ -25,7 +25,7 @@ function InvoicingRedirectContent() {
       return;
     }
 
-    router.replace("/invoicing/invoice");
+    router.replace("/invoicing/orders");
   }, [router, searchParams]);
 
   return (

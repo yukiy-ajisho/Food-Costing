@@ -16,7 +16,7 @@ type Props = {
   ariaLabel: string;
 };
 
-export function InvoiceBoxHeaderFilter({
+export function OrdersHeaderFilter({
   isDark,
   value,
   onChange,

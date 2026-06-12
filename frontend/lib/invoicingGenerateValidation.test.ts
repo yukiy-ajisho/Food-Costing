@@ -29,14 +29,28 @@ describe("validateInvoiceGenerateInput", () => {
       costsLoading: false,
       orderReceivedDate: "",
       deliveryDate: "2026-05-25",
-      invoiceDate: "",
+      orderCreatedDate: "",
       visibleItemIds: ["item-1"],
       rowInputs: new Map([["item-1", rowInput()]]),
       costs: { "item-1": cost },
     });
     expect(result.ok).toBe(false);
-    expect(result.invalidFields.has("invoiceDate")).toBe(true);
-    expect(result.invalidFields.has("orderReceivedDate")).toBe(true);
+    expect(result.invalidFields.has("orderCreatedDate")).toBe(true);
+    expect(result.invalidFields.has("orderReceivedDate")).toBe(false);
+  });
+
+  it("allows empty order received date", () => {
+    const result = validateInvoiceGenerateInput({
+      loading: false,
+      costsLoading: false,
+      orderReceivedDate: "",
+      deliveryDate: "2026-05-25",
+      orderCreatedDate: "2026-05-25",
+      visibleItemIds: ["item-1"],
+      rowInputs: new Map([["item-1", rowInput()]]),
+      costs: { "item-1": cost },
+    });
+    expect(result.ok).toBe(true);
   });
 
   it("allows empty units", () => {
@@ -45,7 +59,7 @@ describe("validateInvoiceGenerateInput", () => {
       costsLoading: false,
       orderReceivedDate: "2026-05-24",
       deliveryDate: "2026-05-25",
-      invoiceDate: "2026-05-25T10:30",
+      orderCreatedDate: "2026-05-25",
       visibleItemIds: ["item-1"],
       rowInputs: new Map([["item-1", rowInput({ units: "" })]]),
       costs: { "item-1": cost },
@@ -62,7 +76,7 @@ describe("validateInvoiceGenerateInput", () => {
       costsLoading: false,
       orderReceivedDate: "2026-05-24",
       deliveryDate: "2026-05-25",
-      invoiceDate: "2026-05-25T10:30",
+      orderCreatedDate: "2026-05-25",
       visibleItemIds: ["item-1"],
       rowInputs: new Map([["item-1", rowInput({ units: "-1" })]]),
       costs: { "item-1": cost },
@@ -77,7 +91,7 @@ describe("validateInvoiceGenerateInput", () => {
       costsLoading: false,
       orderReceivedDate: "2026-05-24",
       deliveryDate: "2026-05-25",
-      invoiceDate: "2026-05-25T10:30",
+      orderCreatedDate: "2026-05-25",
       visibleItemIds: ["item-1"],
       rowInputs: new Map([["item-1", rowInput()]]),
       costs: {},
@@ -87,22 +101,19 @@ describe("validateInvoiceGenerateInput", () => {
     expect(result.invalidFields.size).toBe(0);
   });
 
-  it("blocks generate when unpriced items are present", () => {
+  it("flags unpriced items", () => {
     const result = validateInvoiceGenerateInput({
       loading: false,
       costsLoading: false,
       orderReceivedDate: "2026-05-24",
       deliveryDate: "2026-05-25",
-      invoiceDate: "2026-05-25T10:30",
-      visibleItemIds: ["item-1", "item-2"],
-      rowInputs: new Map([
-        ["item-1", rowInput()],
-        ["item-2", rowInput()],
-      ]),
+      orderCreatedDate: "2026-05-25",
+      visibleItemIds: ["item-1"],
+      rowInputs: new Map([["item-1", rowInput()]]),
       costs: { "item-1": cost },
-      unpricedItemIds: ["item-2"],
+      unpricedItemIds: ["item-1"],
     });
     expect(result.ok).toBe(false);
-    expect(result.unpricedItemIds).toEqual(["item-2"]);
+    expect(result.unpricedItemIds).toEqual(["item-1"]);
   });
 });

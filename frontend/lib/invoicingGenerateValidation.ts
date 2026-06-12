@@ -10,7 +10,7 @@ export type InvoiceGenerateRowInput = {
 };
 
 export type InvoiceGenerateValidationField =
-  | "invoiceDate"
+  | "orderCreatedDate"
   | "deliveryDate"
   | "orderReceivedDate"
   | `unitSize:${string}`
@@ -30,7 +30,7 @@ export function validateInvoiceGenerateInput(params: {
   costsLoading: boolean;
   orderReceivedDate: string;
   deliveryDate: string;
-  invoiceDate: string;
+  orderCreatedDate: string;
   visibleItemIds: string[];
   rowInputs: Map<string, InvoiceGenerateRowInput>;
   costs: Record<string, InvoicingCostBreakdown>;
@@ -51,14 +51,11 @@ export function validateInvoiceGenerateInput(params: {
     };
   }
 
-  if (!params.invoiceDate.trim()) {
-    invalidFields.add("invoiceDate");
+  if (!params.orderCreatedDate.trim()) {
+    invalidFields.add("orderCreatedDate");
   }
   if (!params.deliveryDate.trim()) {
     invalidFields.add("deliveryDate");
-  }
-  if (!params.orderReceivedDate.trim()) {
-    invalidFields.add("orderReceivedDate");
   }
 
   const hasNoItems = params.visibleItemIds.length === 0;
