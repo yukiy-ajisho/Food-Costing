@@ -23,10 +23,13 @@ export function formatInvoiceDateDisplay(
   return `${y}-${m}-${day}`;
 }
 
-/** Normalize invoice_date filter/sort comparisons to YYYY-MM-DD. */
-export function invoiceDateCalendarYmd(
+/** Normalize order_created_date filter/sort comparisons to YYYY-MM-DD. */
+export function orderCreatedDateCalendarYmd(
   value: string | null | undefined,
 ): string | null {
   const formatted = formatInvoiceDateDisplay(value);
   return formatted || null;
 }
+
+/** @deprecated Use orderCreatedDateCalendarYmd */
+export const invoiceDateCalendarYmd = orderCreatedDateCalendarYmd;

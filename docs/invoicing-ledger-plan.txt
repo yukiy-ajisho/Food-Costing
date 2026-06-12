@@ -2,8 +2,8 @@
   INVOICING LEDGER — 売掛金・入金・月次締め 計画（改訂）
   対象: food_costing プロジェクト
   作成日: 2026-05-31
-  改訂日: 2026-05-31（§3 Phase 1 実装仕様確定）
-  ステータス: §3 Phase 1 実装待ち（payments / closing_balance は未着手）
+  改訂日: 2026-05-31（§3 Phase 1 実装仕様確定 / Phase 3 Running Balance UI 確定）
+  ステータス: Phase 1–2 完了 · Phase 3 実装済（closing_balance / Balance UI / 締めロック）
 ================================================================================
 
 本書は、既存の Invoicing 機能を拡張し、
@@ -74,7 +74,8 @@ Balance 表示を導入するための要件・設計をまとめたものであ
   （売り手・自社）         （Order を出す単位）      （顧客窓口）              （配送先）
 
 - company : tenant と account : delivery_site は **構造上** 同型の親子関係。
-- invoicing_accounts は tenant スコープ（既存マスタ）。
+- invoicing_accounts と delivery_sites は **company スコープ**（売り手 company 単位の共有マスタ）。
+  invoice_lists / orders は tenant スコープのまま。
 
 2-4. 二つのレイヤー
 

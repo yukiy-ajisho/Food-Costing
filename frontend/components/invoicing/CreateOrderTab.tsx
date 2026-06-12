@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Edit, Plus, Save, Trash2, X } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useTenant } from "@/contexts/TenantContext";
 import { PricingListPickerRow } from "@/components/recipe-cost-report/PricingListPickerRow";
 import { ItemKindBadge } from "@/components/recipe-cost-report/ItemKindBadge";
 import {
@@ -26,7 +27,7 @@ import {
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { recipeCostReportAPI } from "@/lib/recipeCostReport";
 import { CreateInvoicingListModal } from "./CreateInvoicingListModal";
-import { InvoiceGeneratePreviewModal } from "./InvoiceGeneratePreviewModal";
+import { OrderInvoicePreviewModal } from "./OrderInvoicePreviewModal";
 import { UnpricedBadge } from "./UnpricedBadge";
 import type { GeneratePreviewPayload } from "@/lib/invoicingPreview";
 import {
@@ -98,14 +99,15 @@ function formatUnitSizeDisplay(input: RowInput): string {
   return `${input.unitSize} ${input.unitSizeUnit}`;
 }
 
-type InvoiceGenerationTabProps = {
-  onInvoiceSaved?: () => void;
+type CreateOrderTabProps = {
+  onOrderSaved?: () => void;
 };
 
-export function InvoiceGenerationTab({
-  onInvoiceSaved,
-}: InvoiceGenerationTabProps = {}) {
+export function CreateOrderTab({
+  onOrderSaved,
+}: CreateOrderTabProps = {}) {
   const { theme } = useTheme();
+  const { selectedTenantId } = useTenant();
   const isDark = theme === "dark";
 
   const [lists, setLists] = useState<InvoiceListSummary[]>([]);
@@ -133,7 +135,7 @@ export function InvoiceGenerationTab({
   );
   const [orderReceivedDate, setOrderReceivedDate] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState("");
+  const [orderCreatedDate, setOrderCreatedDate] = useState("");
 
   const [candidates, setCandidates] = useState<InvoicingItemCandidate[]>([]);
   const [accounts, setAccounts] = useState<InvoicingAccount[]>([]);
@@ -253,7 +255,7 @@ export function InvoiceGenerationTab({
         setIsEditMode(false);
         setPendingRemovals(new Set());
         setPendingAdds([]);
-        setInvoiceDate((prev) => prev || todayLocalDateYmd());
+        setOrderCreatedDate((prev) => prev || todayLocalDateYmd());
       }
       try {
         const data = await invoicingAPI.getInvoiceList(listId);
@@ -305,13 +307,6 @@ export function InvoiceGenerationTab({
   );
 
   useEffect(() => {
-    void loadLists().catch((e: unknown) => {
-      setError(e instanceof Error ? e.message : "Failed to load lists");
-    });
-    void invoicingAPI
-      .getItemCandidates()
-      .then((d) => setCandidates(d.items ?? []))
-      .catch(() => {});
     void invoicingAPI
       .listDeliverySites()
       .then((d) => setDeliverySites(d.sites ?? []))
@@ -328,7 +323,24 @@ export function InvoiceGenerationTab({
         ),
       )
       .catch(() => setWholesaleLists([]));
-  }, [loadLists]);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedTenantId) {
+      setLists([]);
+      setCandidates([]);
+      setSelectedListId(null);
+      return;
+    }
+
+    void loadLists().catch((e: unknown) => {
+      setError(e instanceof Error ? e.message : "Failed to load lists");
+    });
+    void invoicingAPI
+      .getItemCandidates()
+      .then((d) => setCandidates(d.items ?? []))
+      .catch(() => setCandidates([]));
+  }, [selectedTenantId, loadLists]);
 
   useEffect(() => {
     setSelectedAccountId((prev) =>
@@ -384,7 +396,7 @@ export function InvoiceGenerationTab({
   }, [selectedListId]);
 
   useEffect(() => {
-    setInvoiceDate(todayLocalDateYmd());
+    setOrderCreatedDate(todayLocalDateYmd());
   }, []);
 
   useEffect(() => {
@@ -503,7 +515,7 @@ export function InvoiceGenerationTab({
         costsLoading,
         orderReceivedDate,
         deliveryDate,
-        invoiceDate,
+        orderCreatedDate,
         visibleItemIds: visibleItems.map((row) => row.item_id),
         rowInputs,
         costs,
@@ -518,7 +530,7 @@ export function InvoiceGenerationTab({
       costsLoading,
       orderReceivedDate,
       deliveryDate,
-      invoiceDate,
+      orderCreatedDate,
       visibleItems,
       rowInputs,
       costs,
@@ -586,7 +598,7 @@ export function InvoiceGenerationTab({
       setShowCreate(false);
       await loadLists();
       setSelectedListId(data.list.id);
-      setInvoiceDate((prev) => prev || todayLocalDateYmd());
+      setOrderCreatedDate((prev) => prev || todayLocalDateYmd());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to create list");
     }
@@ -698,16 +710,12 @@ export function InvoiceGenerationTab({
   const handleGenerate = async () => {
     setError(null);
     if (!selectedListId) return;
-    if (!orderReceivedDate.trim()) {
-      setError("Order received is required before Generate.");
-      return;
-    }
     if (!deliveryDate.trim()) {
       setError("Delivery date is required before Generate.");
       return;
     }
-    if (!invoiceDate.trim()) {
-      setError("Invoice creation date is required before Generate.");
+    if (!orderCreatedDate.trim()) {
+      setError("Order creation date is required before Generate.");
       return;
     }
 
@@ -762,7 +770,7 @@ export function InvoiceGenerationTab({
       return;
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate.trim())) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(orderCreatedDate.trim())) {
       setError("Invoice creation date is invalid.");
       return;
     }
@@ -772,7 +780,7 @@ export function InvoiceGenerationTab({
     try {
       const { invoice_number } = await invoicingAPI.previewInvoiceNumber({
         delivery_site_id: deliverySiteId,
-        invoice_date: invoiceDate.trim(),
+        order_created_date: orderCreatedDate.trim(),
       });
       setPreviewPayload({
         listId: selectedListId,
@@ -782,7 +790,8 @@ export function InvoiceGenerationTab({
         invoiceNumber: invoice_number,
         orderReceivedDate,
         deliveryDate,
-        invoiceDate: invoiceDate.trim(),
+        orderCreatedDate: orderCreatedDate.trim(),
+        sentDateDisplay: formatInvoiceDateDisplay(todayLocalDateYmd()),
         rows,
         totalAmount,
       });
@@ -807,7 +816,7 @@ export function InvoiceGenerationTab({
     setPreviewPayload(null);
     setOrderReceivedDate("");
     setDeliveryDate("");
-    setInvoiceDate("");
+    setOrderCreatedDate("");
     setRowInputs((prev) => {
       const next = new Map(prev);
       for (const [itemId, input] of next) {
@@ -823,7 +832,7 @@ export function InvoiceGenerationTab({
     } else {
       setError(null);
     }
-    onInvoiceSaved?.();
+    onOrderSaved?.();
   };
 
   const renderRow = (
@@ -1099,10 +1108,10 @@ export function InvoiceGenerationTab({
                 </div>
                 <div className="shrink-0">
                   {renderDateField(
-                    "Invoice Creation Date",
-                    invoiceDate,
-                    setInvoiceDate,
-                    "invoiceDate",
+                    "Order Creation Date",
+                    orderCreatedDate,
+                    setOrderCreatedDate,
+                    "orderCreatedDate",
                   )}
                 </div>
               </div>
@@ -1407,7 +1416,7 @@ export function InvoiceGenerationTab({
       ) : null}
 
       {previewPayload ? (
-        <InvoiceGeneratePreviewModal
+        <OrderInvoicePreviewModal
           isDark={isDark}
           payload={previewPayload}
           onClose={() => setPreviewPayload(null)}

@@ -7,7 +7,7 @@ import {
   addDaysYmd,
   maxAmountBefore,
   minAmountAfter,
-} from "@/lib/invoiceBoxTable";
+} from "@/lib/ordersTable";
 import {
   isOutsidePortaledMenu,
   usePortaledHeaderMenu,
@@ -24,7 +24,7 @@ type Props = {
   toLabel?: string;
 };
 
-export function InvoiceBoxHeaderRangeFilter({
+export function OrdersHeaderRangeFilter({
   isDark,
   kind,
   min,

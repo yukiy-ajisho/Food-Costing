@@ -18,13 +18,15 @@ export type GeneratePreviewPayload = {
   invoiceNumber: string;
   orderReceivedDate: string;
   deliveryDate: string;
-  /** YYYY-MM-DD for PDF / email / API. */
-  invoiceDate: string;
+  /** YYYY-MM-DD — Order Creation Date (UI / API, not on Invoice PDF). */
+  orderCreatedDate: string;
+  /** Display on Invoice PDF Sent Date line. Generate preview uses today; saved orders use sent date or "—". */
+  sentDateDisplay: string;
   rows: GeneratePreviewRow[];
   totalAmount: number;
 };
 
-export type BoxInvoiceLine = {
+export type OrderLine = {
   item_id: string;
   name: string;
   unit_size: number;
@@ -35,7 +37,7 @@ export type BoxInvoiceLine = {
   sort_order: number;
 };
 
-export type BoxInvoice = {
+export type OrderDetail = {
   id: string;
   tenant_id: string;
   invoice_number: string;
@@ -46,28 +48,34 @@ export type BoxInvoice = {
   delivery_email: string;
   order_received_date: string | null;
   delivery_date: string | null;
-  invoice_date: string | null;
+  order_created_date: string | null;
   total_amount: number;
-  sent_at: string | null;
+  first_invoice_sent_at: string | null;
   note: string | null;
-  lines: BoxInvoiceLine[];
+  lines: OrderLine[];
   created_at?: string;
   created_by?: string | null;
 };
 
-export function boxInvoiceToPreviewPayload(
-  invoice: BoxInvoice,
-): GeneratePreviewPayload {
-  const sorted = [...invoice.lines].sort((a, b) => a.sort_order - b.sort_order);
+function formatSentDateDisplay(
+  firstInvoiceSentAt: string | null | undefined,
+): string {
+  const formatted = formatInvoiceDateDisplay(firstInvoiceSentAt);
+  return formatted || "—";
+}
+
+export function orderToPreviewPayload(order: OrderDetail): GeneratePreviewPayload {
+  const sorted = [...order.lines].sort((a, b) => a.sort_order - b.sort_order);
   return {
-    listId: invoice.list_id ?? "",
-    deliverySiteId: invoice.delivery_site_id ?? "",
-    listName: invoice.list_name?.trim() || "—",
-    deliverySiteName: invoice.delivery_site_name,
-    invoiceNumber: invoice.invoice_number,
-    orderReceivedDate: invoice.order_received_date ?? "",
-    deliveryDate: invoice.delivery_date ?? "",
-    invoiceDate: formatInvoiceDateDisplay(invoice.invoice_date),
+    listId: order.list_id ?? "",
+    deliverySiteId: order.delivery_site_id ?? "",
+    listName: order.list_name?.trim() || "—",
+    deliverySiteName: order.delivery_site_name,
+    invoiceNumber: order.invoice_number,
+    orderReceivedDate: order.order_received_date ?? "",
+    deliveryDate: order.delivery_date ?? "",
+    orderCreatedDate: formatInvoiceDateDisplay(order.order_created_date),
+    sentDateDisplay: formatSentDateDisplay(order.first_invoice_sent_at),
     rows: sorted.map((line) => ({
       itemId: line.item_id,
       name: line.name,
@@ -77,13 +85,13 @@ export function boxInvoiceToPreviewPayload(
       costPerKg: line.cost,
       subTotal: line.sub_total,
     })),
-    totalAmount: Number(invoice.total_amount),
+    totalAmount: Number(order.total_amount),
   };
 }
 
-export function previewPayloadToBoxLines(
+export function previewPayloadToOrderLines(
   payload: GeneratePreviewPayload,
-): BoxInvoiceLine[] {
+): OrderLine[] {
   return payload.rows.map((row, sort_order) => ({
     item_id: row.itemId,
     name: row.name,

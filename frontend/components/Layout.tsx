@@ -113,16 +113,24 @@ function isLicensePath(pathname: string): boolean {
   );
 }
 
-type InvoicingNavSection = "account" | "invoice";
+type InvoicingNavSection = "account" | "order" | "payments" | "balance";
 
 function isInvoicingSectionNavActive(
   pathname: string,
   section: InvoicingNavSection,
 ): boolean {
-  if (section === "invoice") {
+  if (section === "order") {
     return (
-      pathname.startsWith("/invoicing/invoice") || pathname === "/invoicing"
+      pathname.startsWith("/invoicing/orders") ||
+      pathname.startsWith("/invoicing/invoice") ||
+      pathname === "/invoicing"
     );
+  }
+  if (section === "payments") {
+    return pathname.startsWith("/invoicing/payments");
+  }
+  if (section === "balance") {
+    return pathname.startsWith("/invoicing/balance");
   }
   return pathname.startsWith("/invoicing/account");
 }
@@ -174,19 +182,31 @@ const teamSubItems = [
   { id: "team-tenant", label: "Tenant", href: "/team/tenant" },
 ] as const;
 
-/** Invoicing 直下は Account / Invoice の2サブメニューのみ。各画面はページ内タブ。 */
+/** Invoicing 直下は Account / Order / Payment / Balance のサブメニュー。各画面はページ内タブ。 */
 const invoicingSectionSubItems = [
   {
-    id: "inv-invoice",
-    label: "Invoice",
-    href: "/invoicing/invoice",
-    section: "invoice" as const,
+    id: "inv-order",
+    label: "Order",
+    href: "/invoicing/orders",
+    section: "order" as const,
   },
   {
     id: "inv-account",
     label: "Account",
     href: "/invoicing/account",
     section: "account" as const,
+  },
+  {
+    id: "inv-payments",
+    label: "Payment",
+    href: "/invoicing/payments",
+    section: "payments" as const,
+  },
+  {
+    id: "inv-balance",
+    label: "Balance",
+    href: "/invoicing/balance",
+    section: "balance" as const,
   },
 ] as const;
 
@@ -672,8 +692,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
       if (tab === "delivery-site" || tab === "delivery") return "Delivery Site";
       return "Account Information";
     }
-    if (pathname.startsWith("/invoicing/invoice") || pathname === "/invoicing") {
-      return "Invoice Box";
+    if (pathname.startsWith("/invoicing/payments")) {
+      return "Payments";
+    }
+    if (pathname.startsWith("/invoicing/balance")) {
+      return "Balance";
+    }
+    if (
+      pathname.startsWith("/invoicing/orders") ||
+      pathname.startsWith("/invoicing/invoice") ||
+      pathname === "/invoicing"
+    ) {
+      return "Orders";
     }
     if (pathname.startsWith("/dashboard")) return "Dashboard";
     if (pathname.startsWith("/settings")) return "Settings";

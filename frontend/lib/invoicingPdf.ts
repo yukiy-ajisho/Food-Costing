@@ -35,7 +35,7 @@ export async function buildInvoicePreviewPdf(
   if (payload.deliveryDate) {
     draw(`Delivery Date: ${payload.deliveryDate}`);
   }
-  draw(`Invoice Date: ${payload.invoiceDate}`, true);
+  draw(`Sent Date: ${payload.sentDateDisplay || "—"}`);
   y -= 8;
 
   const colName = left;
