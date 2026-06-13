@@ -809,7 +809,8 @@ Phase 4 では **締めジョブの完了を待たず**、次を追加する。
 
   (2) pending 判定（軽い DB 参照）
       次のいずれかがあれば仕事あり:
-        - いずれかの (company, account) で **先月** period の closing_balance が無い
+        - いずれかの (company, account) で **先月** period の closing_balance が無く、
+          かつ **先月末までに当該 account の Order / Payment が1件以上ある**（§14-10-1）
         - 締め済みだが monthly_statements が無い、または status = failed（リトライ）
       仕事なし → { ok: true, skipped: true } で 200 終了。
 
@@ -819,6 +820,7 @@ Phase 4 では **締めジョブの完了を待たず**、次を追加する。
   (4) 月締め — closing_balance INSERT（company × account）
       各 account について:
         - 当該 period の closing_balance が **既にあればスキップ**（冪等）
+        - **先月末までに ledger 取引が無ければスキップ**（invoicing 開始前の月。§14-10-1）
         - 無ければ computeAccountBalanceThroughDate（先月末日 cutoff）で残高計算
         - closing_balance INSERT（closed_at = 実行時刻、created_by = null または system）
       新規 INSERT した行は (5) の Statement 対象に含める。
@@ -841,6 +843,9 @@ Phase 4 では **締めジョブの完了を待たず**、次を追加する。
 **Phase 3 手動 Close Month との関係:**
   - 計算ロジックは共通化（closeAccountPeriod 冪等版）。
   - 手動は開発・検証用。本番は (4)(5) の自動ジョブが正。
+  - **§14-10-1** 自動締めスキップ: 先月 period の末日までに当該 account の Order /
+    Payment が0件の月は invoicing 未開始とみなし、closing_balance・Statement・R2 を作らない。
+    一度でも取引があれば、当月の取引が0件でも毎月締め・Statement する（静かな月）。
 
 **編集ロック（§14-5）** は本ジョブとは別 API パスで常時適用（cron 完了を待たない）。
 
