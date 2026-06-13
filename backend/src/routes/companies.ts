@@ -7,6 +7,7 @@ import {
   authorizeUnified,
   UnifiedCompanyAction,
 } from "../authz/unified/authorize";
+import { normalizeCompanyTimezoneInput } from "../lib/company-timezone";
 
 const router = Router();
 
@@ -20,7 +21,7 @@ router.post(
   authMiddleware({ allowNoProfiles: true }),
   async (req, res) => {
     try {
-      const { company_name } = req.body;
+      const { company_name, timezone } = req.body;
 
       if (!company_name || typeof company_name !== "string") {
         return res.status(400).json({ error: "company_name is required" });
@@ -31,9 +32,17 @@ router.post(
         return res.status(400).json({ error: "company_name cannot be empty" });
       }
 
+      const normalizedTimezone = normalizeCompanyTimezoneInput(timezone);
+      if (!normalizedTimezone) {
+        return res.status(400).json({
+          error: "timezone is required",
+          details: "A valid IANA timezone is required for invoicing",
+        });
+      }
+
       const { data: company, error: companyError } = await supabase
         .from("companies")
-        .insert([{ company_name: name }])
+        .insert([{ company_name: name, timezone: normalizedTimezone }])
         .select()
         .single();
 
@@ -103,6 +112,70 @@ router.get("/", authMiddleware({ allowNoProfiles: true }), async (req, res) => {
     res.status(500).json({ error: message });
   }
 });
+
+/**
+ * PATCH /companies/:id
+ * Company settings (invoicing timezone). Auth: company admin / director.
+ */
+router.patch(
+  "/:id",
+  authMiddleware({ allowNoProfiles: true }),
+  async (req, res) => {
+    try {
+      const companyId = req.params.id;
+      if (!companyId) {
+        return res.status(400).json({ error: "company id is required" });
+      }
+
+      const allowed = await authorizeUnified(
+        req.user!.id,
+        UnifiedCompanyAction.manage_members,
+        { type: "Company", id: companyId },
+      );
+      if (!allowed) {
+        return res
+          .status(403)
+          .json({ error: "You do not have access to this company" });
+      }
+
+      const normalizedTimezone = normalizeCompanyTimezoneInput(req.body?.timezone);
+      if (!normalizedTimezone) {
+        return res.status(400).json({
+          error: "timezone is required",
+          details: "A valid IANA timezone is required for invoicing",
+        });
+      }
+
+      const { data: company, error } = await supabase
+        .from("companies")
+        .update({ timezone: normalizedTimezone })
+        .eq("id", companyId)
+        .select()
+        .single();
+
+      if (error || !company) {
+        return res.status(500).json({
+          error: error?.message ?? "Failed to update company",
+        });
+      }
+
+      const { data: membership } = await supabase
+        .from("company_members")
+        .select("role")
+        .eq("company_id", companyId)
+        .eq("user_id", req.user!.id)
+        .maybeSingle();
+
+      res.json({
+        ...company,
+        role: membership?.role,
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      res.status(500).json({ error: message });
+    }
+  },
+);
 
 /**
  * GET /companies/:id/members

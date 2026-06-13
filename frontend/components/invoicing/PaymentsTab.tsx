@@ -12,7 +12,8 @@ import { formatCurrency } from "@/lib/invoicingCalc";
 import { formatInvoiceDateDisplay } from "@/lib/invoicingDateTime";
 import {
   buildClosedPeriodSet,
-  isPaymentLocked,
+  deleteBalanceImpactMessage,
+  ledgerEntryAffectsCurrentBalance,
   paymentTypeLabel,
 } from "@/lib/invoicingLedger";
 import {
@@ -25,6 +26,7 @@ import {
   type PaymentsSortState,
 } from "@/lib/paymentsTable";
 import { uniqueSortedValues } from "@/lib/ordersTable";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { OrdersHeaderFilter } from "./OrdersHeaderFilter";
 import { OrdersHeaderRangeFilter } from "./OrdersHeaderRangeFilter";
 import { RecordPaymentModal } from "./RecordPaymentModal";
@@ -55,6 +57,7 @@ export function PaymentsTab() {
   const [error, setError] = useState<string | null>(null);
   const [showRecordModal, setShowRecordModal] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<Payment | null>(null);
   const [filters, setFilters] = useState<PaymentsFilters>(EMPTY_PAYMENTS_FILTERS);
   const [sort, setSort] = useState<PaymentsSortState>(DEFAULT_SORT);
   const [closedByAccount, setClosedByAccount] = useState<
@@ -126,22 +129,17 @@ export function PaymentsTab() {
     void reload();
   }, [reload]);
 
-  const handleDelete = async (payment: Payment) => {
-    if (isPaymentLocked(payment, closedByAccount)) {
-      setError("This payment is in a closed period and cannot be deleted.");
-      return;
-    }
-    if (
-      !window.confirm(
-        `Delete payment of ${formatCurrency(Number(payment.amount))} for ${payment.account_name}?`,
-      )
-    ) {
-      return;
-    }
-    setDeletingId(payment.id);
+  const requestDelete = (payment: Payment) => {
+    setDeleteConfirm(payment);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return;
+    setDeletingId(deleteConfirm.id);
     setError(null);
     try {
-      await invoicingAPI.deletePayment(payment.id);
+      await invoicingAPI.deletePayment(deleteConfirm.id);
+      setDeleteConfirm(null);
       await loadPayments(selectedAccountId);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to delete payment");
@@ -355,16 +353,8 @@ export function PaymentsTab() {
                     <div className="flex items-center justify-end gap-1">
                       <button
                         type="button"
-                        onClick={() => void handleDelete(payment)}
-                        disabled={
-                          deletingId === payment.id ||
-                          isPaymentLocked(payment, closedByAccount)
-                        }
-                        title={
-                          isPaymentLocked(payment, closedByAccount)
-                            ? "Closed period"
-                            : undefined
-                        }
+                        onClick={() => requestDelete(payment)}
+                        disabled={deletingId === payment.id}
                         className={`rounded p-1.5 disabled:cursor-not-allowed disabled:opacity-50 ${
                           isDark
                             ? "text-red-400 hover:bg-slate-600"
@@ -392,6 +382,44 @@ export function PaymentsTab() {
           }
           onClose={() => setShowRecordModal(false)}
           onSaved={() => void reload()}
+        />
+      ) : null}
+
+      {deleteConfirm ? (
+        <ConfirmModal
+          isDark={isDark}
+          title={
+            deleteConfirm.type === "adjustment"
+              ? "Delete adjustment"
+              : "Delete payment"
+          }
+          description={
+            <>
+              Delete this{" "}
+              {deleteConfirm.type === "adjustment" ? "adjustment" : "payment"}{" "}
+              of{" "}
+              <span className="font-medium">
+                {formatCurrency(Number(deleteConfirm.amount))}
+              </span>{" "}
+              for{" "}
+              <span className="font-medium">{deleteConfirm.account_name}</span>?
+              {" "}
+              {deleteBalanceImpactMessage(
+                ledgerEntryAffectsCurrentBalance(
+                  deleteConfirm.payment_date,
+                  closedByAccount,
+                  deleteConfirm.account_id,
+                ),
+              )}
+            </>
+          }
+          confirmLabel="Delete"
+          confirming={deletingId === deleteConfirm.id}
+          confirmingLabel="Deleting…"
+          onCancel={() => {
+            if (deletingId !== deleteConfirm.id) setDeleteConfirm(null);
+          }}
+          onConfirm={() => void confirmDelete()}
         />
       ) : null}
     </div>

@@ -425,7 +425,7 @@ const ORDER_COLUMNS =
   "id, tenant_id, invoice_number, list_id, list_name, delivery_site_id, delivery_site_name, delivery_email, company_name, order_received_date, delivery_date, order_created_date, total_amount, first_invoice_sent_at, note, lines, created_at, created_by";
 
 export const PAYMENT_COLUMNS =
-  "id, company_id, account_id, amount, type, note, payment_date, created_at, created_by";
+  "id, company_id, account_id, amount, type, adjustment_direction, note, payment_date, created_at, created_by";
 
 export async function resolveCompanyIdForTenant(
   tenantId: string,

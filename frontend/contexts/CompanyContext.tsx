@@ -13,6 +13,7 @@ import { apiRequest } from "@/lib/api";
 export interface Company {
   id: string;
   company_name: string;
+  timezone?: string | null;
   role?: string;
 }
 
@@ -22,6 +23,7 @@ interface CompanyContextType {
   setSelectedCompanyId: (companyId: string | null) => void;
   loading: boolean;
   addCompany: (company: Company) => void;
+  updateCompany: (companyId: string, patch: Partial<Company>) => void;
 }
 
 const CompanyContext = createContext<CompanyContextType | undefined>(undefined);
@@ -119,6 +121,12 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     setCompanies((prev) => [...prev, company]);
   };
 
+  const updateCompany = (companyId: string, patch: Partial<Company>) => {
+    setCompanies((prev) =>
+      prev.map((c) => (c.id === companyId ? { ...c, ...patch } : c)),
+    );
+  };
+
   return (
     <CompanyContext.Provider
       value={{
@@ -127,6 +135,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         setSelectedCompanyId,
         loading,
         addCompany,
+        updateCompany,
       }}
     >
       {children}

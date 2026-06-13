@@ -2,6 +2,10 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { apiRequest } from "@/lib/api";
+import {
+  formatInvoicingTimezoneLabel,
+  INVOICING_TIMEZONE_OPTION_GROUPS,
+} from "@/lib/companyTimezone";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useCompany, type Company } from "@/contexts/CompanyContext";
 import { useTenant } from "@/contexts/TenantContext";
@@ -99,6 +103,7 @@ export default function TeamPageContent({
   } = useTenant();
   const [showCreateCompanyModal, setShowCreateCompanyModal] = useState(false);
   const [newCompanyName, setNewCompanyName] = useState("");
+  const [newCompanyTimezone, setNewCompanyTimezone] = useState("");
   const [creatingCompany, setCreatingCompany] = useState(false);
   // 選択中テナントの情報を表示
   const [tenantsWithMembers, setTenantsWithMembers] = useState<
@@ -157,6 +162,16 @@ export default function TeamPageContent({
       companies.find((c) => c.id === selectedCompanyId)?.company_name ?? null
     );
   }, [companies, selectedCompanyId]);
+
+  const selectedCompany = useMemo(
+    () => companies.find((c) => c.id === selectedCompanyId) ?? null,
+    [companies, selectedCompanyId],
+  );
+
+  const selectedCompanyTimezoneLabel = formatInvoicingTimezoneLabel(
+    selectedCompany?.timezone,
+  );
+  const companyTimezoneUnset = !selectedCompany?.timezone?.trim();
 
   const tenantPayloadInSync =
     tenantsWithMembers.length > 0 &&
@@ -329,16 +344,24 @@ export default function TeamPageContent({
       alert("Company name is required");
       return;
     }
+    if (!newCompanyTimezone.trim()) {
+      alert("Timezone is required");
+      return;
+    }
     try {
       setCreatingCompany(true);
       const company = await apiRequest<Company>("/companies", {
         method: "POST",
-        body: JSON.stringify({ company_name: name }),
+        body: JSON.stringify({
+          company_name: name,
+          timezone: newCompanyTimezone,
+        }),
       });
       addCompany(company);
       setSelectedCompanyId(company.id);
       setShowCreateCompanyModal(false);
       setNewCompanyName("");
+      setNewCompanyTimezone("");
     } catch (error: unknown) {
       console.error("Failed to create company:", error);
       const apiError = error as { details?: string; error?: string };
@@ -783,32 +806,56 @@ export default function TeamPageContent({
                 </h2>
                 {companies.length > 0 ? (
                   <div className="flex flex-1 items-center justify-end min-w-0">
-                    <div className="flex items-center gap-3 min-w-0 max-w-full">
-                      <div
-                        className={`h-px w-10 sm:w-14 shrink-0 ${
-                          isDark ? "bg-slate-600" : "bg-gray-300"
-                        }`}
-                        aria-hidden
-                      />
-                      <span
-                        className={`text-lg sm:text-xl font-semibold text-center truncate max-w-[min(100%,20rem)] ${
-                          selectedCompanyLabel
-                            ? isDark
-                              ? "text-slate-100"
-                              : "text-gray-900"
-                            : isDark
-                              ? "text-slate-500"
-                              : "text-gray-500"
-                        }`}
-                      >
-                        {selectedCompanyLabel ?? "Select in header"}
-                      </span>
-                      <div
-                        className={`h-px w-10 sm:w-14 shrink-0 ${
-                          isDark ? "bg-slate-600" : "bg-gray-300"
-                        }`}
-                        aria-hidden
-                      />
+                    <div className="flex flex-col items-end gap-0.5 min-w-0 max-w-full">
+                      <div className="flex items-center gap-3 min-w-0 max-w-full">
+                        <div
+                          className={`h-px w-10 sm:w-14 shrink-0 ${
+                            isDark ? "bg-slate-600" : "bg-gray-300"
+                          }`}
+                          aria-hidden
+                        />
+                        <span
+                          className={`text-lg sm:text-xl font-semibold text-center truncate max-w-[min(100%,20rem)] ${
+                            selectedCompanyLabel
+                              ? isDark
+                                ? "text-slate-100"
+                                : "text-gray-900"
+                              : isDark
+                                ? "text-slate-500"
+                                : "text-gray-500"
+                          }`}
+                        >
+                          {selectedCompanyLabel ?? "Select in header"}
+                        </span>
+                        <div
+                          className={`h-px w-10 sm:w-14 shrink-0 ${
+                            isDark ? "bg-slate-600" : "bg-gray-300"
+                          }`}
+                          aria-hidden
+                        />
+                      </div>
+                      {selectedCompanyId ? (
+                        <p
+                          className={`text-xs text-right ${
+                            isDark ? "text-slate-400" : "text-gray-500"
+                          }`}
+                        >
+                          <span>Timezone: </span>
+                          <span
+                            className={
+                              companyTimezoneUnset
+                                ? isDark
+                                  ? "text-amber-300"
+                                  : "text-amber-700"
+                                : isDark
+                                  ? "text-slate-200"
+                                  : "text-gray-700"
+                            }
+                          >
+                            {selectedCompanyTimezoneLabel}
+                          </span>
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
@@ -2111,11 +2158,49 @@ export default function TeamPageContent({
                     disabled={creatingCompany}
                   />
                 </div>
+                <div>
+                  <label
+                    className={`block text-sm font-medium mb-2 ${
+                      isDark ? "text-slate-300" : "text-gray-700"
+                    }`}
+                  >
+                    Timezone *
+                  </label>
+                  <select
+                    value={newCompanyTimezone}
+                    onChange={(e) => setNewCompanyTimezone(e.target.value)}
+                    className={`w-full px-3 py-2 rounded border ${
+                      isDark
+                        ? "bg-slate-600 border-slate-500 text-slate-200"
+                        : "bg-white border-gray-300 text-gray-900"
+                    }`}
+                    disabled={creatingCompany}
+                  >
+                    <option value="">Select timezone</option>
+                    {INVOICING_TIMEZONE_OPTION_GROUPS.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.options.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <p
+                    className={`mt-2 text-xs ${
+                      isDark ? "text-slate-400" : "text-gray-500"
+                    }`}
+                  >
+                    Required for invoicing.
+                  </p>
+                </div>
                 <div className="flex items-center gap-2 justify-end">
                   <button
                     onClick={() => {
                       setShowCreateCompanyModal(false);
                       setNewCompanyName("");
+                      setNewCompanyTimezone("");
                     }}
                     disabled={creatingCompany}
                     className={`px-4 py-2 rounded-lg text-sm font-medium ${
@@ -2128,7 +2213,11 @@ export default function TeamPageContent({
                   </button>
                   <button
                     onClick={handleCreateCompany}
-                    disabled={creatingCompany || !newCompanyName.trim()}
+                    disabled={
+                      creatingCompany ||
+                      !newCompanyName.trim() ||
+                      !newCompanyTimezone.trim()
+                    }
                     className={`px-4 py-2 rounded-lg text-sm font-medium ${
                       isDark
                         ? "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-slate-600"

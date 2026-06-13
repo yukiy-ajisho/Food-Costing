@@ -15,7 +15,58 @@ const EMPTY_FORM: FormState = {
   company_name: "",
   poc_phone: "",
   poc_email: "",
+  send_monthly_statement: false,
 };
+
+function MonthlyStatementToggle({
+  checked,
+  disabled,
+  readOnly,
+  onChange,
+  isDark,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  readOnly?: boolean;
+  onChange?: (next: boolean) => void;
+  isDark: boolean;
+}) {
+  const inactive = Boolean(disabled || readOnly);
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-readonly={readOnly || undefined}
+      aria-label="Monthly statement"
+      disabled={inactive}
+      onClick={() => {
+        if (!readOnly && onChange) onChange(!checked);
+      }}
+      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${
+        readOnly ? "cursor-default" : ""
+      } ${
+        !readOnly
+          ? "focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+          : ""
+      } disabled:cursor-not-allowed ${
+        disabled && !readOnly ? "disabled:opacity-50" : ""
+      } ${
+        checked
+          ? "bg-blue-600"
+          : isDark
+            ? "bg-slate-600"
+            : "bg-gray-300"
+      } ${isDark ? "focus-visible:ring-offset-slate-800" : "focus-visible:ring-offset-white"}`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+          checked ? "translate-x-6" : "translate-x-1"
+        }`}
+      />
+    </button>
+  );
+}
 
 export function AccountInformationTab() {
   const { theme } = useTheme();
@@ -57,6 +108,7 @@ export function AccountInformationTab() {
       company_name: account.company_name,
       poc_phone: account.poc_phone ?? "",
       poc_email: account.poc_email ?? "",
+      send_monthly_statement: account.send_monthly_statement,
     });
     setModalOpen(true);
   };
@@ -77,6 +129,7 @@ export function AccountInformationTab() {
         company_name: form.company_name.trim(),
         poc_phone: form.poc_phone?.trim() || null,
         poc_email: form.poc_email?.trim() || null,
+        send_monthly_statement: form.send_monthly_statement ?? false,
       };
       if (editingId) {
         await invoicingAPI.updateAccount(editingId, payload);
@@ -129,7 +182,7 @@ export function AccountInformationTab() {
 
   return (
     <div className="flex flex-col">
-      <div className="mb-4 flex justify-end">
+      <div className="mb-4 flex justify-start">
         <button
           type="button"
           onClick={openCreate}
@@ -171,16 +224,20 @@ export function AccountInformationTab() {
           <table className="w-full">
             <thead className={`border-b ${thead}`}>
               <tr>
-                {["Company Name", "PoC Phone", "PoC Email", "Actions"].map(
-                  (h) => (
-                    <th
-                      key={h}
-                      className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${muted}`}
-                    >
-                      {h}
-                    </th>
-                  ),
-                )}
+                {[
+                  "Company Name",
+                  "PoC Phone",
+                  "PoC Email",
+                  "Monthly statement",
+                  "Actions",
+                ].map((h) => (
+                  <th
+                    key={h}
+                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${muted}`}
+                  >
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className={`divide-y ${divide}`}>
@@ -194,6 +251,13 @@ export function AccountInformationTab() {
                   </td>
                   <td className={`px-6 py-3 text-sm ${textMain}`}>
                     {account.poc_email || "—"}
+                  </td>
+                  <td className="px-6 py-3 text-sm">
+                    <MonthlyStatementToggle
+                      checked={account.send_monthly_statement ?? false}
+                      readOnly
+                      isDark={isDark}
+                    />
                   </td>
                   <td className="px-6 py-3 text-sm">
                     <div className="flex items-center gap-2">
@@ -279,6 +343,24 @@ export function AccountInformationTab() {
                   }
                 />
               </div>
+              {editingId ? (
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className={labelClass}>Monthly statement</p>
+                    <p className={`mt-1 text-xs ${muted}`}>
+                      Send PDF by email after monthly close.
+                    </p>
+                  </div>
+                  <MonthlyStatementToggle
+                    checked={form.send_monthly_statement ?? false}
+                    disabled={saving}
+                    isDark={isDark}
+                    onChange={(next) =>
+                      setForm((f) => ({ ...f, send_monthly_statement: next }))
+                    }
+                  />
+                </div>
+              ) : null}
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"

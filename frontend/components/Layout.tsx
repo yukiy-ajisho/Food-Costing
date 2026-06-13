@@ -113,7 +113,7 @@ function isLicensePath(pathname: string): boolean {
   );
 }
 
-type InvoicingNavSection = "account" | "order" | "payments" | "balance";
+type InvoicingNavSection = "account" | "order" | "payments" | "balance" | "statements";
 
 function isInvoicingSectionNavActive(
   pathname: string,
@@ -131,6 +131,9 @@ function isInvoicingSectionNavActive(
   }
   if (section === "balance") {
     return pathname.startsWith("/invoicing/balance");
+  }
+  if (section === "statements") {
+    return pathname.startsWith("/invoicing/statements");
   }
   return pathname.startsWith("/invoicing/account");
 }
@@ -208,6 +211,12 @@ const invoicingSectionSubItems = [
     href: "/invoicing/balance",
     section: "balance" as const,
   },
+  {
+    id: "inv-statements",
+    label: "Statements",
+    href: "/invoicing/statements",
+    section: "statements" as const,
+  },
 ] as const;
 
 // Team（親メニュー）
@@ -251,7 +260,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
     const role = companies.find((c) => c.id === selectedCompanyId)?.role;
     return role === "company_admin" || role === "company_director";
   }, [companies, selectedCompanyId]);
-  const canAccessInvoicing = useMemo(() => {
+  const hasInvoicingPermission = useMemo(() => {
     if (!selectedCompanyId) return false;
     const companyRole = companies.find((c) => c.id === selectedCompanyId)?.role;
     if (companyRole === "company_admin" || companyRole === "company_director") {
@@ -698,6 +707,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     if (pathname.startsWith("/invoicing/balance")) {
       return "Balance";
     }
+    if (pathname.startsWith("/invoicing/statements")) {
+      return "Statements";
+    }
     if (
       pathname.startsWith("/invoicing/orders") ||
       pathname.startsWith("/invoicing/invoice") ||
@@ -744,7 +756,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
     licenseOverdueCounts.company;
   const showSidebarAlerts = sidebarAlertsEnabled;
   const showDocumentBoxNav = companyLoading || canAccessDocumentBox;
-  const showInvoicingNav = companyLoading || tenantLoading || canAccessInvoicing;
+  const showInvoicingNav =
+    companyLoading || tenantLoading || hasInvoicingPermission;
 
   // 外側だけ幅アニメ。内側は常に SIDEBAR_EXPANDED_PX でレイアウトし overflow で切る
   const sidebarWidth = isSidebarExpanded
@@ -1185,7 +1198,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     <button
                       type="button"
                       onClick={() => {
-                        if (!canAccessInvoicing) return;
+                        if (!hasInvoicingPermission) return;
                         setInvoicingExpanded((e) => !e);
                       }}
                       className={`w-full ${SIDEBAR_NAV_ROW_ALIGN} px-3 py-2 text-left transition-colors border-0 rounded-md cursor-pointer ${
@@ -1208,7 +1221,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                             : "#000000",
                       }}
                       onMouseEnter={(e) => {
-                        if (!canAccessInvoicing) return;
+                        if (!hasInvoicingPermission) return;
                         e.currentTarget.style.backgroundColor = isDark
                           ? "#334155"
                           : "#dbeafe";
@@ -1217,7 +1230,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                           : "#1d4ed8";
                       }}
                       onMouseLeave={(e) => {
-                        if (!canAccessInvoicing) return;
+                        if (!hasInvoicingPermission) return;
                         e.currentTarget.style.backgroundColor = isDark
                           ? "#1e293b"
                           : "white";
@@ -1229,7 +1242,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                             ? "#cbd5e1"
                             : "#000000";
                       }}
-                      aria-disabled={!canAccessInvoicing}
+                      aria-disabled={!hasInvoicingPermission}
                     >
                       <Receipt className="h-5 w-5 shrink-0" />
                       {isSidebarExpanded && (
@@ -1248,16 +1261,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
                     {isSidebarExpanded &&
                       invoicingExpanded &&
                       invoicingSectionSubItems.map((sub) => {
-                        const href = canAccessInvoicing ? sub.href : "#";
+                        const href = hasInvoicingPermission ? sub.href : "#";
                         const isActive =
-                          canAccessInvoicing &&
+                          hasInvoicingPermission &&
                           isInvoicingSectionNavActive(pathname, sub.section);
                         return (
                           <Link
                             key={sub.id}
                             href={href}
                             onClick={(e) => {
-                              if (!canAccessInvoicing) e.preventDefault();
+                              if (!hasInvoicingPermission) e.preventDefault();
                             }}
                             className={`w-[calc(100%-2.5rem)] ml-10 ${FOOD_COSTING_SUB_NAV_ROW_ALIGN} pl-2 pr-3 py-0.5 text-left transition-colors border-0 no-underline rounded-md text-sm ${
                               isActive ? "font-semibold" : ""
@@ -1279,7 +1292,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                                   : "#000000",
                             }}
                             onMouseEnter={(e) => {
-                              if (!canAccessInvoicing) return;
+                              if (!hasInvoicingPermission) return;
                               e.currentTarget.style.backgroundColor = isDark
                                 ? "#334155"
                                 : "#dbeafe";
@@ -1288,7 +1301,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                                 : "#1d4ed8";
                             }}
                             onMouseLeave={(e) => {
-                              if (!canAccessInvoicing) return;
+                              if (!hasInvoicingPermission) return;
                               e.currentTarget.style.backgroundColor = isActive
                                 ? isDark
                                   ? "#334155"

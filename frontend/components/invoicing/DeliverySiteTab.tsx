@@ -9,6 +9,8 @@ import {
   type DeliverySiteInput,
   type InvoicingAccount,
 } from "@/lib/invoicing";
+import { uniqueSortedValues } from "@/lib/ordersTable";
+import { OrdersHeaderFilter } from "./OrdersHeaderFilter";
 
 type FormState = DeliverySiteInput;
 
@@ -40,7 +42,7 @@ export function DeliverySiteTab() {
   const isDark = theme === "dark";
   const [sites, setSites] = useState<DeliverySite[]>([]);
   const [accounts, setAccounts] = useState<InvoicingAccount[]>([]);
-  const [accountFilterId, setAccountFilterId] = useState<string>("");
+  const [accountFilterName, setAccountFilterName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
@@ -75,10 +77,15 @@ export function DeliverySiteTab() {
     setModalError(null);
   }, [form.account_id, form.name, modalOpen]);
 
+  const accountNameOptions = useMemo(
+    () => uniqueSortedValues(accounts.map((a) => a.company_name)),
+    [accounts],
+  );
+
   const filteredSites = useMemo(() => {
-    if (!accountFilterId) return sites;
-    return sites.filter((s) => s.account_id === accountFilterId);
-  }, [sites, accountFilterId]);
+    if (!accountFilterName.trim()) return sites;
+    return sites.filter((s) => s.company_name === accountFilterName);
+  }, [sites, accountFilterName]);
 
   const canSubmitForm =
     form.account_id.trim() !== "" &&
@@ -103,7 +110,11 @@ export function DeliverySiteTab() {
 
   const openCreate = () => {
     setEditingId(null);
-    setForm({ ...EMPTY_FORM, account_id: accountFilterId || "" });
+    setForm({
+      ...EMPTY_FORM,
+      account_id:
+        accounts.find((a) => a.company_name === accountFilterName)?.id ?? "",
+    });
     setModalError(null);
     setModalOpen(true);
   };
@@ -205,39 +216,14 @@ export function DeliverySiteTab() {
     ? "border-slate-600 bg-slate-700"
     : "border-gray-200 bg-gray-50";
   const divide = isDark ? "divide-slate-700" : "divide-gray-200";
+  const thCls = `h-14 align-middle px-3 py-2 text-xs font-medium uppercase tracking-wider ${
+    isDark ? "text-slate-300 bg-slate-700" : "text-gray-500 bg-gray-50"
+  }`;
+  const btnPrimary =
+    "inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
 
   return (
     <div className="flex flex-col">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <label className={`text-sm font-medium ${labelClass}`}>Account</label>
-          <select
-            className={`rounded-md border px-3 py-2 text-sm ${
-              isDark
-                ? "border-slate-600 bg-slate-800 text-slate-100"
-                : "border-gray-300 bg-white text-gray-900"
-            }`}
-            value={accountFilterId}
-            onChange={(e) => setAccountFilterId(e.target.value)}
-          >
-            <option value="">Show all</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.company_name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Plus className="h-4 w-4" />
-          Add site
-        </button>
-      </div>
-
       {error ? (
         <div
           className={`mb-4 rounded-md border px-4 py-3 text-sm ${
@@ -249,6 +235,13 @@ export function DeliverySiteTab() {
           {error}
         </div>
       ) : null}
+
+      <div className="mb-4 flex justify-start">
+        <button type="button" onClick={openCreate} className={btnPrimary}>
+          <Plus className="h-4 w-4 shrink-0" />
+          Add site
+        </button>
+      </div>
 
       {loading ? (
         <div
@@ -266,45 +259,49 @@ export function DeliverySiteTab() {
         <div
           className={`w-full overflow-hidden rounded-lg border shadow-sm transition-colors ${card}`}
         >
-          <table className="w-full">
+          <table className="w-full border-collapse text-sm">
             <thead className={`border-b ${thead}`}>
               <tr>
-                {[
-                  "Company",
-                  "Site Name",
-                  "Address",
-                  "Phone",
-                  "Email",
-                  "Actions",
-                ].map((h) => (
-                  <th
-                    key={h}
-                    className={`px-6 py-3 text-left text-xs font-medium uppercase tracking-wider ${muted}`}
-                  >
-                    {h}
-                  </th>
-                ))}
+                <th className={`${thCls} text-left min-w-40`}>
+                  <div className="flex items-center gap-1">
+                    <span>Company</span>
+                    <OrdersHeaderFilter
+                      isDark={isDark}
+                      value={accountFilterName}
+                      onChange={setAccountFilterName}
+                      options={accountNameOptions}
+                      ariaLabel="Filter by company"
+                    />
+                  </div>
+                </th>
+                {["Site Name", "Address", "Phone", "Email", "Actions"].map(
+                  (h) => (
+                    <th key={h} className={`${thCls} text-left`}>
+                      {h}
+                    </th>
+                  ),
+                )}
               </tr>
             </thead>
             <tbody className={`divide-y ${divide}`}>
               {filteredSites.map((site) => (
                 <tr key={site.id}>
-                  <td className={`px-6 py-3 text-sm ${textMain}`}>
+                  <td className={`px-3 py-3 text-sm ${textMain}`}>
                     {site.company_name || "—"}
                   </td>
-                  <td className={`px-6 py-3 text-sm font-medium ${textMain}`}>
+                  <td className={`px-3 py-3 text-sm font-medium ${textMain}`}>
                     {site.name}
                   </td>
-                  <td className={`px-6 py-3 text-sm ${textMain}`}>
+                  <td className={`px-3 py-3 text-sm ${textMain}`}>
                     {formatAddress(site)}
                   </td>
-                  <td className={`px-6 py-3 text-sm ${textMain}`}>
+                  <td className={`px-3 py-3 text-sm ${textMain}`}>
                     {formatPhone(site)}
                   </td>
-                  <td className={`px-6 py-3 text-sm ${textMain}`}>
+                  <td className={`px-3 py-3 text-sm ${textMain}`}>
                     {site.email}
                   </td>
-                  <td className="px-6 py-3 text-sm">
+                  <td className="px-3 py-3 text-sm">
                     <div className="flex items-center gap-2">
                       <button
                         type="button"

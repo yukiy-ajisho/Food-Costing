@@ -2,12 +2,20 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
+import { useCompany } from "@/contexts/CompanyContext";
 import {
   invoicingAPI,
+  type AdjustmentDirection,
   type CompanyInvoicingAccount,
   type PaymentInput,
   type PaymentType,
 } from "@/lib/invoicing";
+import { todayLocalDateYmd } from "@/lib/invoicingDateTime";
+import {
+  buildClosedPeriodSet,
+  isAccountDateOpenForNewEntry,
+  NEW_ENTRY_DATE_BLOCKED_MESSAGE,
+} from "@/lib/invoicingLedger";
 
 type Props = {
   isDark: boolean;
@@ -24,13 +32,41 @@ export function RecordPaymentModal({
   onClose,
   onSaved,
 }: Props) {
+  const { companies, selectedCompanyId } = useCompany();
   const [accountId, setAccountId] = useState(defaultAccountId ?? "");
   const [type, setType] = useState<PaymentType | "">("");
+  const [adjustmentDirection, setAdjustmentDirection] =
+    useState<AdjustmentDirection>("decrease");
   const [amount, setAmount] = useState("");
-  const [paymentDate, setPaymentDate] = useState("");
+  const [paymentDate, setPaymentDate] = useState(todayLocalDateYmd());
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [closedByAccount, setClosedByAccount] = useState<
+    Map<string, Set<string>>
+  >(new Map());
+  const [closedPeriodsReady, setClosedPeriodsReady] = useState(false);
+
+  const companyTimezone = useMemo(
+    () => companies.find((company) => company.id === selectedCompanyId)?.timezone,
+    [companies, selectedCompanyId],
+  );
+
+  useEffect(() => {
+    void invoicingAPI
+      .listClosedPeriods()
+      .then((data) => {
+        setClosedByAccount(
+          buildClosedPeriodSet(data.closed_periods ?? []),
+        );
+      })
+      .catch(() => {
+        setClosedByAccount(new Map());
+      })
+      .finally(() => {
+        setClosedPeriodsReady(true);
+      });
+  }, []);
 
   useEffect(() => {
     setAccountId(defaultAccountId ?? "");
@@ -41,14 +77,45 @@ export function RecordPaymentModal({
   const inputCls = isDark
     ? "w-full rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-100"
     : "w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900";
+  const invalidInputCls = "border-red-500 ring-1 ring-red-500/50";
   const muted = isDark ? "text-slate-400" : "text-gray-500";
+  const radioLabelCls = `inline-flex cursor-pointer items-center gap-2 text-sm ${
+    isDark ? "text-slate-200" : "text-gray-800"
+  }`;
+
+  const isAdjustment = type === "adjustment";
+
+  const paymentDateBlocked = useMemo(() => {
+    if (!closedPeriodsReady) return false;
+    const trimmedAccountId = accountId.trim();
+    const trimmedPaymentDate = paymentDate.trim();
+    if (!trimmedAccountId || !trimmedPaymentDate) return false;
+    return !isAccountDateOpenForNewEntry(
+      trimmedPaymentDate,
+      closedByAccount,
+      trimmedAccountId,
+      companyTimezone,
+    );
+  }, [
+    accountId,
+    paymentDate,
+    closedByAccount,
+    companyTimezone,
+    closedPeriodsReady,
+  ]);
 
   const canSave = useMemo(() => {
+    if (!closedPeriodsReady) return false;
     if (!type) return false;
     if (!accountId.trim()) return false;
+    if (paymentDateBlocked) return false;
     const parsedAmount = Number(amount);
-    return Number.isFinite(parsedAmount) && parsedAmount > 0;
-  }, [accountId, amount, type]);
+    return (
+      Number.isFinite(parsedAmount) &&
+      parsedAmount > 0 &&
+      /^\d{4}-\d{2}-\d{2}$/.test(paymentDate.trim())
+    );
+  }, [accountId, amount, type, paymentDate, paymentDateBlocked, closedPeriodsReady]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,26 +139,28 @@ export function RecordPaymentModal({
     }
 
     const trimmedPaymentDate = paymentDate.trim();
-    if (
-      trimmedPaymentDate &&
-      !/^\d{4}-\d{2}-\d{2}$/.test(trimmedPaymentDate)
-    ) {
+    if (!trimmedPaymentDate) {
+      setError("Payment Date is required.");
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmedPaymentDate)) {
       setError("Payment Date must be YYYY-MM-DD.");
+      return;
+    }
+    if (paymentDateBlocked) {
+      setError(NEW_ENTRY_DATE_BLOCKED_MESSAGE);
       return;
     }
 
     const trimmedNote = note.trim();
-    if (type === "adjustment" && !trimmedNote) {
-      setError("Note is required for adjustment.");
-      return;
-    }
 
     const body: PaymentInput = {
       account_id: trimmedAccountId,
       amount: parsedAmount,
       type,
-      payment_date: trimmedPaymentDate || null,
+      payment_date: trimmedPaymentDate,
       note: trimmedNote || null,
+      adjustment_direction: type === "adjustment" ? adjustmentDirection : null,
     };
 
     setSaving(true);
@@ -143,25 +212,6 @@ export function RecordPaymentModal({
           <div className="space-y-4">
             <div>
               <label className={`mb-1 block text-xs font-medium ${muted}`}>
-                Type
-              </label>
-              <select
-                className={inputCls}
-                value={type}
-                onChange={(e) => {
-                  setType(e.target.value as PaymentType | "");
-                  setError(null);
-                }}
-                required
-              >
-                <option value="">Select Type</option>
-                <option value="payment">payment</option>
-                <option value="adjustment">adjustment</option>
-              </select>
-            </div>
-
-            <div>
-              <label className={`mb-1 block text-xs font-medium ${muted}`}>
                 Account
               </label>
               <select
@@ -180,12 +230,80 @@ export function RecordPaymentModal({
               </select>
             </div>
 
+            <fieldset>
+              <legend className={`mb-2 block text-xs font-medium ${muted}`}>
+                Type
+              </legend>
+              <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+                <label className={radioLabelCls}>
+                  <input
+                    type="radio"
+                    name="entry-type"
+                    value="payment"
+                    checked={type === "payment"}
+                    onChange={() => {
+                      setType("payment");
+                      setError(null);
+                    }}
+                    className="accent-blue-600"
+                  />
+                  payment
+                </label>
+                <label className={radioLabelCls}>
+                  <input
+                    type="radio"
+                    name="entry-type"
+                    value="adjustment"
+                    checked={type === "adjustment"}
+                    onChange={() => {
+                      setType("adjustment");
+                      setError(null);
+                    }}
+                    className="accent-blue-600"
+                  />
+                  adjustment
+                </label>
+              </div>
+            </fieldset>
+
+            {isAdjustment ? (
+              <fieldset>
+                <legend className={`mb-2 block text-xs font-medium ${muted}`}>
+                  Balance effect
+                </legend>
+                <div className="flex flex-col gap-2 sm:flex-row sm:gap-6">
+                  <label className={radioLabelCls}>
+                    <input
+                      type="radio"
+                      name="adjustment-direction"
+                      value="decrease"
+                      checked={adjustmentDirection === "decrease"}
+                      onChange={() => setAdjustmentDirection("decrease")}
+                      className="accent-blue-600"
+                    />
+                    Reduce balance
+                  </label>
+                  <label className={radioLabelCls}>
+                    <input
+                      type="radio"
+                      name="adjustment-direction"
+                      value="increase"
+                      checked={adjustmentDirection === "increase"}
+                      onChange={() => setAdjustmentDirection("increase")}
+                      className="accent-blue-600"
+                    />
+                    Increase balance
+                  </label>
+                </div>
+              </fieldset>
+            ) : null}
+
             <div>
               <label
                 htmlFor="payment-amount"
                 className={`mb-1 block text-xs font-medium ${muted}`}
               >
-                Amount
+                {isAdjustment ? "Correction amount" : "Amount received"}
               </label>
               <input
                 id="payment-amount"
@@ -204,16 +322,23 @@ export function RecordPaymentModal({
                 htmlFor="payment-date"
                 className={`mb-1 block text-xs font-medium ${muted}`}
               >
-                Payment Date{" "}
-                <span className="font-normal">(Optional)</span>
+                Payment Date
               </label>
               <input
                 id="payment-date"
                 type="date"
                 value={paymentDate}
                 onChange={(e) => setPaymentDate(e.target.value)}
-                className={`invoicing-generation-date-input ${inputCls}`}
+                className={`invoicing-generation-date-input ${inputCls} ${
+                  paymentDateBlocked ? invalidInputCls : ""
+                }`}
+                required
               />
+              {paymentDateBlocked ? (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                  {NEW_ENTRY_DATE_BLOCKED_MESSAGE}
+                </p>
+              ) : null}
             </div>
 
             <div>
@@ -221,12 +346,7 @@ export function RecordPaymentModal({
                 htmlFor="payment-note"
                 className={`mb-1 block text-xs font-medium ${muted}`}
               >
-                Note{" "}
-                {type === "adjustment" ? (
-                  <span className="font-normal">(Required)</span>
-                ) : (
-                  <span className="font-normal">(Optional)</span>
-                )}
+                Note <span className="font-normal">(Optional)</span>
               </label>
               <textarea
                 id="payment-note"
@@ -253,7 +373,7 @@ export function RecordPaymentModal({
             </button>
             <button
               type="submit"
-              disabled={saving || !canSave}
+              disabled={saving || !canSave || paymentDateBlocked}
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {saving ? "Saving…" : "Save"}

@@ -1,3 +1,9 @@
+import {
+  currentCalendarPeriodInTz,
+  getCompanyTimezone,
+  isPeriodCalendarLocked,
+  shiftPeriod,
+} from "../lib/company-timezone";
 import { supabase } from "../config/supabase";
 
 export const CLOSING_BALANCE_COLUMNS =
@@ -19,6 +25,8 @@ export type LedgerEntryType =
   | "adjustment"
   | "closing_balance";
 
+export type AdjustmentDirection = "decrease" | "increase";
+
 export type LedgerRow = {
   id: string;
   date: string;
@@ -26,6 +34,7 @@ export type LedgerRow = {
   running_balance: number;
   type: LedgerEntryType;
   period?: string;
+  adjustment_direction?: AdjustmentDirection | null;
 };
 
 type RawLedgerEvent = {
@@ -34,7 +43,21 @@ type RawLedgerEvent = {
   delta: number;
   type: "order" | "payment" | "adjustment";
   sortKey: string;
+  adjustment_direction?: AdjustmentDirection | null;
 };
+
+/** Signed ledger delta for a payment row (amount is always positive in DB). */
+export function paymentLedgerDelta(
+  type: string,
+  amount: number,
+  adjustmentDirection: string | null | undefined,
+): number {
+  const n = Number(amount);
+  if (type === "adjustment" && adjustmentDirection === "increase") {
+    return n;
+  }
+  return -n;
+}
 
 export function dateToPeriod(date: string): string {
   return date.trim().slice(0, 7);
@@ -63,54 +86,72 @@ export function isValidPeriod(period: string): boolean {
   }
 }
 
-export function paymentEffectiveDate(
-  paymentDate: string | null | undefined,
-  createdAt: string,
-): string {
-  if (paymentDate?.trim()) {
-    return paymentDate.trim().slice(0, 10);
+/** Ledger period date from payments.payment_date (required calendar date). */
+export function paymentEffectiveDate(paymentDate: string): string {
+  return paymentDate.trim().slice(0, 10);
+}
+
+/** Current balance: closing snapshot plus any activity after the closed period end. */
+export function computeCurrentBalanceFromEvents(
+  latestClosing: ClosingBalanceRow | null,
+  events: RawLedgerEvent[],
+): number {
+  if (!latestClosing) {
+    return events.reduce((sum, event) => sum + event.delta, 0);
   }
-  return createdAt.trim().slice(0, 10);
+  const cutoff = periodEndDate(latestClosing.period);
+  const postCloseDelta = events
+    .filter((event) => event.date > cutoff)
+    .reduce((sum, event) => sum + event.delta, 0);
+  return Number(latestClosing.closing_balance) + postCloseDelta;
 }
 
 export function buildRunningBalanceLedger(
   latestClosing: ClosingBalanceRow | null,
   events: RawLedgerEvent[],
 ): LedgerRow[] {
-  const cutoff = latestClosing ? periodEndDate(latestClosing.period) : null;
-  const filtered = cutoff
-    ? events.filter((event) => event.date > cutoff)
-    : events.slice();
-
-  filtered.sort((a, b) => {
+  const sorted = events.slice();
+  sorted.sort((a, b) => {
     const byDate = a.date.localeCompare(b.date);
     if (byDate !== 0) return byDate;
     return a.sortKey.localeCompare(b.sortKey);
   });
 
+  const cutoff = latestClosing ? periodEndDate(latestClosing.period) : null;
+  const closingBalance = latestClosing ? Number(latestClosing.closing_balance) : 0;
+
   const rows: LedgerRow[] = [];
-  let running = latestClosing ? Number(latestClosing.closing_balance) : 0;
+  let historicalRunning = 0;
+  let postCloseRunning = closingBalance;
 
-  if (latestClosing) {
-    rows.push({
-      id: latestClosing.id,
-      date: latestClosing.closed_at.slice(0, 10),
-      amount: null,
-      running_balance: running,
-      type: "closing_balance",
-      period: latestClosing.period,
-    });
-  }
-
-  for (const event of filtered) {
-    running += event.delta;
-    rows.push({
-      id: event.id,
-      date: event.date,
-      amount: Math.abs(event.delta),
-      running_balance: running,
-      type: event.type,
-    });
+  for (const event of sorted) {
+    if (cutoff && event.date > cutoff) {
+      postCloseRunning += event.delta;
+      rows.push({
+        id: event.id,
+        date: event.date,
+        amount: Math.abs(event.delta),
+        running_balance: postCloseRunning,
+        type: event.type,
+        adjustment_direction:
+          event.type === "adjustment"
+            ? event.adjustment_direction ?? null
+            : null,
+      });
+    } else {
+      historicalRunning += event.delta;
+      rows.push({
+        id: event.id,
+        date: event.date,
+        amount: Math.abs(event.delta),
+        running_balance: historicalRunning,
+        type: event.type,
+        adjustment_direction:
+          event.type === "adjustment"
+            ? event.adjustment_direction ?? null
+            : null,
+      });
+    }
   }
 
   return rows;
@@ -210,18 +251,25 @@ export async function computeAccountBalanceThroughDate(
 
   const { data: payments, error: paymentsErr } = await supabase
     .from("payments")
-    .select("amount, payment_date, created_at")
+    .select("amount, type, adjustment_direction, payment_date")
     .eq("company_id", companyId)
     .eq("account_id", accountId);
   if (paymentsErr) throw new Error(paymentsErr.message);
 
-  const paymentsTotal = (payments ?? []).reduce((sum, row) => {
-    const effective = paymentEffectiveDate(row.payment_date, row.created_at);
+  const paymentsNet = (payments ?? []).reduce((sum, row) => {
+    const effective = paymentEffectiveDate(String(row.payment_date));
     if (effective > throughDate) return sum;
-    return sum + Number(row.amount);
+    return (
+      sum +
+      paymentLedgerDelta(
+        String(row.type),
+        Number(row.amount),
+        row.adjustment_direction,
+      )
+    );
   }, 0);
 
-  return ordersTotal - paymentsTotal;
+  return ordersTotal + paymentsNet;
 }
 
 async function fetchLedgerEventsForAccount(
@@ -255,22 +303,28 @@ async function fetchLedgerEventsForAccount(
 
   const { data: payments, error: paymentsErr } = await supabase
     .from("payments")
-    .select("id, amount, type, payment_date, created_at")
+    .select("id, amount, type, adjustment_direction, payment_date, created_at")
     .eq("company_id", companyId)
     .eq("account_id", accountId);
   if (paymentsErr) throw new Error(paymentsErr.message);
 
   for (const payment of payments ?? []) {
-    const date = paymentEffectiveDate(payment.payment_date, payment.created_at);
+    const date = paymentEffectiveDate(String(payment.payment_date));
     const amount = Number(payment.amount);
     const type =
       payment.type === "adjustment" ? "adjustment" : "payment";
+    const adjustment_direction =
+      type === "adjustment"
+        ? (payment.adjustment_direction as AdjustmentDirection | null) ??
+          "decrease"
+        : null;
     events.push({
       id: payment.id,
       date,
-      delta: -amount,
+      delta: paymentLedgerDelta(type, amount, adjustment_direction),
       type,
       sortKey: `payment:${payment.created_at}:${payment.id}`,
+      adjustment_direction,
     });
   }
 
@@ -295,12 +349,7 @@ export async function buildAccountLedger(
     siteIds,
   );
   const rows = buildRunningBalanceLedger(latestClosing, events);
-  const current_balance =
-    rows.length > 0
-      ? rows[rows.length - 1].running_balance
-      : latestClosing
-        ? Number(latestClosing.closing_balance)
-        : 0;
+  const current_balance = computeCurrentBalanceFromEvents(latestClosing, events);
 
   return { rows, current_balance, latest_closing: latestClosing };
 }
@@ -308,13 +357,27 @@ export async function buildAccountLedger(
 export async function assertAccountPeriodOpen(
   companyId: string,
   accountId: string,
-  period: string,
+  effectiveDate: string,
 ): Promise<string | null> {
+  const date = effectiveDate.trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return "Invalid date";
+  }
+  const period = dateToPeriod(date);
   if (!isValidPeriod(period)) {
     return "Invalid period";
   }
-  const closed = await isAccountPeriodClosed(companyId, accountId, period);
-  if (closed) {
+
+  const latestClosing = await fetchLatestClosingForAccount(companyId, accountId);
+  if (latestClosing) {
+    const cutoff = periodEndDate(latestClosing.period);
+    if (date <= cutoff) {
+      return `Period ${period} is closed for this account`;
+    }
+  }
+
+  const timeZone = await getCompanyTimezone(companyId);
+  if (isPeriodCalendarLocked(period, timeZone)) {
     return `Period ${period} is closed for this account`;
   }
   return null;
@@ -334,8 +397,7 @@ export async function assertOrderDateOpen(
   if (!site || site.company_id !== companyId) {
     return "Invalid delivery_site_id";
   }
-  const period = dateToPeriod(orderCreatedDate);
-  return assertAccountPeriodOpen(companyId, site.account_id, period);
+  return assertAccountPeriodOpen(companyId, site.account_id, orderCreatedDate);
 }
 
 export async function assertExistingOrderOpen(
@@ -367,12 +429,55 @@ export async function assertExistingOrderOpen(
 export async function assertPaymentOpen(
   companyId: string,
   accountId: string,
-  paymentDate: string | null | undefined,
-  createdAt: string,
+  paymentDate: string,
 ): Promise<string | null> {
-  const effective = paymentEffectiveDate(paymentDate, createdAt);
-  const period = dateToPeriod(effective);
-  return assertAccountPeriodOpen(companyId, accountId, period);
+  return assertAccountPeriodOpen(
+    companyId,
+    accountId,
+    paymentEffectiveDate(paymentDate),
+  );
+}
+
+export async function closeAccountPeriod(
+  companyId: string,
+  accountId: string,
+  period: string,
+  createdBy: string | null,
+): Promise<{ inserted: boolean; closing_balance: number | null }> {
+  if (!isValidPeriod(period)) {
+    throw new Error("Invalid period (expected YYYY-MM)");
+  }
+
+  const alreadyClosed = await isAccountPeriodClosed(
+    companyId,
+    accountId,
+    period,
+  );
+  if (alreadyClosed) {
+    return { inserted: false, closing_balance: null };
+  }
+
+  const throughDate = periodEndDate(period);
+  const tenantIds = await fetchCompanyTenantIds(companyId);
+  const siteIds = await fetchDeliverySiteIdsForAccount(companyId, accountId);
+  const balance = await computeAccountBalanceThroughDate(
+    companyId,
+    accountId,
+    throughDate,
+    tenantIds,
+    siteIds,
+  );
+
+  const { error: insertErr } = await supabase.from("closing_balance").insert({
+    company_id: companyId,
+    account_id: accountId,
+    period,
+    closing_balance: balance,
+    created_by: createdBy,
+  });
+  if (insertErr) throw new Error(insertErr.message);
+
+  return { inserted: true, closing_balance: balance };
 }
 
 export async function closeMonthForCompany(
@@ -384,64 +489,26 @@ export async function closeMonthForCompany(
     throw new Error("Invalid period (expected YYYY-MM)");
   }
 
-  const throughDate = periodEndDate(period);
-  const tenantIds = await fetchCompanyTenantIds(companyId);
-
   const { data: accounts, error: accountsErr } = await supabase
     .from("invoicing_accounts")
     .select("id")
     .eq("company_id", companyId);
   if (accountsErr) throw new Error(accountsErr.message);
 
-  const rows: {
-    company_id: string;
-    account_id: string;
-    period: string;
-    closing_balance: number;
-    created_by: string;
-  }[] = [];
-
+  let closed_count = 0;
   for (const account of accounts ?? []) {
-    const alreadyClosed = await isAccountPeriodClosed(
+    const result = await closeAccountPeriod(
       companyId,
       account.id,
       period,
+      userId,
     );
-    if (alreadyClosed) {
-      throw new Error(`Period ${period} is already closed for account ${account.id}`);
+    if (result.inserted) {
+      closed_count += 1;
     }
-
-    const siteIds = await fetchDeliverySiteIdsForAccount(
-      companyId,
-      account.id,
-    );
-    const balance = await computeAccountBalanceThroughDate(
-      companyId,
-      account.id,
-      throughDate,
-      tenantIds,
-      siteIds,
-    );
-
-    rows.push({
-      company_id: companyId,
-      account_id: account.id,
-      period,
-      closing_balance: balance,
-      created_by: userId,
-    });
   }
 
-  if (rows.length === 0) {
-    return { closed_count: 0 };
-  }
-
-  const { error: insertErr } = await supabase
-    .from("closing_balance")
-    .insert(rows);
-  if (insertErr) throw new Error(insertErr.message);
-
-  return { closed_count: rows.length };
+  return { closed_count };
 }
 
 export function formatOpenPeriodLabel(period: string): string {
@@ -450,11 +517,19 @@ export function formatOpenPeriodLabel(period: string): string {
   return date.toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
 }
 
+/** @deprecated Use currentCalendarPeriodForCompany for company-scoped open period. */
 export function currentCalendarPeriod(): string {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   return `${year}-${month}`;
+}
+
+export async function currentCalendarPeriodForCompany(
+  companyId: string,
+): Promise<string> {
+  const timeZone = await getCompanyTimezone(companyId);
+  return currentCalendarPeriodInTz(timeZone);
 }
 
 export async function fetchCompanyClosedPeriods(
@@ -471,5 +546,47 @@ export async function fetchCompanyClosedPeriods(
   }
   const { data, error } = await query;
   if (error) throw new Error(error.message);
-  return data ?? [];
+
+  const seen = new Set<string>();
+  const result: { account_id: string; period: string }[] = [];
+
+  for (const row of data ?? []) {
+    const key = `${row.account_id}:${row.period}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(row);
+  }
+
+  const timeZone = await getCompanyTimezone(companyId);
+  const currentPeriod = currentCalendarPeriodInTz(timeZone);
+  const calendarLockedPeriod = shiftPeriod(currentPeriod, -1);
+  if (isPeriodCalendarLocked(calendarLockedPeriod, timeZone)) {
+    let accountsQuery = supabase
+      .from("invoicing_accounts")
+      .select("id")
+      .eq("company_id", companyId);
+    if (accountId) {
+      accountsQuery = accountsQuery.eq("id", accountId);
+    }
+    const { data: accounts, error: accountsErr } = await accountsQuery;
+    if (accountsErr) throw new Error(accountsErr.message);
+
+    for (const account of accounts ?? []) {
+      const key = `${account.id}:${calendarLockedPeriod}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        account_id: account.id,
+        period: calendarLockedPeriod,
+      });
+    }
+  }
+
+  result.sort((a, b) => {
+    const byPeriod = a.period.localeCompare(b.period);
+    if (byPeriod !== 0) return byPeriod;
+    return a.account_id.localeCompare(b.account_id);
+  });
+
+  return result;
 }

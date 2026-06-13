@@ -2,8 +2,8 @@
   INVOICING LEDGER — 売掛金・入金・月次締め 計画（改訂）
   対象: food_costing プロジェクト
   作成日: 2026-05-31
-  改訂日: 2026-05-31（§3 Phase 1 実装仕様確定 / Phase 3 Running Balance UI 確定）
-  ステータス: Phase 1–2 完了 · Phase 3 実装済（closing_balance / Balance UI / 締めロック）
+  改訂日: 2026-05-31（§5-8 monthly_statements 列定義確定）
+  ステータス: Phase 1–3 実装済 · Phase 4 仕様確定（§14）· 実装未着手
 ================================================================================
 
 本書は、既存の Invoicing 機能を拡張し、
@@ -233,10 +233,13 @@ type:
 
 - UNIQUE (company_id, account_id, period)。
 
-5-4. 締めタイミング
+5-4. 締めタイミング（§14 で確定）
 
-- 毎月末（例: 1/31 23:59:59 時点の残高）。
-- **タイムゾーン … 未定（保留）。**
+- **残高の中身（cutoff）** … 対象月の暦日ベース（例: 1 月分は order_created_date /
+  payment 有効日が 2026-01-31 以前のもの）。月末 23:59:59 と同義（date 型のため時刻は不要）。
+- **ジョブの実行** … 当月の 23:59:59 ジャストではなく、**翌月に入ってから**（Company TZ）。
+  詳細は §14-2。
+- **タイムゾーン** … **Company 単位**（companies.timezone）。§14-1。
 
 5-5. Order の月归属
 
@@ -258,11 +261,43 @@ type:
 | 名称 | Monthly Statement |
 | 本文フォーマット | **backend** で定義 |
 | 送信 | **Resend**（既存メール基盤） |
-| 記録 | **Cloudflare**（送信ログ・配信記録） |
-| スケジュール | **Supabase**（pg_cron / Edge Functions 等。実装時選定） |
+| 記録 | **Cloudflare R2**（PDF オブジェクト保存）+ DB（**monthly_statements**。§5-8） |
+| スケジュール | **pg_cron + pg_net** → backend（§14-9）。Edge Function は使わない |
 
-- 宛先: account に紐づく連絡先（invoicing_accounts.poc_email 等。実装時確定）。
-- 締め直後、または月末スケジュールで一括実行。
+- 宛先: 送信時点の **invoicing_accounts.poc_email** → monthly_statements.**sent_to** にスナップショット。
+- 締め直後に backend が送信。未送信・失敗は毎時ジョブでリトライ（§14-10）。
+
+5-8. monthly_statements テーブル（確定）
+
+Monthly Statement の送信履歴・R2 PDF 参照。company × account × period ごとに 1 行。
+
+**命名の注意（重要）:**
+- **email_id** … Resend が返す **送信メッセージ ID**（invitations.email_id と同型）。
+  **宛先メールアドレスではない。**
+- **sent_to** … 送信時点の **宛先**（invoicing_accounts.poc_email のコピー）。
+- **account_company_name** … 送信時点の **顧客窓口表示名**
+  （invoicing_accounts.company_name のスナップショット。app の companies テーブルとは無関係）。
+  account 改名・参照切れ後も「当時誰向けか」を残す（orders の company_name スナップショットと同趣旨）。
+
+| カラム | 型 | 説明 |
+|--------|-----|------|
+| id | uuid | PK |
+| company_id | uuid FK → companies | 売り手 company |
+| account_id | uuid FK → invoicing_accounts | 顧客窓口。ON DELETE RESTRICT（closing_balance と同様） |
+| period | text | 対象月 YYYY-MM（締めた月） |
+| account_company_name | text NOT NULL | 送信時スナップショット（invoicing_accounts.company_name） |
+| sent_to | text | 送信時スナップショット（poc_email）。NULL = 未送信（メール無しで skipped） |
+| closing_balance | numeric NOT NULL | Statement に載せた月末残高（closing_balance 行と一致） |
+| r2_key | text | Cloudflare R2 オブジェクトキー（PDF） |
+| email_id | text | Resend 送信 ID（Webhook・再送確認用。NULL = 未送信） |
+| status | text NOT NULL | sent \| failed \| skipped（poc_email 無し等） |
+| error_message | text | 失敗時。毎時ジョブが failed をリトライ（§14-10） |
+| sent_at | timestamptz | 送信成功時刻。NULL = 未送信 |
+| created_at | timestamptz | 行作成（処理試行）時刻 |
+
+- UNIQUE (company_id, account_id, period)。
+- status = skipped … poc_email 無し等。締めは済みでもメールは送らない（error_message に理由）。
+- PDF キー例: monthly-statements/{company_id}/{account_id}/{period}.pdf（実装時確定）。
 
 
 ================================================================================
@@ -292,21 +327,29 @@ type:
 
 - payments where company_id = A AND account_id = B。
 
-6-5. 残高計算（フロントエンド）
+6-5. 残高計算（§14 で確定）
 
-  残高 ≒ 起点（直近の closing_balance）
-       ＋ 未締め期間の Order 合計
-       − 未締め期間の payments 合計
+**正本は backend**（GET /invoicing/balance/ledger の current_balance）。
+フロントは API の値を表示する。締めレコード作成前の「空白時間」も正しい残高を出す。
 
-- 締め済み月 … closing_balance の closing_balance を参照。
-- 未締め月 … 直近締め ＋ 当該月の orders / payments を集計。
+一般形（確定）:
 
-6-6. UI（案）
+  残高 ＝ [最新の closing_balance.closing_balance（無ければ 0）]
+        ＋ [その period 末日より後の orders / payments 収支]
 
-- 売り手ユーザーが company × 顧客窓口 account を選択 → Balance 表示。
-- Payment Received 手入力（payments。顧客側の操作画面はない）。
-- Orders 一覧 + Show Invoice。
-- 締め状態の表示（締め済み月は編集不可）。
+- period 末日 … YYYY-MM の暦月末日（Company TZ とは独立。date 列基準）。
+- 締めレコードが遅れても残高は連続（動的計算）。§14-4。
+- 月初ギャップでの言い換え（最新締めが先々月のとき）:
+    残高 ＝ [先々月締め] ＋ [先月全体] ＋ [今月（当日まで）]
+  初月ブートストラップ（締めが一度も無い）では先々月が無く、アンカー 0 ＋ 全未締め収支。
+
+6-6. UI
+
+- 売り手ユーザーが company × 顧客窓口 account を選択 → Balance 表示（実装済）。
+- Payment Received 手入力（payments。実装済）。
+- Orders 一覧 + Show Invoice（実装済）。
+- 締め済み月は orders / payments の編集・削除不可。
+  Phase 3 は closing_balance 行の有無で判定。Phase 4 からは §14-5 の暦ベースロックを追加。
 
 
 ================================================================================
@@ -322,9 +365,10 @@ type:
 | ゴミ箱 | **Order 削除**（Phase 1 は常に削除可） |
 | Invoicing サブメニュー「Invoice」 | **Order** |
 | ページタイトル「Invoice Box」 | **Orders** |
-| Payment / 入金記録 | **Payment Received**（payments 手入力・未着手） |
-| — | **Balance** 画面（未着手） |
-| — | **Monthly Statement**（締め時メール・未着手） |
+| Payment / 入金記録 | **Payment Received**（payments 手入力・実装済） |
+| — | **Balance** 画面（実装済） |
+| — | **Monthly Statement**（締め時メール・Phase 4 未着手） |
+| — | **Company 営業 TZ**（companies.timezone・Phase 4 未着手） |
 
 7-1. ルーティング（確定）
 
@@ -365,13 +409,16 @@ type:
   【入金・集約 — 売り手が手入力】
   売り手 company × 顧客窓口 account: payments (company_id, account_id, amount, type)
 
-  【月末・Supabase スケジュール】
-  1. company × account ごとに closing_balance INSERT
-  2. 締め済み月の orders / payments をロック
-  3. Monthly Statement を Resend 送信、Cloudflare に記録
+  【翌月・毎時ジョブ（§14-9 / §14-10）】
+  pg_cron（毎時）→ pg_net.http_post → backend /internal/cron/invoicing-hourly
+  backend 内で順に:
+  1. 仕事なければ skip
+  2. 先月未締めなら company × account ごとに closing_balance INSERT（冪等）
+  3. 締め済み & Statement 未送信なら PDF → R2 → Resend → monthly_statements 記録
+  （API ロック）暦で先月は翌月 1 日 00:00 から orders / payments 編集不可（§14-5）
 
   【Balance UI】
-  closing_balance（締め済み）＋ orders ＋ payments（未締め）→ フロント計算
+  backend が §14-4 一般形で current_balance を返す（締め前ギャップも連続した残高）
 
 
 ================================================================================
@@ -390,13 +437,14 @@ type:
 
 | # | 項目 | 状態 |
 |---|------|------|
-| 1 | 締めのタイムゾーン | 保留 |
-| 2 | Monthly Statement 宛先・本文テンプレ・Cloudflare 記録形式 | 実装時（Phase 4） |
-| 3 | Supabase スケジュール方式（pg_cron vs Edge Function） | 実装時（Phase 4） |
+| 1 | 締めのタイムゾーン | **確定**（Company 単位。§14-1） |
+| 2 | Monthly Statement 宛先・本文テンプレ・PDF 項目 | 本文・PDF は実装時。宛先・DB 列は §5-8 確定 |
+| 3 | Supabase スケジュール方式 | **確定**（pg_cron + pg_net → backend。§14-9） |
 | 4 | closing_balance に内訳カラムを残すか | 未決 |
-| 5 | payments.payment_date の必須可否 | 実装時（Phase 2） |
-| 6 | Balance / Payment Received 画面のタブ配置 | 未決 |
+| 5 | payments.payment_date の必須可否 | **任意**（未入力時は created_at を Company TZ 暦日で補完。§14-1） |
+| 6 | Balance / Payment Received 画面のタブ配置 | 未決（現状は別ページ） |
 | 7 | RLS（company / tenant スコープ） | 実装時 |
+| 8 | Company TZ 設定 UI の配置 | 未決（Company Settings または /invoicing/settings） |
 
 ※ §3 Phase 1 で決まった項目（API/URL/リネーム/RPC/Show Invoice/削除方針）は §13 参照。
 
@@ -405,10 +453,11 @@ type:
 11. 実装フェーズ案
 ================================================================================
 
-Phase 1 … §13 参照（orders 移行・UI/API リネーム・Show Invoice・Sent Date）
-Phase 2 … payments テーブル + Payment Received UI
-Phase 3 … closing_balance + 締め処理 + 締め後ロック + Balance UI + Order 削除禁止
-Phase 4 … Monthly Statement（backend フォーマット, Resend, Cloudflare, Supabase cron）
+Phase 1 … §13 参照（orders 移行・UI/API リネーム・Show Invoice・Sent Date）【完了】
+Phase 2 … payments テーブル + Payment Received UI 【完了】
+Phase 3 … closing_balance + 手動締め + Balance UI + 締めレコードベースのロック 【完了】
+Phase 4 … §14 参照（Company TZ、pg_cron 毎時 → 全部 backend、暦ベースロック、
+           Monthly Statement: PDF backend 生成, Resend, R2）
 Phase 5 … adjustment 運用・監査
 
 
@@ -575,6 +624,225 @@ invoicingPdf.ts:
   - invoice_lists スキーマ
   - invoice_number 採番ルール（tenant × 日付。形式 YYYYMMDD-0001）
   - 締め済み月の削除・編集ロック
+
+
+================================================================================
+14. Phase 4 — 自動月締め・タイムゾーン・動的残高（確定・2026-05-31）
+================================================================================
+
+本節は Phase 4 の実装仕様。Phase 3（手動 Close Month・closing_balance 行ベースのロック）からの
+拡張・差し替えを含む。
+
+14-1. Company タイムゾーン（確定）
+
+- **スコープ:** 売り手 **Company** 単位（tenant / ユーザー / invoicing_account ではない）。
+- **保存:** companies.timezone（IANA 名。例: America/Los_Angeles）。
+- **デフォルト:** America/Los_Angeles（migration 時に既存 company へ設定）。
+- **変更権限:** company_admin / company_director のみ。
+- **UI:** Company Settings または Invoicing Settings（配置は §10 #8 で実装時確定）。
+- **効く箇所:**
+    - 自動締めジョブの「翌月に入ったか」判定
+    - open period（今月）の判定
+    - payments.payment_date 未入力時 … created_at を **Company TZ の暦日**に変換して月归属
+- **効かない箇所:**
+    - order_created_date / payment_date（date 型）の月归属 … ユーザーが選んだ暦日そのもの
+    - 画面の日時表示 … ユーザー TZ でよい（表示のみ）
+
+14-2. 自動締めバッチの実行タイミング（確定）
+
+- **実行は翌月** … 対象月の 23:59:59 にジョブを走らせない。
+  Company TZ で **翌月 1 日に入ったあと**、毎時ジョブが締め対象を処理する。
+- **締める period** … Company TZ の **先月**（例: 3 月 1 日以降のジョブが 2 月分を締める）。
+- **残高の cutoff** … 先月の暦末日まで（date <= YYYY-MM-DD）。closed_at はジョブ実行時刻（監査用）。
+- **対象単位** … company × account ごとに closing_balance INSERT（既存 UNIQUE 制約）。
+- **冪等** … 既に当該 period の行があればスキップ（二重締めしない）。
+- Phase 3 の手動 Close Month は開発・検証用として残すか、本番では無効化するかは実装時判断。
+
+14-3. 毎時間ループ・リカバリー（確定）
+
+サーバー落ち・遅延からの自動復旧のため、**pg_cron で毎時 backend を 1 回呼ぶ**（§14-9）。
+締め・Statement・R2 の実処理はすべて backend（§14-10）。
+
+- **実行ウィンドウを絞らない** … 「毎月 1 日 00:00〜06:00 のみ」等としない。
+  1 日の朝にサーバーが落ち続けても、**後日・何時でも**先月締めが未作成なら実行する。
+- **通常** … 翌月 1 日の最初の毎時 tick（例: 00:05〜01:00 頃）で先月が締まる想定。
+- Monthly Statement … 締め新規作成時に送信。未送信・失敗は毎時 backend がリトライ（§14-10）。
+
+14-4. 残高の動的計算 — 締め前の「空白時間」（確定）
+
+翌月に入ってから先月の closing_balance 行が DB に保存されるまで、数分〜数時間の
+タイムラグが発生しうる。この間も Balance は **正しいリアルタイム残高**を表示する。
+
+一般形（§6-5 と同じ。backend が正本）:
+
+  残高 ＝ [最新 closing_balance（無ければ 0）]
+        ＋ [その period 末日より後の全 orders / payments 収支]
+
+切り替え（UI 説明用の言い換え）:
+
+  ① 先月の締めレコードが **まだ無い**（月初〜自動処理完了前）:
+      最新締めが先々月 … 残高 ＝ [先々月締め] ＋ [先月全体] ＋ [今月（当日まで）]
+      締めが一度も無い（初月ブートストラップ）… 残高 ＝ 0 ＋ [未締めの全収支]
+
+  ② 先月の締めレコードが **ある**（自動処理完了後）:
+      残高 ＝ [先月締め] ＋ [今月（当日まで）]
+
+① と ② は一般形の特殊ケース。実装は一般形 1 本に統一する。
+
+14-5. 編集ロック — 暦ベース（確定・Phase 3 からの変更）
+
+**対象:** orders / payments の新規・変更・削除。
+
+Phase 3 は「当該 period の closing_balance 行があるか」でロック。
+Phase 4 では **締めジョブの完了を待たず**、次を追加する。
+
+- Company TZ で **翌月 1 日 00:00:00 以降**、**先月**の orders / payments は編集・削除不可。
+- 例: 締めジョブが 3/1 00:05 でも、3/1 00:00 から 2 月分はロック。
+- 残高は 14-4 の動的計算で既に「2 月込み」で見えているため、ギャップ中の改ざんを防ぐ。
+- 先月より前 … 既存どおり closing_balance 行がある period はロック済み。
+- 訂正 … 締め済み月の誤りは翌月以降の payments（type = adjustment）のみ（§5-6）。
+
+ロック判定の正本も **backend**（API が 409）。フロントは closed-periods API と合わせて表示。
+
+14-6. 具体例（定常運用）
+
+前提: 自動締め稼働中。1 月締め済み $10,000。2 月: +$1,500 純増。3 月 1 日 00:30、
+3 月分 +$100。2 月の closing_balance はまだ無い（ジョブは 00:05 予定だが未完了でも同じ式）。
+
+  残高 ＝ $10,000 + $1,500 + $100 ＝ $11,600
+
+2 月締めレコード作成後:
+
+  残高 ＝ [2 月締め $11,500] + $100 ＝ $11,600（連続）
+
+初月ブートストラップ（2 月が初取引月、3/1 00:30、2 月締め未作成）:
+
+  残高 ＝ $0 + [2 月全体] + [3/1 の $100]
+
+定常運用では「先月だけ」に絞らない。最新締めが無い初月のみアンカー 0。
+
+14-7. Phase 4 実装チェックリスト（概要）
+
+  DB
+    [ ] companies.timezone 列（NOT NULL, default America/Los_Angeles）
+    [ ] monthly_statements テーブル（§5-8）
+    [ ] pg_cron + pg_net 有効化、毎時ジョブ migration（§14-9）
+    [ ] PATCH /companies/:id または invoicing 経由で TZ 更新（admin/director のみ）
+
+  Backend
+    [ ] POST /internal/cron/invoicing-hourly（CRON_SECRET 認証）
+    [ ] runInvoicingHourlyJob（§14-10）… pending 判定 → 締め → Statement → R2
+    [ ] closeAccountPeriod 冪等化（account 単位 skip。Phase 3 closeMonthForCompany を拡張）
+    [ ] paymentEffectiveDate / currentCalendarPeriod を Company TZ 基準に統一
+    [ ] assertAccountPeriodOpen … 暦ベースで先月ロック（§14-5）
+    [ ] buildMonthlyStatementPdf + sendMonthlyStatementEmail（backend。pdf-lib）
+    [ ] buildAccountLedger / current_balance が §14-4 一般形（Phase 3 と整合確認）
+
+  Frontend
+    [ ] Company TZ 設定 UI（admin/director）
+    [ ] ロック表示が暦ベースと一致
+
+  Infra / Secrets
+    [ ] BACKEND_URL（pg_net から到達可能な URL）
+    [ ] CRON_SECRET（backend と Vault / migration で共有。平文ハードコード禁止）
+    [ ] 既存 RESEND_* / CF_R2_*（backend .env）
+
+14-8. Phase 3 との差分まとめ
+
+| 項目 | Phase 3（現状） | Phase 4（本節） |
+|------|----------------|-----------------|
+| 締め実行 | 手動 Close Month ボタン | pg_cron 毎時 → backend 自動＋冪等リカバリー |
+| スケジューラ | なし | **pg_cron + pg_net**（Edge Function は使わない） |
+| 業務ロジック | backend | **すべて backend**（締め・PDF・Resend・R2） |
+| ロック | closing_balance 行の有無 | ＋ 暦で先月は翌月 1 日 00:00 からロック |
+| TZ | UTC 混在（要修正） | Company TZ 統一 |
+| 残高 | latest closing + events（概ね §14-4 と同型） | backend 正本・一般形を明文化 |
+
+14-9. Cron アーキテクチャ — pg_cron + 全部 backend（確定）
+
+**方針:** スケジュールは Postgres（pg_cron + pg_net）。締め・Monthly Statement・R2 は
+**すべて Express backend**。Scheduled Edge Function は使わない（HTTP を叩くだけなら pg で十分）。
+
+採用しなかった案（参考）:
+  - Edge で closing_balance INSERT … 計算ロジック二重化のため不採用
+  - Edge で「仕事あり」判定のみ backend 起動 … 判定二重化のため不採用
+  - 毎時 backend 内 pending 判定で skip … **採用**（§14-10 手順 2）
+
+14-9-1. pg_cron + pg_net（毎時）
+
+  migration で:
+    CREATE EXTENSION IF NOT EXISTS pg_cron;
+    CREATE EXTENSION IF NOT EXISTS pg_net;
+
+    SELECT cron.schedule(
+      'invoicing-hourly',
+      '0 * * * *',   -- 毎時 0 分（UTC）
+      $$
+      SELECT net.http_post(
+        url := '<BACKEND_URL>/internal/cron/invoicing-hourly',
+        headers := jsonb_build_object(
+          'Content-Type', 'application/json',
+          'Authorization', 'Bearer ' || <CRON_SECRET from vault>
+        ),
+        body := '{}'::jsonb
+      );
+      $$
+    );
+
+  - BACKEND_URL / CRON_SECRET は Supabase Vault 等で管理（リポジトリに秘密を書かない）。
+  - pg_net は非同期。成否は backend ログと monthly_statements / closing_balance で確認。
+  - ローカル開発: migration の cron は本番のみ。手動で curl  POST して backend ジョブを検証。
+
+14-9-2. backend エンドポイント
+
+  POST /internal/cron/invoicing-hourly
+    - ユーザー JWT ではなく Authorization: Bearer ${CRON_SECRET}
+    - authMiddleware の外にルートを置く
+    - 本体: runInvoicingHourlyJob()（§14-10）
+
+14-10. backend ジョブの処理順（確定）
+
+1 回の cron 呼び出しで backend 内を **この順** で実行する。
+
+  (1) 認証
+      CRON_SECRET 検証。失敗 → 401。
+
+  (2) pending 判定（軽い DB 参照）
+      次のいずれかがあれば仕事あり:
+        - いずれかの (company, account) で **先月** period の closing_balance が無い
+        - 締め済みだが monthly_statements が無い、または status = failed（リトライ）
+      仕事なし → { ok: true, skipped: true } で 200 終了。
+
+  (3) company 列挙
+      companies を走査。各 company の先月 period = Company TZ の「今日」の先月 (YYYY-MM)。
+
+  (4) 月締め — closing_balance INSERT（company × account）
+      各 account について:
+        - 当該 period の closing_balance が **既にあればスキップ**（冪等）
+        - 無ければ computeAccountBalanceThroughDate（先月末日 cutoff）で残高計算
+        - closing_balance INSERT（closed_at = 実行時刻、created_by = null または system）
+      新規 INSERT した行は (5) の Statement 対象に含める。
+
+  (5) Monthly Statement（締め済み & 未送信 / 失敗）
+      対象: (4) で新規締めしたもの、または過去実行で締めのみ成功したもの。
+      各 account について:
+        a. 宛先 … invoicing_accounts.poc_email → **sent_to** にスナップショット（無ければ status = skipped）
+        b. **account_company_name** … invoicing_accounts.company_name をスナップショット
+        c. PDF 生成 … buildMonthlyStatementPdf（backend。Invoice PDF とは別テンプレ）
+        d. R2 保存 … 既存 r2-upload 系（キー例: §5-8）
+        e. Resend 送信 … PDF 添付メール（sendMonthlyStatementEmail）→ **email_id** を取得
+        f. monthly_statements INSERT/UPDATE … r2_key, email_id, sent_to, account_company_name,
+           closing_balance, sent_at, status（§5-8）
+      失敗時 … status = failed, error_message。次回 (2) で再試行。
+
+  (6) レスポンス
+      closed_count, statements_sent, errors[] 等を JSON で返す。
+
+**Phase 3 手動 Close Month との関係:**
+  - 計算ロジックは共通化（closeAccountPeriod 冪等版）。
+  - 手動は開発・検証用。本番は (4)(5) の自動ジョブが正。
+
+**編集ロック（§14-5）** は本ジョブとは別 API パスで常時適用（cron 完了を待たない）。
 
 
 ================================================================================

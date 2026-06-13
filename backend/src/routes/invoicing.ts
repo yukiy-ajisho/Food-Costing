@@ -33,17 +33,19 @@ import {
   type OrderLineJson,
 } from "../services/invoicing-data";
 import {
-  assertExistingOrderOpen,
   assertOrderDateOpen,
   assertPaymentOpen,
   buildAccountLedger,
   closeMonthForCompany,
-  currentCalendarPeriod,
+  currentCalendarPeriodForCompany,
   fetchCompanyClosedPeriods,
   formatOpenPeriodLabel,
   isAccountPeriodClosed,
   isValidPeriod,
 } from "../services/invoicing-ledger";
+import { getCompanyTimezoneIfSet } from "../lib/company-timezone";
+import { getDocumentPresignedUrl } from "../lib/r2-upload";
+import { resendMonthlyStatement } from "../services/monthly-statement-send";
 
 const router = Router();
 
@@ -90,7 +92,10 @@ const DELIVERY_SITE_COLUMNS =
   "id, company_id, account_id, name, street, city, state, zip, phone_1, phone_2, email, created_at, updated_at";
 
 const ACCOUNT_COLUMNS =
-  "id, company_id, company_name, poc_phone, poc_email, created_at, updated_at";
+  "id, company_id, company_name, poc_phone, poc_email, send_monthly_statement, created_at, updated_at";
+
+const STATEMENT_COLUMNS =
+  "id, company_id, account_id, period, account_company_name, sent_to, closing_balance, r2_key, status, error_message, sent_at, created_at";
 
 type DeliverySiteBody = {
   account_id?: string;
@@ -108,6 +113,7 @@ type InvoicingAccountBody = {
   company_name?: string;
   poc_phone?: string | null;
   poc_email?: string | null;
+  send_monthly_statement?: boolean;
 };
 
 type DeliverySiteRow = {
@@ -172,18 +178,70 @@ function parseDeliverySiteBody(body: DeliverySiteBody): {
   };
 }
 
-function parseInvoicingAccountBody(body: InvoicingAccountBody): {
+function parseSendMonthlyStatement(value: unknown): boolean | { error: string } {
+  if (typeof value === "boolean") return value;
+  if (value === undefined) return false;
+  return { error: "send_monthly_statement must be a boolean" };
+}
+
+function parseInvoicingAccountCreateBody(body: InvoicingAccountBody): {
   company_name: string;
   poc_phone: string | null;
   poc_email: string | null;
+  send_monthly_statement: boolean;
 } | { error: string } {
   const company_name = body.company_name?.trim() ?? "";
   if (!company_name) return { error: "company_name is required" };
+  const sendMonthly = parseSendMonthlyStatement(body.send_monthly_statement);
+  if (typeof sendMonthly === "object" && "error" in sendMonthly) {
+    return sendMonthly;
+  }
   return {
     company_name,
     poc_phone: normalizeOptionalText(body.poc_phone),
     poc_email: normalizeOptionalText(body.poc_email),
+    send_monthly_statement: sendMonthly,
   };
+}
+
+function parseInvoicingAccountPatchBody(
+  body: InvoicingAccountBody,
+): {
+  company_name?: string;
+  poc_phone?: string | null;
+  poc_email?: string | null;
+  send_monthly_statement?: boolean;
+} | { error: string } {
+  const updates: {
+    company_name?: string;
+    poc_phone?: string | null;
+    poc_email?: string | null;
+    send_monthly_statement?: boolean;
+  } = {};
+
+  if (body.company_name !== undefined) {
+    const company_name = body.company_name?.trim() ?? "";
+    if (!company_name) return { error: "company_name cannot be empty" };
+    updates.company_name = company_name;
+  }
+  if (body.poc_phone !== undefined) {
+    updates.poc_phone = normalizeOptionalText(body.poc_phone);
+  }
+  if (body.poc_email !== undefined) {
+    updates.poc_email = normalizeOptionalText(body.poc_email);
+  }
+  if (body.send_monthly_statement !== undefined) {
+    const sendMonthly = parseSendMonthlyStatement(body.send_monthly_statement);
+    if (typeof sendMonthly === "object" && "error" in sendMonthly) {
+      return sendMonthly;
+    }
+    updates.send_monthly_statement = sendMonthly;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return { error: "No fields to update" };
+  }
+  return updates;
 }
 
 async function fetchExistingInvoiceNumbers(
@@ -246,7 +304,7 @@ router.post("/accounts", async (req, res) => {
         .json({ error: companyResolved.error });
     }
 
-    const parsed = parseInvoicingAccountBody(req.body ?? {});
+    const parsed = parseInvoicingAccountCreateBody(req.body ?? {});
     if ("error" in parsed) {
       return res.status(400).json({ error: parsed.error });
     }
@@ -288,7 +346,7 @@ router.patch("/accounts/:id", async (req, res) => {
     const accountId = req.params.id?.trim();
     if (!accountId) return res.status(400).json({ error: "id is required" });
 
-    const parsed = parseInvoicingAccountBody(req.body ?? {});
+    const parsed = parseInvoicingAccountPatchBody(req.body ?? {});
     if ("error" in parsed) {
       return res.status(400).json({ error: parsed.error });
     }
@@ -1542,8 +1600,9 @@ type PaymentRow = {
   account_id: string;
   amount: number;
   type: string;
+  adjustment_direction: string | null;
   note: string | null;
-  payment_date: string | null;
+  payment_date: string;
   created_at: string;
   created_by: string | null;
   invoicing_accounts?:
@@ -1572,11 +1631,31 @@ async function resolveInvoicingCompanyId(
       status: 400,
     };
   }
+  const timezone = await getCompanyTimezoneIfSet(companyId);
+  if (!timezone) {
+    return {
+      error: "Company timezone is not configured",
+      status: 403,
+    };
+  }
   return companyId;
 }
 
 const PAYMENT_TYPES = ["payment", "adjustment"] as const;
 type PaymentType = (typeof PAYMENT_TYPES)[number];
+
+const ADJUSTMENT_DIRECTIONS = ["decrease", "increase"] as const;
+type AdjustmentDirection = (typeof ADJUSTMENT_DIRECTIONS)[number];
+
+function parseAdjustmentDirection(
+  value: unknown,
+): AdjustmentDirection | { error: string } {
+  const direction = String(value ?? "decrease").trim();
+  if (direction === "decrease" || direction === "increase") {
+    return direction;
+  }
+  return { error: "adjustment_direction must be decrease or increase" };
+}
 
 function parsePaymentType(value: unknown): PaymentType | { error: string } {
   if (value == null || value === "") {
@@ -1610,7 +1689,8 @@ function parsePaymentBody(
       account_id: string;
       amount: number;
       type: PaymentType;
-      payment_date: string | null;
+      adjustment_direction: AdjustmentDirection | null;
+      payment_date: string;
       note: string | null;
     }
   | { error: string } {
@@ -1627,15 +1707,11 @@ function parsePaymentBody(
     return amountParsed;
   }
 
-  const paymentDateParsed = parseOptionalIsoDate(
+  const paymentDateParsed = parseRequiredIsoDate(
     body.payment_date,
     "payment_date",
   );
-  if (
-    typeof paymentDateParsed === "object" &&
-    paymentDateParsed !== null &&
-    "error" in paymentDateParsed
-  ) {
+  if (typeof paymentDateParsed !== "string") {
     return paymentDateParsed;
   }
 
@@ -1645,22 +1721,27 @@ function parsePaymentBody(
       ? null
       : String(noteRaw).trim();
 
-  const payment_date =
-    typeof paymentDateParsed === "string" ? paymentDateParsed : null;
+  const payment_date = paymentDateParsed;
 
   const typeParsed = parsePaymentType(body.type);
   if (typeof typeParsed !== "string") {
     return typeParsed;
   }
 
-  if (typeParsed === "adjustment" && !note) {
-    return { error: "note is required for adjustment" };
+  let adjustment_direction: AdjustmentDirection | null = null;
+  if (typeParsed === "adjustment") {
+    const directionParsed = parseAdjustmentDirection(body.adjustment_direction);
+    if (typeof directionParsed !== "string") {
+      return directionParsed;
+    }
+    adjustment_direction = directionParsed;
   }
 
   return {
     account_id: accountId,
     amount: amountParsed,
     type: typeParsed,
+    adjustment_direction,
     payment_date,
     note,
   };
@@ -1672,14 +1753,14 @@ function parsePaymentPatchBody(
   | {
       account_id?: string;
       amount?: number;
-      payment_date?: string | null;
+      payment_date?: string;
       note?: string | null;
     }
   | { error: string } {
   const patch: {
     account_id?: string;
     amount?: number;
-    payment_date?: string | null;
+    payment_date?: string;
     note?: string | null;
   } = {};
 
@@ -1698,19 +1779,14 @@ function parsePaymentPatchBody(
   }
 
   if (body.payment_date !== undefined) {
-    const paymentDateParsed = parseOptionalIsoDate(
+    const paymentDateParsed = parseRequiredIsoDate(
       body.payment_date,
       "payment_date",
     );
-    if (
-      typeof paymentDateParsed === "object" &&
-      paymentDateParsed !== null &&
-      "error" in paymentDateParsed
-    ) {
+    if (typeof paymentDateParsed !== "string") {
       return paymentDateParsed;
     }
-    patch.payment_date =
-      typeof paymentDateParsed === "string" ? paymentDateParsed : null;
+    patch.payment_date = paymentDateParsed;
   }
 
   if (body.note !== undefined) {
@@ -1821,12 +1897,10 @@ router.post("/payments", async (req, res) => {
       return res.status(400).json({ error: "Invalid account_id" });
     }
 
-    const createdAtIso = new Date().toISOString();
     const paymentLockErr = await assertPaymentOpen(
       companyResolved,
       parsed.account_id,
       parsed.payment_date,
-      createdAtIso,
     );
     if (paymentLockErr) {
       return res.status(409).json({ error: paymentLockErr });
@@ -1839,6 +1913,7 @@ router.post("/payments", async (req, res) => {
         account_id: parsed.account_id,
         amount: parsed.amount,
         type: parsed.type,
+        adjustment_direction: parsed.adjustment_direction,
         note: parsed.note,
         payment_date: parsed.payment_date,
         created_by: req.user!.id,
@@ -1879,7 +1954,7 @@ router.patch("/payments/:id", async (req, res) => {
 
     const { data: existing, error: fetchErr } = await supabase
       .from("payments")
-      .select("id, account_id, payment_date, created_at")
+      .select("id, account_id, payment_date")
       .eq("id", paymentId)
       .eq("company_id", companyResolved)
       .maybeSingle();
@@ -1890,7 +1965,6 @@ router.patch("/payments/:id", async (req, res) => {
       companyResolved,
       existing.account_id,
       existing.payment_date,
-      existing.created_at,
     );
     if (existingLockErr) {
       return res.status(409).json({ error: existingLockErr });
@@ -1915,7 +1989,6 @@ router.patch("/payments/:id", async (req, res) => {
       companyResolved,
       nextAccountId,
       nextPaymentDate,
-      existing.created_at,
     );
     if (nextLockErr) {
       return res.status(409).json({ error: nextLockErr });
@@ -1955,22 +2028,12 @@ router.delete("/payments/:id", async (req, res) => {
 
     const { data: existing, error: fetchErr } = await supabase
       .from("payments")
-      .select("id, account_id, payment_date, created_at")
+      .select("id, account_id, payment_date")
       .eq("id", paymentId)
       .eq("company_id", companyResolved)
       .maybeSingle();
     if (fetchErr) return res.status(500).json({ error: fetchErr.message });
     if (!existing) return res.status(404).json({ error: "Payment not found" });
-
-    const paymentLockErr = await assertPaymentOpen(
-      companyResolved,
-      existing.account_id,
-      existing.payment_date,
-      existing.created_at,
-    );
-    if (paymentLockErr) {
-      return res.status(409).json({ error: paymentLockErr });
-    }
 
     const { error } = await supabase
       .from("payments")
@@ -2010,7 +2073,7 @@ router.get("/balance/ledger", async (req, res) => {
 
     const accounts = await fetchCompanyInvoicingAccounts(companyResolved);
     const account = accounts.find((row) => row.id === accountId);
-    const openPeriod = currentCalendarPeriod();
+    const openPeriod = await currentCalendarPeriodForCompany(companyResolved);
     const openPeriodClosed = await isAccountPeriodClosed(
       companyResolved,
       accountId,
@@ -2126,16 +2189,6 @@ router.delete("/orders/:id", async (req, res) => {
         .json({ error: companyResolved.error });
     }
 
-    const tenantId = resolveTenantId(req);
-    const orderLockErr = await assertExistingOrderOpen(
-      companyResolved,
-      orderId,
-      [tenantId],
-    );
-    if (orderLockErr) {
-      return res.status(409).json({ error: orderLockErr });
-    }
-
     const { data: existing, error: fetchErr } = await withTenantFilter(
       supabase.from("orders").select("id").eq("id", orderId),
       req,
@@ -2152,6 +2205,122 @@ router.delete("/orders/:id", async (req, res) => {
     res.status(204).send();
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/statements
+ */
+router.get("/statements", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const { data, error } = await withCompanyFilter(
+      supabase
+        .from("monthly_statements")
+        .select(STATEMENT_COLUMNS)
+        .order("period", { ascending: false })
+        .order("account_company_name", { ascending: true }),
+      companyResolved,
+    );
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({ statements: data ?? [] });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * GET /invoicing/statements/:id/pdf-url
+ */
+router.get("/statements/:id/pdf-url", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const statementId = req.params.id?.trim();
+    if (!statementId) return res.status(400).json({ error: "id is required" });
+
+    const { data: statement, error } = await withCompanyFilter(
+      supabase
+        .from("monthly_statements")
+        .select("id, r2_key")
+        .eq("id", statementId),
+      companyResolved,
+    ).maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!statement) return res.status(404).json({ error: "Statement not found" });
+
+    const r2Key = statement.r2_key?.trim();
+    if (!r2Key) {
+      return res.status(404).json({ error: "No PDF available for this statement" });
+    }
+
+    const url = await getDocumentPresignedUrl(r2Key);
+    res.json({ url });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /invoicing/statements/:id/resend
+ */
+router.post("/statements/:id/resend", async (req, res) => {
+  try {
+    const companyResolved = await resolveInvoicingCompanyId(req);
+    if (typeof companyResolved === "object" && "error" in companyResolved) {
+      return res
+        .status(companyResolved.status)
+        .json({ error: companyResolved.error });
+    }
+
+    const statementId = req.params.id?.trim();
+    if (!statementId) return res.status(400).json({ error: "id is required" });
+
+    const result = await resendMonthlyStatement(companyResolved, statementId);
+
+    const { data: statement, error } = await withCompanyFilter(
+      supabase
+        .from("monthly_statements")
+        .select(STATEMENT_COLUMNS)
+        .eq("id", statementId),
+      companyResolved,
+    ).maybeSingle();
+
+    if (error) return res.status(500).json({ error: error.message });
+    if (!statement) return res.status(404).json({ error: "Statement not found" });
+
+    if (result.status === "failed") {
+      return res.status(502).json({
+        error: result.error_message ?? "Failed to send monthly statement",
+        statement,
+      });
+    }
+
+    res.json({ statement, status: result.status });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (message === "Statement not found" || message === "Billing account not found") {
+      return res.status(404).json({ error: message });
+    }
     res.status(500).json({ error: message });
   }
 });
