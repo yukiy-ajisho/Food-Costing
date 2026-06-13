@@ -156,6 +156,29 @@ export async function deleteObjectFromR2(key: string): Promise<void> {
   );
 }
 
+/** Monthly statement PDF. Key: monthly-statements/{companyId}/{accountId}/{period}.pdf */
+export async function uploadMonthlyStatementToR2(
+  companyId: string,
+  accountId: string,
+  period: string,
+  buffer: Buffer,
+): Promise<string> {
+  const key = `monthly-statements/${companyId}/${accountId}/${period}.pdf`;
+  const client = getR2Client();
+  const bucket = getR2BucketName();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: "application/pdf",
+    }),
+  );
+
+  return key;
+}
+
 /** Generate a presigned GET URL for an R2 object key. Expires in 1 hour. */
 export async function getDocumentPresignedUrl(key: string): Promise<string> {
   const client = getR2Client();

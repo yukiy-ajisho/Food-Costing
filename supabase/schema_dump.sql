@@ -3167,7 +3167,8 @@ CREATE TABLE IF NOT EXISTS "public"."companies" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "company_name" "text" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "timezone" "text" DEFAULT 'America/Los_Angeles'::"text" NOT NULL
 );
 
 
@@ -3175,6 +3176,10 @@ ALTER TABLE "public"."companies" OWNER TO "postgres";
 
 
 COMMENT ON TABLE "public"."companies" IS '会社マスタ。Tenant の上位レイヤー。';
+
+
+
+COMMENT ON COLUMN "public"."companies"."timezone" IS 'IANA timezone for invoicing calendar (close month, payment fallback dates, edit locks).';
 
 
 
@@ -3725,6 +3730,44 @@ COMMENT ON COLUMN "public"."menu_cost_lists"."over" IS 'LCOG% red threshold (ove
 
 
 
+CREATE TABLE IF NOT EXISTS "public"."monthly_statements" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "company_id" "uuid" NOT NULL,
+    "account_id" "uuid" NOT NULL,
+    "period" "text" NOT NULL,
+    "account_company_name" "text" NOT NULL,
+    "sent_to" "text",
+    "closing_balance" numeric NOT NULL,
+    "r2_key" "text",
+    "email_id" "text",
+    "status" "text" NOT NULL,
+    "error_message" "text",
+    "sent_at" timestamp with time zone,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "monthly_statements_period_check" CHECK (("period" ~ '^\d{4}-\d{2}$'::"text")),
+    CONSTRAINT "monthly_statements_status_check" CHECK (("status" = ANY (ARRAY['sent'::"text", 'failed'::"text", 'skipped'::"text"])))
+);
+
+
+ALTER TABLE "public"."monthly_statements" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."monthly_statements" IS 'Monthly Statement send history and R2 PDF reference per company × account × period.';
+
+
+
+COMMENT ON COLUMN "public"."monthly_statements"."account_company_name" IS 'Billing account display name snapshot (invoicing_accounts.company_name at send time).';
+
+
+
+COMMENT ON COLUMN "public"."monthly_statements"."sent_to" IS 'Recipient email snapshot (invoicing_accounts.poc_email at send time).';
+
+
+
+COMMENT ON COLUMN "public"."monthly_statements"."email_id" IS 'Resend message ID (not recipient address).';
+
+
+
 CREATE TABLE IF NOT EXISTS "public"."orders" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "tenant_id" "uuid" NOT NULL,
@@ -3773,7 +3816,7 @@ CREATE TABLE IF NOT EXISTS "public"."payments" (
     "amount" numeric NOT NULL,
     "type" "text" DEFAULT 'payment'::"text" NOT NULL,
     "note" "text",
-    "payment_date" "date",
+    "payment_date" "date" NOT NULL,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "created_by" "uuid",
     CONSTRAINT "payments_amount_check" CHECK (("amount" > (0)::numeric)),
@@ -3796,7 +3839,7 @@ COMMENT ON COLUMN "public"."payments"."account_id" IS 'Customer billing account 
 
 
 
-COMMENT ON COLUMN "public"."payments"."payment_date" IS 'Optional date money was received (may differ from created_at).';
+COMMENT ON COLUMN "public"."payments"."payment_date" IS 'Date money was received (calendar date). Required; drives ledger period and edit locks.';
 
 
 
@@ -4500,6 +4543,16 @@ ALTER TABLE ONLY "public"."menu_cost_lists"
 
 
 
+ALTER TABLE ONLY "public"."monthly_statements"
+    ADD CONSTRAINT "monthly_statements_company_account_period_unique" UNIQUE ("company_id", "account_id", "period");
+
+
+
+ALTER TABLE ONLY "public"."monthly_statements"
+    ADD CONSTRAINT "monthly_statements_pkey" PRIMARY KEY ("id");
+
+
+
 ALTER TABLE ONLY "public"."orders"
     ADD CONSTRAINT "orders_pkey" PRIMARY KEY ("id");
 
@@ -4980,6 +5033,14 @@ CREATE INDEX "idx_menu_cost_lists_tenant_id" ON "public"."menu_cost_lists" USING
 
 
 CREATE INDEX "idx_menu_cost_lists_wholesale_list_id" ON "public"."menu_cost_lists" USING "btree" ("wholesale_list_id");
+
+
+
+CREATE INDEX "idx_monthly_statements_account_id" ON "public"."monthly_statements" USING "btree" ("account_id");
+
+
+
+CREATE INDEX "idx_monthly_statements_company_period" ON "public"."monthly_statements" USING "btree" ("company_id", "period" DESC);
 
 
 
@@ -5573,6 +5634,16 @@ ALTER TABLE ONLY "public"."menu_cost_lists"
 
 
 
+ALTER TABLE ONLY "public"."monthly_statements"
+    ADD CONSTRAINT "monthly_statements_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "public"."invoicing_accounts"("id") ON DELETE RESTRICT;
+
+
+
+ALTER TABLE ONLY "public"."monthly_statements"
+    ADD CONSTRAINT "monthly_statements_company_id_fkey" FOREIGN KEY ("company_id") REFERENCES "public"."companies"("id") ON DELETE CASCADE;
+
+
+
 ALTER TABLE ONLY "public"."orders"
     ADD CONSTRAINT "orders_created_by_fkey" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE SET NULL;
 
@@ -6037,6 +6108,23 @@ CREATE POLICY "menu_cost_lists_tenant_access" ON "public"."menu_cost_lists" USIN
 
 
 
+ALTER TABLE "public"."monthly_statements" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "monthly_statements_company_access" ON "public"."monthly_statements" USING ((("company_id" IN ( SELECT "cm"."company_id"
+   FROM "public"."company_members" "cm"
+  WHERE ("cm"."user_id" = "auth"."uid"()))) OR ("company_id" IN ( SELECT "ct"."company_id"
+   FROM ("public"."company_tenants" "ct"
+     JOIN "public"."profiles" "p" ON (("p"."tenant_id" = "ct"."tenant_id")))
+  WHERE (("p"."user_id" = "auth"."uid"()) AND ("p"."role" = ANY (ARRAY['admin'::"text", 'director'::"text"]))))))) WITH CHECK ((("company_id" IN ( SELECT "cm"."company_id"
+   FROM "public"."company_members" "cm"
+  WHERE ("cm"."user_id" = "auth"."uid"()))) OR ("company_id" IN ( SELECT "ct"."company_id"
+   FROM ("public"."company_tenants" "ct"
+     JOIN "public"."profiles" "p" ON (("p"."tenant_id" = "ct"."tenant_id")))
+  WHERE (("p"."user_id" = "auth"."uid"()) AND ("p"."role" = ANY (ARRAY['admin'::"text", 'director'::"text"])))))));
+
+
+
 ALTER TABLE "public"."orders" ENABLE ROW LEVEL SECURITY;
 
 
@@ -6463,6 +6551,12 @@ GRANT ALL ON TABLE "public"."menu_cost_list_members" TO "service_role";
 GRANT ALL ON TABLE "public"."menu_cost_lists" TO "anon";
 GRANT ALL ON TABLE "public"."menu_cost_lists" TO "authenticated";
 GRANT ALL ON TABLE "public"."menu_cost_lists" TO "service_role";
+
+
+
+GRANT ALL ON TABLE "public"."monthly_statements" TO "anon";
+GRANT ALL ON TABLE "public"."monthly_statements" TO "authenticated";
+GRANT ALL ON TABLE "public"."monthly_statements" TO "service_role";
 
 
 

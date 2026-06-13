@@ -136,8 +136,27 @@ export interface Tenant {
 export interface Company {
   id: string;
   company_name: string;
+  timezone?: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export type MonthlyStatementStatus = "sent" | "failed" | "skipped";
+
+export interface MonthlyStatement {
+  id: string;
+  company_id: string;
+  account_id: string;
+  period: string;
+  account_company_name: string;
+  sent_to: string | null;
+  closing_balance: number;
+  r2_key: string | null;
+  email_id: string | null;
+  status: MonthlyStatementStatus;
+  error_message: string | null;
+  sent_at: string | null;
+  created_at?: string;
 }
 
 export type CompanyMemberRole = "company_admin" | "company_director";

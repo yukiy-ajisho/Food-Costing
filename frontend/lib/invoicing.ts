@@ -7,6 +7,7 @@ export type InvoicingAccount = {
   company_name: string;
   poc_phone: string | null;
   poc_email: string | null;
+  send_monthly_statement: boolean;
   created_at?: string;
   updated_at?: string;
 };
@@ -15,7 +16,10 @@ export type InvoicingAccountInput = {
   company_name: string;
   poc_phone?: string | null;
   poc_email?: string | null;
+  send_monthly_statement?: boolean;
 };
+
+export type InvoicingAccountPatch = Partial<InvoicingAccountInput>;
 
 export type DeliverySite = {
   id: string;
@@ -136,6 +140,23 @@ export type Order = {
   created_by?: string | null;
 };
 
+export type MonthlyStatementStatus = "sent" | "failed" | "skipped";
+
+export type MonthlyStatement = {
+  id: string;
+  company_id: string;
+  account_id: string;
+  period: string;
+  account_company_name: string;
+  sent_to: string | null;
+  closing_balance: number;
+  r2_key: string | null;
+  status: MonthlyStatementStatus;
+  error_message: string | null;
+  sent_at: string | null;
+  created_at?: string;
+};
+
 export const invoicingAPI = {
   listAccounts: () =>
     apiRequest<{ accounts: InvoicingAccount[] }>("/invoicing/accounts"),
@@ -146,7 +167,7 @@ export const invoicingAPI = {
       body: JSON.stringify(body),
     }),
 
-  updateAccount: (id: string, body: InvoicingAccountInput) =>
+  updateAccount: (id: string, body: InvoicingAccountPatch) =>
     apiRequest<{ account: InvoicingAccount }>(
       `/invoicing/accounts/${encodeURIComponent(id)}`,
       {
@@ -358,6 +379,20 @@ export const invoicingAPI = {
       method: "POST",
       body: JSON.stringify({ period }),
     }),
+
+  listStatements: () =>
+    apiRequest<{ statements: MonthlyStatement[] }>("/invoicing/statements"),
+
+  getStatementPdfUrl: (statementId: string) =>
+    apiRequest<{ url: string }>(
+      `/invoicing/statements/${encodeURIComponent(statementId)}/pdf-url`,
+    ),
+
+  resendStatement: (statementId: string) =>
+    apiRequest<{ statement: MonthlyStatement; status: MonthlyStatementStatus }>(
+      `/invoicing/statements/${encodeURIComponent(statementId)}/resend`,
+      { method: "POST" },
+    ),
 };
 
 export type CompanyInvoicingAccount = {
@@ -366,6 +401,8 @@ export type CompanyInvoicingAccount = {
   company_name: string;
 };
 
+export type AdjustmentDirection = "decrease" | "increase";
+
 export type Payment = {
   id: string;
   company_id: string;
@@ -373,8 +410,9 @@ export type Payment = {
   account_name: string;
   amount: number;
   type: "payment" | "adjustment";
+  adjustment_direction: AdjustmentDirection | null;
   note: string | null;
-  payment_date: string | null;
+  payment_date: string;
   created_at: string;
   created_by: string | null;
 };
@@ -385,14 +423,15 @@ export type PaymentInput = {
   account_id: string;
   amount: number;
   type?: PaymentType;
-  payment_date?: string | null;
+  adjustment_direction?: AdjustmentDirection | null;
+  payment_date: string;
   note?: string | null;
 };
 
 export type PaymentPatchInput = {
   account_id?: string;
   amount?: number;
-  payment_date?: string | null;
+  payment_date?: string;
   note?: string | null;
 };
 
@@ -409,6 +448,7 @@ export type LedgerRow = {
   running_balance: number;
   type: LedgerEntryType;
   period?: string;
+  adjustment_direction?: AdjustmentDirection | null;
 };
 
 export type BalanceLedgerResponse = {

@@ -49,6 +49,7 @@ import recipeSummariesRouter from "./routes/recipe-summaries";
 import standardTechnicalSheetsRouter from "./routes/standard-technical-sheets";
 import recipeCostReportRouter from "./routes/recipe-cost-report";
 import invoicingRouter from "./routes/invoicing";
+import invoicingCronRouter from "./routes/invoicing-cron";
 import { getR2Client, getR2BucketName } from "./config/r2";
 
 // Cedar Authorizerを初期化（Phase 2）- ルート登録の前に実行
@@ -103,6 +104,8 @@ app.get("/", (req, res) => {
 // ============================================
 // Webhook routes: 認証不要（Resendからの直接アクセス）
 app.use("/webhooks", webhooksRouter);
+// Invoicing cron (pg_cron + pg_net). CRON_SECRET required.
+app.use("/internal/cron", invoicingCronRouter);
 // Invite routes: /invite/verify/:token is public, others require auth
 app.use("/invite", inviteRouter);
 // Access requests: POST is public, others require System Admin

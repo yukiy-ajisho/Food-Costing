@@ -20,6 +20,7 @@ import {
   orderToPreviewPayload,
   type GeneratePreviewPayload,
 } from "@/lib/invoicingPreview";
+import { ConfirmModal } from "@/components/ConfirmModal";
 import { OrdersHeaderFilter } from "./OrdersHeaderFilter";
 import { OrdersHeaderRangeFilter } from "./OrdersHeaderRangeFilter";
 import { OrderInvoicePreviewModal } from "./OrderInvoicePreviewModal";
@@ -27,7 +28,8 @@ import { CreateOrderModal } from "./CreateOrderModal";
 import { formatInvoiceDateDisplay } from "@/lib/invoicingDateTime";
 import {
   buildClosedPeriodSet,
-  isOrderLocked,
+  deleteBalanceImpactMessage,
+  ledgerEntryAffectsCurrentBalance,
 } from "@/lib/invoicingLedger";
 
 const DEFAULT_SORT: OrdersSortState = { key: "date", ascending: false };
@@ -52,6 +54,7 @@ export function OrdersTab() {
   const [previewSentAt, setPreviewSentAt] = useState<string | null>(null);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<OrderSummary | null>(null);
   const [showGeneration, setShowGeneration] = useState(false);
   const [filters, setFilters] = useState<OrdersFilters>(EMPTY_ORDERS_FILTERS);
   const [sort, setSort] = useState<OrdersSortState>(DEFAULT_SORT);
@@ -195,25 +198,20 @@ export function OrdersTab() {
     setPreviewSentAt(null);
   };
 
-  const handleDelete = async (order: OrderSummary) => {
-    if (isOrderLocked(order, closedByAccount)) {
-      setError("This order is in a closed period and cannot be deleted.");
-      return;
-    }
-    if (
-      !window.confirm(
-        `Delete order "${order.invoice_number}"? This cannot be undone.`,
-      )
-    ) {
-      return;
-    }
-    setDeletingId(order.id);
+  const requestDelete = (order: OrderSummary) => {
+    setDeleteConfirm(order);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return;
+    setDeletingId(deleteConfirm.id);
     setError(null);
     try {
-      await invoicingAPI.deleteOrder(order.id);
-      if (previewOrderId === order.id) {
+      await invoicingAPI.deleteOrder(deleteConfirm.id);
+      if (previewOrderId === deleteConfirm.id) {
         closePreview();
       }
+      setDeleteConfirm(null);
       await loadOrders();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Delete failed");
@@ -399,16 +397,8 @@ export function OrdersTab() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => void handleDelete(order)}
-                        disabled={
-                          deletingId === order.id ||
-                          isOrderLocked(order, closedByAccount)
-                        }
-                        title={
-                          isOrderLocked(order, closedByAccount)
-                            ? "Closed period"
-                            : undefined
-                        }
+                        onClick={() => requestDelete(order)}
+                        disabled={deletingId === order.id}
                         className={`rounded p-1.5 disabled:cursor-not-allowed disabled:opacity-50 ${
                           isDark
                             ? "text-red-400 hover:bg-slate-600"
@@ -453,6 +443,36 @@ export function OrdersTab() {
             setShowGeneration(false);
             void loadOrders();
           }}
+        />
+      ) : null}
+
+      {deleteConfirm ? (
+        <ConfirmModal
+          isDark={isDark}
+          title="Delete order"
+          description={
+            <>
+              Delete order{" "}
+              <span className="font-medium">{deleteConfirm.invoice_number}</span>
+              ?{" "}
+              {deleteBalanceImpactMessage(
+                Boolean(deleteConfirm.account_id) &&
+                  Boolean(deleteConfirm.order_created_date) &&
+                  ledgerEntryAffectsCurrentBalance(
+                    deleteConfirm.order_created_date!,
+                    closedByAccount,
+                    deleteConfirm.account_id!,
+                  ),
+              )}
+            </>
+          }
+          confirmLabel="Delete"
+          confirming={deletingId === deleteConfirm.id}
+          confirmingLabel="Deleting…"
+          onCancel={() => {
+            if (deletingId !== deleteConfirm.id) setDeleteConfirm(null);
+          }}
+          onConfirm={() => void confirmDelete()}
         />
       ) : null}
     </div>

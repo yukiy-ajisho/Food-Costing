@@ -25,7 +25,7 @@ export interface InvitationEmailParams {
  * @returns email_id (Resendが返すメール送信の一意ID)
  */
 export async function sendInvitationEmail(
-  params: InvitationEmailParams
+  params: InvitationEmailParams,
 ): Promise<string> {
   const { to, tenantName, inviterName, role, acceptUrl } = params;
 
@@ -44,7 +44,7 @@ export async function sendInvitationEmail(
         inviterName,
         role,
         acceptUrl,
-      })
+      }),
     );
 
     const { data, error } = await resend.emails.send({
@@ -84,7 +84,7 @@ export interface CompanyInvitationEmailParams {
  * @returns email_id (Resendが返すメール送信の一意ID)
  */
 export async function sendCompanyInvitationEmail(
-  params: CompanyInvitationEmailParams
+  params: CompanyInvitationEmailParams,
 ): Promise<string> {
   const { to, companyName, inviterName, acceptUrl } = params;
 
@@ -183,6 +183,63 @@ export async function sendInvoiceEmail(
 
   if (error) {
     console.error("[Email Service] Error sending invoice email:", error);
+    throw error;
+  }
+
+  if (!data?.id) {
+    throw new Error("Resend did not return an email_id");
+  }
+
+  return data.id;
+}
+
+export interface MonthlyStatementEmailParams {
+  to: string;
+  accountCompanyName: string;
+  periodLabel: string;
+  closingBalance: number;
+  pdfBase64: string;
+}
+
+export async function sendMonthlyStatementEmail(
+  params: MonthlyStatementEmailParams,
+): Promise<string> {
+  const { to, accountCompanyName, periodLabel, closingBalance, pdfBase64 } =
+    params;
+
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is not configured");
+  }
+
+  const resend = getResendClient();
+  const safePeriod = periodLabel.replace(/[^\w\s-]/g, "").trim() || "statement";
+  const subject = `Monthly Statement — ${accountCompanyName} — ${periodLabel}`;
+  const html = `
+    <p>Please find attached your monthly statement for <strong>${accountCompanyName}</strong>.</p>
+    <p>Period: ${periodLabel}<br/>
+    Closing balance: $${closingBalance.toFixed(2)}</p>
+    <p>This message was sent from Food Costing.</p>
+  `.trim();
+
+  const { data, error } = await resend.emails.send({
+    from:
+      process.env.RESEND_FROM_EMAIL || "Food Costing <onboarding@resend.dev>",
+    to: [to],
+    subject,
+    html,
+    attachments: [
+      {
+        filename: `monthly-statement-${safePeriod}.pdf`,
+        content: pdfBase64,
+      },
+    ],
+  });
+
+  if (error) {
+    console.error(
+      "[Email Service] Error sending monthly statement email:",
+      error,
+    );
     throw error;
   }
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Edit, Plus, Save, Trash2, X } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useCompany } from "@/contexts/CompanyContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { PricingListPickerRow } from "@/components/recipe-cost-report/PricingListPickerRow";
 import { ItemKindBadge } from "@/components/recipe-cost-report/ItemKindBadge";
@@ -38,6 +39,11 @@ import {
   formatInvoiceDateDisplay,
   todayLocalDateYmd,
 } from "@/lib/invoicingDateTime";
+import {
+  buildClosedPeriodSet,
+  isAccountDateOpenForNewEntry,
+  NEW_ENTRY_DATE_BLOCKED_MESSAGE,
+} from "@/lib/invoicingLedger";
 
 type RowInput = {
   unitSize: string;
@@ -107,6 +113,7 @@ export function CreateOrderTab({
   onOrderSaved,
 }: CreateOrderTabProps = {}) {
   const { theme } = useTheme();
+  const { companies, selectedCompanyId } = useCompany();
   const { selectedTenantId } = useTenant();
   const isDark = theme === "dark";
 
@@ -147,6 +154,10 @@ export function CreateOrderTab({
   const [costsLoading, setCostsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [closedByAccount, setClosedByAccount] = useState<
+    Map<string, Set<string>>
+  >(new Map());
+  const [closedPeriodsReady, setClosedPeriodsReady] = useState(false);
 
   const [isEditMode, setIsEditMode] = useState(false);
   const [pendingRemovals, setPendingRemovals] = useState<Set<string>>(
@@ -400,6 +411,22 @@ export function CreateOrderTab({
   }, []);
 
   useEffect(() => {
+    void invoicingAPI
+      .listClosedPeriods()
+      .then((data) => {
+        setClosedByAccount(
+          buildClosedPeriodSet(data.closed_periods ?? []),
+        );
+      })
+      .catch(() => {
+        setClosedByAccount(new Map());
+      })
+      .finally(() => {
+        setClosedPeriodsReady(true);
+      });
+  }, []);
+
+  useEffect(() => {
     if (!selectedListId) return;
     void loadDetail(selectedListId);
   }, [selectedListId, loadDetail]);
@@ -508,6 +535,34 @@ export function CreateOrderTab({
     );
   }, [candidates, pricedItemIds, items, pendingRemovals]);
 
+  const companyTimezone = useMemo(
+    () => companies.find((company) => company.id === selectedCompanyId)?.timezone,
+    [companies, selectedCompanyId],
+  );
+
+  const orderAccountId = useMemo(
+    () =>
+      deliverySites.find((site) => site.id === deliverySiteId)?.account_id ?? "",
+    [deliverySites, deliverySiteId],
+  );
+
+  const orderCreatedDateBlocked = useMemo(() => {
+    if (!closedPeriodsReady) return false;
+    if (!orderCreatedDate.trim() || !orderAccountId) return false;
+    return !isAccountDateOpenForNewEntry(
+      orderCreatedDate,
+      closedByAccount,
+      orderAccountId,
+      companyTimezone,
+    );
+  }, [
+    orderCreatedDate,
+    orderAccountId,
+    closedByAccount,
+    companyTimezone,
+    closedPeriodsReady,
+  ]);
+
   const generateValidation = useMemo(
     () =>
       validateInvoiceGenerateInput({
@@ -538,7 +593,8 @@ export function CreateOrderTab({
     ],
   );
 
-  const canGenerate = generateValidation.ok;
+  const canGenerate =
+    closedPeriodsReady && generateValidation.ok && !orderCreatedDateBlocked;
   const hasUnpricedItems = unpricedItemIds.length > 0;
   const generateDisabled =
     !canGenerate || previewLoading || hasUnpricedItems;
@@ -553,6 +609,7 @@ export function CreateOrderTab({
     value: string,
     onChange: (next: string) => void,
     fieldKey?: InvoiceGenerateValidationField,
+    options?: { blocked?: boolean; blockedMessage?: string },
   ) => (
     <div className={dateFieldCls}>
       <span className={`mb-1 block text-xs font-medium ${muted}`}>{label}</span>
@@ -561,12 +618,21 @@ export function CreateOrderTab({
           {value.trim() ? formatInvoiceDateDisplay(value) : "—"}
         </span>
       ) : (
-        <input
-          type="date"
-          className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""}`}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        />
+        <>
+          <input
+            type="date"
+            className={`${dateInputCls} ${fieldKey ? invalidFieldCls(fieldKey) : ""} ${
+              options?.blocked ? "border-red-500 ring-1 ring-red-500/50" : ""
+            }`}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          {options?.blocked && options.blockedMessage ? (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+              {options.blockedMessage}
+            </p>
+          ) : null}
+        </>
       )}
     </div>
   );
@@ -716,6 +782,10 @@ export function CreateOrderTab({
     }
     if (!orderCreatedDate.trim()) {
       setError("Order creation date is required before Generate.");
+      return;
+    }
+    if (orderCreatedDateBlocked) {
+      setError(NEW_ENTRY_DATE_BLOCKED_MESSAGE);
       return;
     }
 
@@ -1112,6 +1182,12 @@ export function CreateOrderTab({
                     orderCreatedDate,
                     setOrderCreatedDate,
                     "orderCreatedDate",
+                    orderCreatedDateBlocked
+                      ? {
+                          blocked: true,
+                          blockedMessage: NEW_ENTRY_DATE_BLOCKED_MESSAGE,
+                        }
+                      : undefined,
                   )}
                 </div>
               </div>
@@ -1152,7 +1228,7 @@ export function CreateOrderTab({
                     </button>
                     <button
                       type="button"
-                      aria-disabled={generateDisabled}
+                      disabled={generateDisabled}
                       onClick={handleGenerateClick}
                       className={`${btnPrimary} ${
                         generateDisabled ? "cursor-not-allowed opacity-50" : ""
