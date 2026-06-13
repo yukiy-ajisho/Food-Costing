@@ -227,6 +227,50 @@ export async function isAccountPeriodClosed(
   return Boolean(data);
 }
 
+/** True when the account has any order or payment on or before throughDate. */
+export async function accountHasLedgerActivityThroughDate(
+  companyId: string,
+  accountId: string,
+  throughDate: string,
+): Promise<boolean> {
+  const tenantIds = await fetchCompanyTenantIds(companyId);
+  const siteIds = await fetchDeliverySiteIdsForAccount(companyId, accountId);
+
+  if (tenantIds.length > 0 && siteIds.length > 0) {
+    const { data: order, error: ordersErr } = await supabase
+      .from("orders")
+      .select("id")
+      .in("tenant_id", tenantIds)
+      .in("delivery_site_id", siteIds)
+      .lte("order_created_date", throughDate)
+      .limit(1)
+      .maybeSingle();
+    if (ordersErr) throw new Error(ordersErr.message);
+    if (order) return true;
+  }
+
+  const { data: payment, error: paymentsErr } = await supabase
+    .from("payments")
+    .select("id")
+    .eq("company_id", companyId)
+    .eq("account_id", accountId)
+    .lte("payment_date", throughDate)
+    .limit(1)
+    .maybeSingle();
+  if (paymentsErr) throw new Error(paymentsErr.message);
+  return Boolean(payment);
+}
+
+/** Cron auto-close applies only after the account's first ledger activity. */
+export async function accountQualifiesForAutoClose(
+  companyId: string,
+  accountId: string,
+  period: string,
+): Promise<boolean> {
+  const throughDate = periodEndDate(period);
+  return accountHasLedgerActivityThroughDate(companyId, accountId, throughDate);
+}
+
 export async function computeAccountBalanceThroughDate(
   companyId: string,
   accountId: string,

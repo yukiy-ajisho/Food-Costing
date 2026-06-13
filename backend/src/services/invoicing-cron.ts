@@ -1,9 +1,14 @@
 import { previousMonthPeriodInTz } from "../lib/company-timezone";
 import { supabase } from "../config/supabase";
 import {
+  accountQualifiesForAutoClose,
   closeAccountPeriod,
   isAccountPeriodClosed,
 } from "./invoicing-ledger";
+import {
+  accountNeedsAutoClose,
+  accountNeedsStatementWork,
+} from "./invoicing-cron-logic";
 import { sendMonthlyStatementForAccount } from "./monthly-statement-send";
 
 export type InvoicingHourlyJobResult = {
@@ -84,8 +89,15 @@ async function fetchStatementForAccountPeriod(
 }
 
 function statementNeedsSend(row: StatementRow | null): boolean {
-  if (!row) return true;
-  return row.status === "failed";
+  return accountNeedsStatementWork(true, true, row?.status);
+}
+
+async function accountHasActivityForAutoClose(
+  companyId: string,
+  accountId: string,
+  period: string,
+): Promise<boolean> {
+  return accountQualifiesForAutoClose(companyId, accountId, period);
 }
 
 function companyInvoicingTimezone(company: CompanyRow): string | null {
@@ -107,18 +119,29 @@ export async function hasInvoicingCronPendingWork(): Promise<boolean> {
         account.id,
         period,
       );
-      if (!closed) {
+      const hasActivity = closed
+        ? true
+        : await accountHasActivityForAutoClose(
+            company.id,
+            account.id,
+            period,
+          );
+      if (
+        accountNeedsAutoClose(closed, hasActivity)
+      ) {
         return true;
       }
-      if (!account.send_monthly_statement) {
-        continue;
-      }
-      const statement = await fetchStatementForAccountPeriod(
-        company.id,
-        account.id,
-        period,
-      );
-      if (statementNeedsSend(statement)) {
+      if (
+        accountNeedsStatementWork(
+          closed,
+          account.send_monthly_statement,
+          (await fetchStatementForAccountPeriod(
+            company.id,
+            account.id,
+            period,
+          ))?.status,
+        )
+      ) {
         return true;
       }
     }
@@ -153,6 +176,14 @@ export async function runInvoicingHourlyJob(): Promise<InvoicingHourlyJobResult>
 
     for (const account of accounts) {
       try {
+        const qualifies = await accountHasActivityForAutoClose(
+          company.id,
+          account.id,
+          period,
+        );
+        if (!qualifies) {
+          continue;
+        }
         const closeResult = await closeAccountPeriod(
           company.id,
           account.id,
