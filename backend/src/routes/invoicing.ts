@@ -33,7 +33,6 @@ import {
   type OrderLineJson,
 } from "../services/invoicing-data";
 import {
-  assertExistingOrderOpen,
   assertOrderDateOpen,
   assertPaymentOpen,
   buildAccountLedger,
@@ -2189,8 +2188,6 @@ router.delete("/orders/:id", async (req, res) => {
         .status(companyResolved.status)
         .json({ error: companyResolved.error });
     }
-
-    const tenantId = resolveTenantId(req);
 
     const { data: existing, error: fetchErr } = await withTenantFilter(
       supabase.from("orders").select("id").eq("id", orderId),

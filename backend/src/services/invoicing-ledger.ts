@@ -397,7 +397,6 @@ export async function assertOrderDateOpen(
   if (!site || site.company_id !== companyId) {
     return "Invalid delivery_site_id";
   }
-  const period = dateToPeriod(orderCreatedDate);
   return assertAccountPeriodOpen(companyId, site.account_id, orderCreatedDate);
 }
 
