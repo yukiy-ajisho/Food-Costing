@@ -1,5 +1,9 @@
 import type { InvoicingCostBreakdown } from "./invoicingCalc";
-import { validateInvoiceGenerateInput } from "./invoicingGenerateValidation";
+import {
+  isBillableInvoiceUnits,
+  parseInvoiceUnitsInput,
+  validateInvoiceGenerateInput,
+} from "./invoicingGenerateValidation";
 
 const cost: InvoicingCostBreakdown = {
   food_cost_per_gram: 0.008,
@@ -17,10 +21,25 @@ function rowInput(
   return {
     unitSize: "100",
     unitSizeUnit: "g",
-    units: "",
+    units: "1",
     ...overrides,
   };
 }
+
+describe("invoicingGenerateValidation helpers", () => {
+  it("treats empty units as non-billable", () => {
+    expect(parseInvoiceUnitsInput("")).toBeNull();
+    expect(isBillableInvoiceUnits(null)).toBe(false);
+  });
+
+  it("treats zero units as non-billable", () => {
+    expect(isBillableInvoiceUnits(0)).toBe(false);
+  });
+
+  it("treats positive units as billable", () => {
+    expect(isBillableInvoiceUnits(3)).toBe(true);
+  });
+});
 
 describe("validateInvoiceGenerateInput", () => {
   it("flags empty dates", () => {
@@ -53,21 +72,61 @@ describe("validateInvoiceGenerateInput", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("allows empty units", () => {
+  it("allows empty units when another row is billable", () => {
     const result = validateInvoiceGenerateInput({
       loading: false,
       costsLoading: false,
       orderReceivedDate: "2026-05-24",
       deliveryDate: "2026-05-25",
       orderCreatedDate: "2026-05-25",
-      visibleItemIds: ["item-1"],
-      rowInputs: new Map([["item-1", rowInput({ units: "" })]]),
-      costs: { "item-1": cost },
+      visibleItemIds: ["item-1", "item-2"],
+      rowInputs: new Map([
+        ["item-1", rowInput({ units: "" })],
+        ["item-2", rowInput({ units: "2" })],
+      ]),
+      costs: { "item-1": cost, "item-2": cost },
     });
     expect(result.ok).toBe(true);
+    expect(result.hasNoBillableLines).toBe(false);
     expect([...result.invalidFields].some((f) => f.startsWith("units:"))).toBe(
       false,
     );
+  });
+
+  it("blocks generate when every row has empty or zero units", () => {
+    const result = validateInvoiceGenerateInput({
+      loading: false,
+      costsLoading: false,
+      orderReceivedDate: "2026-05-24",
+      deliveryDate: "2026-05-25",
+      orderCreatedDate: "2026-05-25",
+      visibleItemIds: ["item-1", "item-2"],
+      rowInputs: new Map([
+        ["item-1", rowInput({ units: "" })],
+        ["item-2", rowInput({ units: "0" })],
+      ]),
+      costs: { "item-1": cost, "item-2": cost },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.hasNoBillableLines).toBe(true);
+  });
+
+  it("does not require unit size on non-billable rows", () => {
+    const result = validateInvoiceGenerateInput({
+      loading: false,
+      costsLoading: false,
+      orderReceivedDate: "2026-05-24",
+      deliveryDate: "2026-05-25",
+      orderCreatedDate: "2026-05-25",
+      visibleItemIds: ["item-1", "item-2"],
+      rowInputs: new Map([
+        ["item-1", rowInput({ unitSize: "", units: "" })],
+        ["item-2", rowInput({ units: "2" })],
+      ]),
+      costs: { "item-1": cost, "item-2": cost },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.invalidFields.has("unitSize:item-1")).toBe(false);
   });
 
   it("flags negative units only", () => {
@@ -85,35 +144,41 @@ describe("validateInvoiceGenerateInput", () => {
     expect(result.invalidFields.has("units:item-1")).toBe(true);
   });
 
-  it("tracks missing cost without invalid field border", () => {
+  it("tracks missing cost only for billable rows", () => {
     const result = validateInvoiceGenerateInput({
       loading: false,
       costsLoading: false,
       orderReceivedDate: "2026-05-24",
       deliveryDate: "2026-05-25",
       orderCreatedDate: "2026-05-25",
-      visibleItemIds: ["item-1"],
-      rowInputs: new Map([["item-1", rowInput()]]),
-      costs: {},
+      visibleItemIds: ["item-1", "item-2"],
+      rowInputs: new Map([
+        ["item-1", rowInput({ units: "" })],
+        ["item-2", rowInput({ units: "2" })],
+      ]),
+      costs: { "item-1": cost },
     });
     expect(result.ok).toBe(false);
-    expect(result.missingCostItemIds).toEqual(["item-1"]);
+    expect(result.missingCostItemIds).toEqual(["item-2"]);
     expect(result.invalidFields.size).toBe(0);
   });
 
-  it("flags unpriced items", () => {
+  it("flags unpriced billable items only", () => {
     const result = validateInvoiceGenerateInput({
       loading: false,
       costsLoading: false,
       orderReceivedDate: "2026-05-24",
       deliveryDate: "2026-05-25",
       orderCreatedDate: "2026-05-25",
-      visibleItemIds: ["item-1"],
-      rowInputs: new Map([["item-1", rowInput()]]),
-      costs: { "item-1": cost },
-      unpricedItemIds: ["item-1"],
+      visibleItemIds: ["item-1", "item-2"],
+      rowInputs: new Map([
+        ["item-1", rowInput({ units: "" })],
+        ["item-2", rowInput({ units: "2" })],
+      ]),
+      costs: { "item-1": cost, "item-2": cost },
+      unpricedItemIds: ["item-1", "item-2"],
     });
     expect(result.ok).toBe(false);
-    expect(result.unpricedItemIds).toEqual(["item-1"]);
+    expect(result.unpricedItemIds).toEqual(["item-2"]);
   });
 });

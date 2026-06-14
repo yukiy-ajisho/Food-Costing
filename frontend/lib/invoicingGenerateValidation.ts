@@ -23,7 +23,28 @@ export type InvoiceGenerateValidationResult = {
   missingCostItemIds: string[];
   unpricedItemIds: string[];
   hasNoItems: boolean;
+  /** List has rows but none with units > 0 (empty or zero only). */
+  hasNoBillableLines: boolean;
 };
+
+/** Empty input → null; otherwise parsed number (may be NaN). */
+export function parseInvoiceUnitsInput(unitsRaw: string): number | null {
+  const trimmed = unitsRaw.trim();
+  if (trimmed === "") return null;
+  return parseFloat(trimmed);
+}
+
+export function isBillableInvoiceUnits(units: number | null): boolean {
+  return units != null && Number.isFinite(units) && units > 0;
+}
+
+export function isInvalidInvoiceUnitsInput(
+  unitsRaw: string,
+  units: number | null,
+): boolean {
+  if (unitsRaw.trim() === "") return false;
+  return units == null || !Number.isFinite(units) || units < 0;
+}
 
 export function validateInvoiceGenerateInput(params: {
   loading: boolean;
@@ -40,6 +61,7 @@ export function validateInvoiceGenerateInput(params: {
   const invalidFields = new Set<InvoiceGenerateValidationField>();
   const missingCostItemIds: string[] = [];
   const unpricedItemIds = params.unpricedItemIds ?? [];
+  const billableUnpricedItemIds: string[] = [];
 
   if (params.loading || params.costsLoading) {
     return {
@@ -48,6 +70,7 @@ export function validateInvoiceGenerateInput(params: {
       missingCostItemIds,
       unpricedItemIds,
       hasNoItems: false,
+      hasNoBillableLines: false,
     };
   }
 
@@ -59,6 +82,7 @@ export function validateInvoiceGenerateInput(params: {
   }
 
   const hasNoItems = params.visibleItemIds.length === 0;
+  let billableLineCount = 0;
 
   for (const itemId of params.visibleItemIds) {
     const input =
@@ -68,9 +92,20 @@ export function validateInvoiceGenerateInput(params: {
         unitSizeUnit: "g",
         units: "",
       };
+    const unitsRaw = input.units;
+    const units = parseInvoiceUnitsInput(unitsRaw);
+
+    if (isInvalidInvoiceUnitsInput(unitsRaw, units)) {
+      invalidFields.add(`units:${itemId}`);
+    }
+
+    if (!isBillableInvoiceUnits(units)) {
+      continue;
+    }
+
+    billableLineCount += 1;
+
     const unitSize = parseFloat(input.unitSize);
-    const unitsRaw = input.units.trim();
-    const units = unitsRaw === "" ? null : parseFloat(unitsRaw);
     const unitSizeUnit = input.unitSizeUnit.trim();
 
     if (!Number.isFinite(unitSize) || unitSize <= 0) {
@@ -79,25 +114,29 @@ export function validateInvoiceGenerateInput(params: {
     if (!unitSizeUnit) {
       invalidFields.add(`unitSizeUnit:${itemId}`);
     }
-    if (units != null && (!Number.isFinite(units) || units < 0)) {
-      invalidFields.add(`units:${itemId}`);
-    }
     if (costPerKgFromBreakdown(params.costs[itemId]) == null) {
       missingCostItemIds.push(itemId);
     }
+    if (unpricedItemIds.includes(itemId)) {
+      billableUnpricedItemIds.push(itemId);
+    }
   }
+
+  const hasNoBillableLines = !hasNoItems && billableLineCount === 0;
 
   const ok =
     invalidFields.size === 0 &&
     !hasNoItems &&
+    !hasNoBillableLines &&
     missingCostItemIds.length === 0 &&
-    unpricedItemIds.length === 0;
+    billableUnpricedItemIds.length === 0;
 
   return {
     ok,
     invalidFields,
     missingCostItemIds,
-    unpricedItemIds,
+    unpricedItemIds: billableUnpricedItemIds,
     hasNoItems,
+    hasNoBillableLines,
   };
 }
