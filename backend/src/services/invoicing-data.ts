@@ -380,23 +380,24 @@ export function mergeUnitSizesIntoListLines(
   });
 }
 
-/** Every list row must appear exactly once on the invoice (no partial generate). */
-export function validateOrderLinesCoverAllListLines(
+/** Order lines must be a non-empty subset of list items (zero/blank units omit rows). */
+export function validateOrderLinesSubsetOfListLines(
   listLines: InvoiceListLineJson[],
   orderLines: OrderLineJson[],
 ): string | null {
-  if (orderLines.length !== listLines.length) {
-    return "Order must include every item on the list";
+  if (orderLines.length === 0) {
+    return "Order must include at least one line";
   }
   const listIds = new Set(listLines.map((l) => l.item_id));
-  const orderIds = new Set(orderLines.map((l) => l.item_id));
-  if (listIds.size !== orderIds.size || listIds.size !== listLines.length) {
-    return "Order lines must match list items exactly";
-  }
-  for (const id of listIds) {
-    if (!orderIds.has(id)) {
-      return "Order is missing one or more list items";
+  const orderIds = new Set<string>();
+  for (const line of orderLines) {
+    if (!listIds.has(line.item_id)) {
+      return `Order line "${line.name}" is not on the list`;
     }
+    if (orderIds.has(line.item_id)) {
+      return "Order lines must not duplicate list items";
+    }
+    orderIds.add(line.item_id);
   }
   return null;
 }

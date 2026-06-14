@@ -77,8 +77,12 @@ export function OrderInvoicePreviewModal({
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [pdfBytes, setPdfBytes] = useState<Uint8Array | null>(null);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [pendingAction, setPendingAction] = useState<
+    "save" | "save-and-send" | "send" | null
+  >(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const actionBusy = pendingAction !== null;
 
   useEffect(() => {
     setMounted(true);
@@ -146,7 +150,7 @@ export function OrderInvoicePreviewModal({
   };
 
   const handleSave = async (send: boolean) => {
-    setSaving(true);
+    setPendingAction(send ? "save-and-send" : "save");
     setActionError(null);
     try {
       const bytes = await buildPdfForAction(send);
@@ -170,13 +174,13 @@ export function OrderInvoicePreviewModal({
     } catch (e: unknown) {
       setActionError(e instanceof Error ? e.message : "Failed to save order");
     } finally {
-      setSaving(false);
+      setPendingAction(null);
     }
   };
 
   const handleSend = async () => {
     if (!orderId) return;
-    setSaving(true);
+    setPendingAction("send");
     setActionError(null);
     try {
       const sentDateYmd = todayLocalDateYmd();
@@ -188,7 +192,7 @@ export function OrderInvoicePreviewModal({
     } catch (e: unknown) {
       setActionError(e instanceof Error ? e.message : "Failed to send invoice");
     } finally {
-      setSaving(false);
+      setPendingAction(null);
     }
   };
 
@@ -368,7 +372,7 @@ export function OrderInvoicePreviewModal({
               <button
                 type="button"
                 onClick={onClose}
-                disabled={saving}
+                disabled={actionBusy}
                 className={`rounded-md px-4 py-2 text-sm font-medium ${
                   isDark
                     ? "bg-slate-700 text-slate-200 hover:bg-slate-600"
@@ -381,29 +385,35 @@ export function OrderInvoicePreviewModal({
                 <>
                   <button
                     type="button"
-                    disabled={saving || !pdfBytes}
+                    disabled={actionBusy || !pdfBytes}
                     onClick={() => void handleSave(false)}
                     className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                   >
-                    {saving ? "Saving…" : "Save"}
+                    {pendingAction === "save" ? "Saving…" : "Save"}
                   </button>
                   <button
                     type="button"
-                    disabled={saving || !pdfBytes}
+                    disabled={actionBusy || !pdfBytes}
                     onClick={() => void handleSave(true)}
                     className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                   >
-                    {saving ? "Sending…" : "Save and Send"}
+                    {pendingAction === "save-and-send"
+                      ? "Sending…"
+                      : "Save and Send"}
                   </button>
                 </>
               ) : (
                 <button
                   type="button"
-                  disabled={saving || !pdfBytes}
+                  disabled={actionBusy || !pdfBytes}
                   onClick={() => void handleSend()}
                   className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
-                  {saving ? "Sending…" : sentAt ? "Send again" : "Send"}
+                  {pendingAction === "send"
+                    ? "Sending…"
+                    : sentAt
+                      ? "Send again"
+                      : "Send"}
                 </button>
               )}
             </div>
