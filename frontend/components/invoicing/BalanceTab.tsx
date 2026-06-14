@@ -33,8 +33,6 @@ export function BalanceTab() {
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showCloseModal, setShowCloseModal] = useState(false);
-  const [closing, setClosing] = useState(false);
 
   const border = isDark ? "border-slate-700" : "border-gray-200";
   const panel = isDark ? "bg-slate-800" : "bg-white";
@@ -55,13 +53,6 @@ export function BalanceTab() {
       ? "[&>tr:not(:last-child)>td]:border-slate-700"
       : "[&>tr:not(:last-child)>td]:border-gray-200"
   }`;
-  const btnPrimary =
-    "inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
-  const btnSecondary =
-    "inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
-    (isDark
-      ? "border-slate-500 text-slate-100 hover:bg-slate-600"
-      : "border-gray-300 text-gray-800 hover:bg-gray-50");
 
   const loadAccounts = useCallback(async () => {
     const data = await invoicingAPI.listPaymentAccounts();
@@ -124,27 +115,10 @@ export function BalanceTab() {
       .finally(() => setLoading(false));
   };
 
-  const handleCloseMonth = async () => {
-    if (!ledgerData) return;
-    setClosing(true);
-    setError(null);
-    try {
-      await invoicingAPI.closeMonth(ledgerData.open_period);
-      setShowCloseModal(false);
-      await loadLedger(selectedAccountId);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to close month");
-    } finally {
-      setClosing(false);
-    }
-  };
-
-  const closeLabel = ledgerData
-    ? `Close ${ledgerData.open_period_label}`
-    : "Close month";
-
   const showScroll =
-    !loading && Boolean(ledgerData?.ledger.length) && Boolean(selectedAccountId);
+    !loading &&
+    Boolean(ledgerData?.ledger.length) &&
+    Boolean(selectedAccountId);
 
   return (
     <div className="flex flex-col">
@@ -153,22 +127,6 @@ export function BalanceTab() {
           {error}
         </div>
       ) : null}
-
-      <div className="mb-4 flex flex-wrap items-center justify-end gap-3">
-        <button
-          type="button"
-          className={btnPrimary}
-          disabled={
-            !ledgerData ||
-            ledgerData.open_period_closed ||
-            !selectedAccountId ||
-            closing
-          }
-          onClick={() => setShowCloseModal(true)}
-        >
-          {closeLabel}
-        </button>
-      </div>
 
       <div className="mb-4 flex w-full justify-center">
         <div className="flex w-full max-w-7xl flex-wrap items-stretch gap-3">
@@ -219,7 +177,9 @@ export function BalanceTab() {
       </div>
 
       {!selectedAccountId && !loading ? (
-        <div className={`rounded-lg border px-4 py-6 text-sm ${border} ${muted}`}>
+        <div
+          className={`rounded-lg border px-4 py-6 text-sm ${border} ${muted}`}
+        >
           Select an account to see the running ledger.
         </div>
       ) : (
@@ -253,13 +213,19 @@ export function BalanceTab() {
               <tbody className={tbodyRowDividerCls}>
                 {loading ? (
                   <tr>
-                    <td colSpan={6} className={`px-3 py-8 text-center ${muted}`}>
+                    <td
+                      colSpan={6}
+                      className={`px-3 py-8 text-center ${muted}`}
+                    >
                       Loading…
                     </td>
                   </tr>
                 ) : !ledgerData?.ledger.length ? (
                   <tr>
-                    <td colSpan={6} className={`px-3 py-8 text-center ${muted}`}>
+                    <td
+                      colSpan={6}
+                      className={`px-3 py-8 text-center ${muted}`}
+                    >
                       No ledger entries yet.
                     </td>
                   </tr>
@@ -305,46 +271,6 @@ export function BalanceTab() {
           </div>
         </div>
       )}
-
-      {showCloseModal && ledgerData ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div
-            className={`w-full max-w-md rounded-lg border p-5 shadow-lg ${border} ${panel}`}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="close-month-title"
-          >
-            <h3
-              id="close-month-title"
-              className={`text-base font-medium ${textMain}`}
-            >
-              Close {ledgerData.open_period_label}?
-            </h3>
-            <p className={`mt-2 text-sm ${muted}`}>
-              Snapshots closing balance for every account. Locks new orders and
-              payments in {ledgerData.open_period_label}.
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button
-                type="button"
-                className={`${btnSecondary} flex-1`}
-                disabled={closing}
-                onClick={() => setShowCloseModal(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className={`${btnPrimary} flex-1`}
-                disabled={closing}
-                onClick={() => void handleCloseMonth()}
-              >
-                {closing ? "Closing…" : "Close month"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
