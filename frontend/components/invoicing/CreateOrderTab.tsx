@@ -32,6 +32,9 @@ import { OrderInvoicePreviewModal } from "./OrderInvoicePreviewModal";
 import { UnpricedBadge } from "./UnpricedBadge";
 import type { GeneratePreviewPayload } from "@/lib/invoicingPreview";
 import {
+  isBillableInvoiceUnits,
+  isInvalidInvoiceUnitsInput,
+  parseInvoiceUnitsInput,
   validateInvoiceGenerateInput,
   type InvoiceGenerateValidationField,
 } from "@/lib/invoicingGenerateValidation";
@@ -792,9 +795,17 @@ export function CreateOrderTab({
     const rows: GeneratePreviewPayload["rows"] = [];
     for (const row of visibleItems) {
       const input = rowInputs.get(row.item_id) ?? emptyRowInput(row);
+      const units = parseInvoiceUnitsInput(input.units);
+
+      if (isInvalidInvoiceUnitsInput(input.units, units)) {
+        setError(`Units must be 0 or greater for "${row.name}".`);
+        return;
+      }
+      if (!isBillableInvoiceUnits(units)) {
+        continue;
+      }
+
       const unitSize = parseFloat(input.unitSize);
-      const unitsRaw = input.units.trim();
-      const units = unitsRaw === "" ? 0 : parseFloat(unitsRaw);
       const unitSizeUnit = input.unitSizeUnit.trim();
 
       if (!Number.isFinite(unitSize) || unitSize <= 0) {
@@ -803,10 +814,6 @@ export function CreateOrderTab({
       }
       if (!unitSizeUnit) {
         setError(`Unit Size unit is required for "${row.name}".`);
-        return;
-      }
-      if (!Number.isFinite(units) || units < 0) {
-        setError(`Units must be 0 or greater for "${row.name}".`);
         return;
       }
 
@@ -819,7 +826,7 @@ export function CreateOrderTab({
       const subTotal = computeInvoicingSubTotal(
         unitSize,
         unitSizeUnit,
-        units,
+        units!,
         costPerKg,
         eachGramsForInvoicing(row),
       );
@@ -829,14 +836,16 @@ export function CreateOrderTab({
         name: row.name,
         unitSize,
         unitSizeUnit,
-        units,
+        units: units!,
         costPerKg,
         subTotal,
       });
     }
 
     if (rows.length === 0) {
-      setError("Add at least one item to the list.");
+      setError(
+        "Enter units greater than 0 on at least one item to generate an invoice.",
+      );
       return;
     }
 
@@ -1321,14 +1330,17 @@ export function CreateOrderTab({
               </div>
               {validationAttempted &&
               (generateValidation.hasNoItems ||
+                generateValidation.hasNoBillableLines ||
                 generateValidation.unpricedItemIds.length > 0 ||
                 generateValidation.missingCostItemIds.length > 0) ? (
                 <p className={`mt-3 text-xs ${muted}`}>
                   {generateValidation.hasNoItems
                     ? "Add at least one item to the template before generating."
-                    : generateValidation.unpricedItemIds.length > 0
-                      ? "Some items have no wholesale price on the selected wholesale list. Set prices on the wholesale list or edit the template."
-                      : "Wholesale price is unavailable for some items. Edit the template or set wholesale prices on the linked list."}
+                    : generateValidation.hasNoBillableLines
+                      ? "Enter units greater than 0 on at least one item. Rows with 0 or blank units are omitted from the invoice."
+                      : generateValidation.unpricedItemIds.length > 0
+                        ? "Some items have no wholesale price on the selected wholesale list. Set prices on the wholesale list or edit the template."
+                        : "Wholesale price is unavailable for some items. Edit the template or set wholesale prices on the linked list."}
                 </p>
               ) : null}
             </div>
