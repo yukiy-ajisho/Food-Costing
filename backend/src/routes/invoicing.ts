@@ -25,7 +25,7 @@ import {
   validateInvoicingItemIds,
   validateInvoicingItemsForWholesaleList,
   validateOrderLineCostsAgainstRpc,
-  validateOrderLinesCoverAllListLines,
+  validateOrderLinesSubsetOfListLines,
   PAYMENT_COLUMNS,
   assertAccountInCompany,
   fetchCompanyInvoicingAccounts,
@@ -1372,7 +1372,7 @@ router.post("/orders", async (req, res) => {
       return res.status(500).json({ error: listLines.error });
     }
 
-    const coverageError = validateOrderLinesCoverAllListLines(
+    const coverageError = validateOrderLinesSubsetOfListLines(
       listLines,
       normalizedLines,
     );
